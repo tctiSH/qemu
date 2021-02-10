@@ -113,6 +113,12 @@ int qemu_mprotect_none(void *addr, size_t size)
 #ifdef _WIN32
     return qemu_mprotect__osdep(addr, size, PAGE_NOACCESS);
 #else
+# if defined(__APPLE__) && defined(__arm64__)
+    if (__builtin_available(macOS 11.2, *)) {
+        /* mprotect() in macOS 11.2 can't switch RWX to NONE */
+        return 0;
+    }
+# endif
     return qemu_mprotect__osdep(addr, size, PROT_NONE);
 #endif
 }
