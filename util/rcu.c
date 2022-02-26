@@ -438,7 +438,10 @@ static void rcu_init_complete(void)
     qemu_thread_create(&thread, "call_rcu", call_rcu_thread,
                        NULL, QEMU_THREAD_DETACHED);
 
+    /* TLS not available in shared library */
+#ifndef CONFIG_SHARED_LIBRARY_BUILD
     rcu_register_thread();
+#endif
 }
 
 static int atfork_depth = 1;

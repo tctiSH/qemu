@@ -2861,6 +2861,10 @@ void qemu_init(int argc, char **argv)
     bool userconfig = true;
     FILE *vmstate_dump_file = NULL;
 
+    /* in non-library builds this is done in a constructor */
+#ifdef CONFIG_SHARED_LIBRARY_BUILD
+    rcu_register_thread();
+#endif
     qemu_add_opts(&qemu_drive_opts);
     qemu_add_drive_opts(&qemu_legacy_drive_opts);
     qemu_add_drive_opts(&qemu_common_drive_opts);
