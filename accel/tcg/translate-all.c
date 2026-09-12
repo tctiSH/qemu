@@ -1213,6 +1213,20 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task,
 #if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
 #include <sys/types.h>
 #include <sys/sysctl.h>
+/// Whether the app asked us to hand JIT regions to an attached debugger.
+///
+/// The decision belongs to the app, not to QEMU as it is the app that arranges
+/// for the debugger to be attached with the necessary script to speak this
+/// protocol. A trap with no script attached kills the process.
+///
+/// The app keys this off TXM presence, matching StikJIT's own gate, so the two
+/// cannot disagree.
+static bool jit_region_blessing_requested(void)
+{
+    const char *requested = getenv("TCTISH_JIT_BLESS");
+    return requested != NULL && requested[0] == '1';
+}
+
 static int is_debugger_attached(void)
 {
     int mib[4];
@@ -1253,8 +1267,8 @@ static bool alloc_code_gen_buffer_splitwx_vmremap(size_t size, Error **errp)
     int orig_prot = PROT_READ | PROT_WRITE;
 
 #if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
-    /* iOS 26 with TXM requires new workaround*/
-    if (__builtin_available(iOS 26, visionOS 26, watchOS 26, tvOS 26, *)) {
+    /* TXM requires the region to start out executable. */
+    if (jit_region_blessing_requested()) {
         orig_prot = PROT_READ | PROT_EXEC;
     }
 #endif
@@ -1293,7 +1307,7 @@ static bool alloc_code_gen_buffer_splitwx_vmremap(size_t size, Error **errp)
     }
 
 #if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
-    if (__builtin_available(iOS 26, visionOS 26, watchOS 26, tvOS 26, *)) {
+    if (jit_region_blessing_requested()) {
         if (is_debugger_attached()) {
             /* let debugger modify the page permission */
             break_prepare_jit_region(buf_rx, size);
