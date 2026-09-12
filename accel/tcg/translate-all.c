@@ -1209,14 +1209,58 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task,
                                    vm_prot_t *max_protection,
                                    vm_inherit_t inheritance);
 
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
+#include <sys/types.h>
+#include <sys/sysctl.h>
+static int is_debugger_attached(void)
+{
+    int mib[4];
+    struct kinfo_proc info;
+    size_t size;
+
+    info.kp_proc.p_flag = 0;
+
+    /* Initialize MIB for sysctl call */
+    mib[0] = CTL_KERN;
+    mib[1] = KERN_PROC;
+    mib[2] = KERN_PROC_PID;
+    mib[3] = getpid();
+
+    size = sizeof(info);
+
+    if (sysctl(mib, 4, &info, &size, NULL, 0) == -1) {
+        return 0; // sysctl failed, be conservative
+    }
+
+    /* P_TRACED means the process is being debugged */
+    return (info.kp_proc.p_flag & P_TRACED) != 0;
+}
+
+static void break_prepare_jit_region(mach_vm_address_t addr, size_t len)
+{
+    asm ("mov x0, %0\n"
+         "mov x1, %1\n"
+         "brk #0x69" :: "r" (addr), "r" (len) : "x0", "x1");
+}
+#endif
+
 static bool alloc_code_gen_buffer_splitwx_vmremap(size_t size, Error **errp)
 {
     kern_return_t ret;
     mach_vm_address_t buf_rw, buf_rx;
     vm_prot_t cur_prot, max_prot;
+    int orig_prot = PROT_READ | PROT_WRITE;
+
+#if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
+    /* iOS 26 with TXM requires new workaround*/
+    if (__builtin_available(iOS 26, visionOS 26, watchOS 26, tvOS 26, *)) {
+        orig_prot = PROT_READ | PROT_EXEC;
+    }
+#endif
 
     /* Map the read-write portion via normal anon memory. */
-    if (!alloc_code_gen_buffer_anon(size, PROT_READ | PROT_WRITE,
+    if (!alloc_code_gen_buffer_anon(size, orig_prot,
                                     MAP_PRIVATE | MAP_ANONYMOUS, errp)) {
         return false;
     }
@@ -1247,6 +1291,23 @@ static bool alloc_code_gen_buffer_splitwx_vmremap(size_t size, Error **errp)
         munmap((void *)buf_rw, size);
         return false;
     }
+
+#if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
+    if (__builtin_available(iOS 26, visionOS 26, watchOS 26, tvOS 26, *)) {
+        if (is_debugger_attached()) {
+            /* let debugger modify the page permission */
+            break_prepare_jit_region(buf_rx, size);
+        }
+
+        /* finally mark the read-write portion as RW */
+        if (mprotect((void *)buf_rw, size, PROT_READ | PROT_WRITE) != 0) {
+            error_setg_errno(errp, errno, "mprotect for jit splitwx (rw)");
+            munmap((void *)buf_rx, size);
+            munmap((void *)buf_rw, size);
+            return false;
+        }
+    }
+#endif
 
     tcg_splitwx_diff = buf_rx - buf_rw;
     return true;
