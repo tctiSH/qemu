@@ -1251,11 +1251,36 @@ static int is_debugger_attached(void)
     return (info.kp_proc.p_flag & P_TRACED) != 0;
 }
 
-static void break_prepare_jit_region(mach_vm_address_t addr, size_t len)
+/*
+ * The two calls of StikJIT's universal protocol: x16 selects the operation,
+ * brk #0xf00d traps into the attached script, and the answer comes back in x0.
+ *
+ * Naked because the protocol is written in terms of registers. The arguments
+ * have to reach the trap in x0 and x1 exactly as the caller passed them, and
+ * the answer has to leave in x0 -- a prologue that spilled either would be
+ * talking to the script about the wrong memory.
+ */
+__attribute__((noinline, optnone, naked))
+static void *jit26_prepare_region(void *addr, size_t len)
 {
-    asm ("mov x0, %0\n"
-         "mov x1, %1\n"
-         "brk #0x69" :: "r" (addr), "r" (len) : "x0", "x1");
+    asm ("mov x16, #1\n"
+         "brk #0xf00d\n"
+         "ret");
+}
+
+/*
+ * Releases the script once every region it will ever be asked about exists.
+ *
+ * Not merely tidy: the script sits in its stop loop until it sees this, so
+ * whatever is driving it -- for us, a blocked helper extension -- never returns
+ * without it. Nothing mapped after this point can be prepared.
+ */
+__attribute__((noinline, optnone, naked))
+static void jit26_detach(void)
+{
+    asm ("mov x16, #0\n"
+         "brk #0xf00d\n"
+         "ret");
 }
 #endif
 
@@ -1308,14 +1333,49 @@ static bool alloc_code_gen_buffer_splitwx_vmremap(size_t size, Error **errp)
 
 #if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
     if (jit_region_blessing_requested()) {
-        if (is_debugger_attached()) {
-            /* let debugger modify the page permission */
-            break_prepare_jit_region(buf_rx, size);
+        /*
+         * Sampled once, because everything below has to agree about whether a
+         * script is listening: trapping with none attached kills the process,
+         * and a script left waiting for its detach hangs the helper driving it.
+         */
+        bool attached = is_debugger_attached();
+        bool prepared = true;
+
+        if (attached) {
+            /*
+             * The script prepares the RX mapping and answers with its address.
+             * It is entitled to answer with a different one -- that is what
+             * passing NULL asks it to do -- but buf_rw is an alias of the
+             * region we mapped ourselves, so anything else would leave the two
+             * halves of the split mapping pointing at different memory.
+             */
+            void *region = jit26_prepare_region((void *)buf_rx, size);
+
+            if (region != (void *)buf_rx) {
+                error_setg(errp, "debugger prepared %p, not the jit region %p",
+                           region, (void *)buf_rx);
+                prepared = false;
+            }
         }
 
         /* finally mark the read-write portion as RW */
-        if (mprotect((void *)buf_rw, size, PROT_READ | PROT_WRITE) != 0) {
+        if (prepared && mprotect((void *)buf_rw, size,
+                                 PROT_READ | PROT_WRITE) != 0) {
             error_setg_errno(errp, errno, "mprotect for jit splitwx (rw)");
+            prepared = false;
+        }
+
+        /*
+         * Let the script go. This fork allocates one code buffer per process,
+         * so by here every region there will ever be has been prepared and its
+         * writable alias exists. Issued on the failure paths too: the helper
+         * blocks until it lands, whether or not we got what we asked for.
+         */
+        if (attached) {
+            jit26_detach();
+        }
+
+        if (!prepared) {
             munmap((void *)buf_rx, size);
             munmap((void *)buf_rw, size);
             return false;
