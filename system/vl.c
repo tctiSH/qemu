@@ -85,6 +85,7 @@
 #include "migration/cpr.h"
 #include "migration/misc.h"
 #include "migration/snapshot.h"
+#include "block/snapshot.h"
 #include "system/tpm.h"
 #include "system/dma.h"
 #include "hw/audio/model.h"
@@ -172,6 +173,21 @@ static const char *incoming;
 static const char *incoming_str[MIGRATION_CHANNEL_TYPE__MAX];
 static MigrationChannel *incoming_channels[MIGRATION_CHANNEL_TYPE__MAX];
 static const char *loadvm;
+
+/*
+ * Set when the snapshot asked for on the command line was not there.
+ *
+ * Read by tctiSH, which says so rather than letting an unexplained cold boot
+ * look like the resume simply being slow.
+ */
+static bool tctish_snapshot_missing;
+
+bool tctish_snapshot_was_missing(void);
+
+bool tctish_snapshot_was_missing(void)
+{
+    return tctish_snapshot_missing;
+}
 static const char *accelerators;
 static bool have_custom_ram_size;
 static const char *ram_memdev_id;
@@ -2826,8 +2842,38 @@ void qmp_x_exit_preconfig(Error **errp)
 
     if (loadvm) {
         RunState state = autostart ? RUN_STATE_RUNNING : runstate_get();
-        load_snapshot(loadvm, NULL, false, NULL, &error_fatal);
-        load_snapshot_resume(state);
+        Error *local_err = NULL;
+        int present = bdrv_all_has_snapshot(loadvm, false, NULL, &local_err);
+
+        /*
+         * Ask whether it is there before trying to load it.
+         *
+         * A snapshot named on the command line that does not exist is an
+         * ordinary mistake -- a typo in a tag, a disk image replaced since, a
+         * background save that never finished -- and taking the whole process
+         * down for it leaves a GUI front end with nothing to show but a crash.
+         *
+         * What makes carrying on safe is that this runs *before* anything is
+         * loaded, so there is no half-restored machine to carry on into. That is
+         * also why a failure to look is forgiven alongside an outright absence:
+         * both leave the machine exactly as cold as it already was. What is not
+         * forgiven is a snapshot that exists and then fails to load, which has
+         * had device state partly restored -- continuing from there would be
+         * running a machine assembled out of two different moments, so that one
+         * keeps &error_fatal.
+         */
+        if (present < 0) {
+            error_reportf_err(local_err,
+                              "could not look for snapshot '%s', "
+                              "booting without it: ", loadvm);
+            tctish_snapshot_missing = true;
+        } else if (present == 0) {
+            warn_report("snapshot '%s' not found; booting without it", loadvm);
+            tctish_snapshot_missing = true;
+        } else {
+            load_snapshot(loadvm, NULL, false, NULL, &error_fatal);
+            load_snapshot_resume(state);
+        }
     }
     if (replay_mode != REPLAY_MODE_NONE) {
         replay_vmstate_init();

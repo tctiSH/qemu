@@ -8,4 +8,7 @@
   qemu_thread_create;
   replay_mutex_lock;
   replay_mutex_unlock;
+
+  /* tctiSH's accessors, which the app reaches by dlsym() on the framework. */
+  tctish_snapshot_was_missing;
 };
