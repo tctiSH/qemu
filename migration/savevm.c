@@ -62,6 +62,7 @@
 #include "io/channel-file.h"
 #include "system/replay.h"
 #include "system/runstate.h"
+#include "system/cpu-timers.h"
 #include "system/system.h"
 #include "system/xen.h"
 #include "migration/colo.h"
@@ -3532,6 +3533,8 @@ bool load_snapshot(const char *name, const char *vmstate,
         return false;
     }
 
+    /* tctiSH: its clock catches up from when the snapshot was taken. */
+    tctish_clock_loaded(sn.date_sec * NANOSECONDS_PER_SECOND + sn.date_nsec);
     return true;
 
 err_drain:

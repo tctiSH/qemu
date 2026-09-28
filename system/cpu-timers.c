@@ -101,6 +101,84 @@ int64_t cpu_get_clock(void)
 }
 
 /*
+ * tctiSH: a stopped VM's clock stands still. That's what QEMU means by
+ * stopping it, and it's no use to us: the VM stops for every snapshot save,
+ * for parking, and a snapshot load puts the clock back to wherever the
+ * snapshot was taken. Each time, the guest comes back behind by however long
+ * it was away, and nothing in it notices: Linux keeps time from the TSC and
+ * only reads the RTC at boot. Resuming a session iOS had killed left the guest
+ * behind by however long the app was dead.
+ *
+ * A process that iOS merely suspends has none of this, because its clock
+ * never stops, and on return the guest sees the TSC jump and catches up by
+ * itself. So make every stop look like a suspend. Remember the host time the
+ * clock stopped at, and when it starts again, move it on by everything since.
+ * After a snapshot load, the moment to count from is when the snapshot was
+ * taken; see tctish_clock_loaded.
+ *
+ * Host monotonic nanoseconds, from get_clock(), valid only while
+ * tctish_stopped is set. It can be negative: after a load it is counted back
+ * from now by the snapshot's age, and get_clock() starts near zero when the
+ * host boots, so a snapshot older than the host's uptime lands before it.
+ * Measured on device: a negative value used as "nothing to catch up" left a
+ * three-day-old session three days behind.
+ */
+static int64_t tctish_stopped_at;
+static bool tctish_stopped;
+
+/* tctiSH: a sample of both host counters at start-up; see tctish_host_ticks_for. */
+static int64_t tctish_clock_origin;
+static int64_t tctish_ticks_origin;
+
+/*
+ * tctiSH: host ticks in @ns nanoseconds. The VM's clock is kept in both, and
+ * on hosts without a cycle counter QEMU's host ticks *are* get_clock(), so the
+ * ratio is 1. That includes arm64, and so every host tctiSH runs on. It's
+ * measured rather than assumed, so a host with a real cycle counter gets it
+ * right too.
+ */
+static int64_t tctish_host_ticks_for(int64_t ns)
+{
+    int64_t clock = get_clock() - tctish_clock_origin;
+    int64_t ticks = cpu_get_host_ticks() - tctish_ticks_origin;
+
+    if (clock < NANOSECONDS_PER_SECOND || ticks <= 0) {
+        return ns;
+    }
+    return (int64_t)((double)ns * ((double)ticks / (double)clock));
+}
+
+/* Call with vm_clock_seqlock held for writing, with the clock stopped. */
+static void tctish_clock_catch_up_locked(void)
+{
+    int64_t elapsed;
+
+    if (!tctish_stopped || icount_enabled()) {
+        return;
+    }
+
+    elapsed = MAX(get_clock() - tctish_stopped_at, 0);
+    timers_state.cpu_clock_offset += elapsed;
+    timers_state.cpu_ticks_offset += tctish_host_ticks_for(elapsed);
+    tctish_stopped = false;
+}
+
+/*
+ * tctiSH: a snapshot taken at @taken (host wall clock, in nanoseconds since
+ * the epoch) has just been loaded, clock and all. The clock now reads what it
+ * read then, so the time to catch up is everything since, whenever and in
+ * whichever process that was. A snapshot from the future (a host clock put
+ * back) catches up by nothing rather than going backwards.
+ */
+void tctish_clock_loaded(int64_t taken)
+{
+    int64_t since = MAX(qemu_clock_get_ns(QEMU_CLOCK_HOST) - taken, 0);
+
+    tctish_stopped_at = get_clock() - since;
+    tctish_stopped = true;
+}
+
+/*
  * enable cpu_get_ticks()
  * Caller must hold BQL which serves as mutex for vm_clock_seqlock.
  */
@@ -109,6 +187,7 @@ void cpu_enable_ticks(void)
     seqlock_write_lock(&timers_state.vm_clock_seqlock,
                        &timers_state.vm_clock_lock);
     if (!timers_state.cpu_ticks_enabled) {
+        tctish_clock_catch_up_locked();
         timers_state.cpu_ticks_offset -= cpu_get_host_ticks();
         timers_state.cpu_clock_offset -= get_clock();
         timers_state.cpu_ticks_enabled = 1;
@@ -130,6 +209,8 @@ void cpu_disable_ticks(void)
         timers_state.cpu_ticks_offset += cpu_get_host_ticks();
         timers_state.cpu_clock_offset = cpu_get_clock_locked();
         timers_state.cpu_ticks_enabled = 0;
+        tctish_stopped_at = get_clock();
+        tctish_stopped = true;
     }
     seqlock_write_unlock(&timers_state.vm_clock_seqlock,
                          &timers_state.vm_clock_lock);
@@ -269,6 +350,9 @@ TimersState timers_state;
 /* initialize timers state and the cpu throttle for convenience */
 void cpu_timers_init(void)
 {
+    tctish_clock_origin = get_clock();
+    tctish_ticks_origin = cpu_get_host_ticks();
+
     seqlock_init(&timers_state.vm_clock_seqlock);
     qemu_spin_init(&timers_state.vm_clock_lock);
     vmstate_register(NULL, 0, &vmstate_timers, &timers_state);
