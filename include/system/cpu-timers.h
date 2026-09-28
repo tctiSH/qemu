@@ -25,6 +25,13 @@ void cpu_enable_ticks(void);
 void cpu_disable_ticks(void);
 
 /*
+ * tctiSH: a snapshot taken at @taken, host wall-clock nanoseconds since the
+ * epoch, has just been loaded; the VM's clock is to catch up from then when it
+ * next starts. See cpu_enable_ticks.
+ */
+void tctish_clock_loaded(int64_t taken);
+
+/*
  * return the time elapsed in VM between vm_start and vm_stop.
  * cpu_get_ticks() uses units of the host CPU cycle counter.
  */
