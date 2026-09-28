@@ -4500,7 +4500,14 @@ foreach target : target_dirs
       exe_objs = lib.extract_all_objects(recursive: true)
     endif
 
-    emulator = executable(exe_name, exe['sources'],
+    # genh, because 'sources' here is just system/main.c and the only thing
+    # tying this to the library is link_with -- which orders the link, not the
+    # compile. main.c reaches qapi/qapi-builtin-types.h through qom/object.h,
+    # so without this ninja is free to compile it before qapi is generated, and
+    # whether it does comes down to how the rest of the graph happens to
+    # schedule. The static path gets away with it for the same accidental
+    # reason.
+    emulator = executable(exe_name, exe['sources'] + genh,
                install: true,
                c_args: c_args,
                dependencies: exe_deps + exe['dependencies'],
