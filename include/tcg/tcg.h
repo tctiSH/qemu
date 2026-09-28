@@ -626,6 +626,42 @@ void tcg_region_reset_all(void);
 size_t tcg_code_size(void);
 size_t tcg_code_capacity(void);
 
+/*
+ * Hands the unused tail of the code buffer back to the system.
+ *
+ * Call only from a tb flush, with the machine quiesced.
+ */
+void tctish_release_unused(void);
+
+/*
+ * The flush half of a shrink, which lives in accel/tcg because that is where
+ * CPUState and tb_flush() are. Init creates the bottom half; the request may
+ * come from any thread, which is precisely why it is a bottom half.
+ */
+void tctish_flush_init(void);
+void tctish_request_flush(void);
+
+/*
+ * The code cache as tctiSH's app process sees it. Fetched with dlsym() from the
+ * QEMU framework, which is why these are plain C with no QEMU types in sight.
+ */
+size_t tctish_code_cache_total(void);
+size_t tctish_code_cache_usable(void);
+size_t tctish_code_cache_used(void);
+bool tctish_code_cache_can_grow(void);
+bool tctish_code_cache_needs_debugger(void);
+size_t tctish_code_cache_grow(size_t target);
+size_t tctish_code_cache_shrink(size_t target);
+bool tctish_code_cache_release_all(void);
+bool tctish_code_cache_release_all_outstanding(void);
+bool tctish_code_cache_needs_preparing(void);
+/* Also in system/runstate.h, for the monitor. */
+bool tctish_code_cache_may_run(void);
+size_t tctish_code_cache_released(void);
+size_t tctish_code_cache_release_attempts(void);
+int tctish_code_cache_release_errno(void);
+int tctish_code_cache_release_errno_rx(void);
+
 /**
  * tcg_tb_insert:
  * @tb: translation block to insert

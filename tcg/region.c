@@ -30,6 +30,7 @@
 #include "qemu/cacheinfo.h"
 #include "qemu/qtree.h"
 #include "qapi/error.h"
+#include "qemu/error-report.h"
 #include "tcg/tcg.h"
 #include "exec/translation-block.h"
 #include "tcg-internal.h"
@@ -68,13 +69,175 @@ struct tcg_region_state {
     size_t size; /* size of one region */
     size_t stride; /* .size + guard size */
     size_t total_size; /* size of entire buffer, >= n * stride */
+    size_t min_available; /* regions the vCPUs must be able to hold at once */
+    bool ready; /* set last, once every field above is safe to read */
 
     /* fields protected by the lock */
     size_t current; /* current region index */
+    size_t available; /* regions that may be handed out; <= .n */
     size_t agg_size_full; /* aggregate size of full regions */
 };
 
 static struct tcg_region_state region;
+
+/*
+ * How much of the code buffer has been prepared for execution, in bytes.
+ *
+ * Measured from region.start_aligned, which -- unlike QEMU 6's
+ * code_gen_buffer -- never moves: the prologue is carved off via
+ * region.after_prologue rather than by advancing the base, so the boundary
+ * blessed at allocation time is still the boundary everything else reads.
+ */
+static size_t tctish_usable_bytes;
+
+/*
+ * Whether the buffer was actually brought into use a chunk at a time.
+ *
+ * Distinct from `tctish_usable_bytes == total`, which is also what an ordinary
+ * unchunked start looks like once it has been filled in. Only this says whether
+ * the region layout has to be fine enough to subdivide, and a host that never
+ * chunked must keep the partitioning it has always had.
+ */
+static bool tctish_chunked;
+
+/*
+ * Serialises growing, shrinking, and handing memory back.
+ *
+ * These run on three different threads -- the app's own for grow and shrink,
+ * whichever vCPU reached the flush for the release -- and the release reads the
+ * boundary that the other two write.
+ *
+ * Without it the interleaving that matters is: a release reads the old boundary
+ * and works out what to hand back, a grow blesses that very range (stopping
+ * every thread in the process, the release's included) and raises the boundary
+ * over it, and then the release resumes and discards what was just prepared.
+ * TCG would go on to hand those pages out as usable, and the failure would
+ * arrive as an illegal instruction fetch in generated code.
+ *
+ * Deadlock-free because a grow takes this *before* it traps: a holder stopped
+ * by the trap is one the script resumes, and the script needs nothing from us.
+ */
+static QemuMutex tctish_cache_lock;
+
+/*
+ * Set when a shrink has left something worth handing back.
+ *
+ * Without it the release runs on every flush and tries to give back the whole
+ * unused tail -- under Dynamic, most of two gigabytes, from the first flush of
+ * the boot. Those pages have never been touched and have nothing resident to
+ * return, so the work is futile even where the kernel permits it.
+ */
+static bool tctish_release_pending;
+
+/*
+ * Where the usable part ended before the shrink that is waiting to be paid.
+ *
+ * The far edge of what there is to give back. Everything past it has never been
+ * prepared and so has never been touched: lazy anonymous pages with nothing
+ * resident behind them, which cost nothing to keep and return nothing when
+ * released.
+ */
+static size_t tctish_release_upto;
+
+/*
+ * Set by tctish_code_cache_release_all(): the release waiting to be paid starts
+ * from the prologue rather than from the usable boundary. See there.
+ */
+static bool tctish_release_everything;
+
+/*
+ * Set once any page has been dropped from read-execute to read-write.
+ *
+ * Under TXM that is for good. Measured on device (background-footprint.md,
+ * Part B): the executable alias of those pages comes back with a maximum
+ * protection of read-write, so mprotect() cannot make it executable again; and
+ * the alias itself is permanent, so it cannot be replaced either -- an
+ * overwriting mach_vm_remap() answers KERN_PROTECTION_FAILURE, and munmap()
+ * answers success but leaves the mapping where it was. Growing past a release
+ * is therefore impossible there until the next launch.
+ */
+static bool tctish_ever_unprotected;
+
+/*
+ * Whether everything after the buffer's first page is purgeable, in pieces of
+ * TCTISH_PURGEABLE_PIECE (tctish_alloc_purgeable()), under TXM only.
+ *
+ * What makes releasing survivable there. Emptying a purgeable object discards
+ * its pages however many views map them, and changes neither view's protection
+ * -- so the executable alias is never made writable, its addresses keep their
+ * executability, and the debugger can prepare them again exactly as it
+ * prepares a stretch it has never seen. That goes for a release of everything
+ * while parked and for an ordinary shrink alike, so a shrunk cache can grow
+ * again.
+ *
+ * In pieces because emptying is all or nothing per object: a shrink empties
+ * every piece lying wholly past its boundary, and keeps the one it cuts
+ * through.
+ */
+static bool tctish_purgeable;
+#define TCTISH_PURGEABLE_PIECE (32 * MiB)
+
+/*
+ * Set by tctish_code_cache_release_all() and cleared once a flush has paid it
+ * out, whatever came of it. What the app waits on before preparing the cache
+ * again. Not the attempt count, which an ordinary shrink's flush moves too.
+ */
+static bool tctish_release_all_outstanding;
+
+/*
+ * Set when a release of everything has actually lowered the usable boundary,
+ * and cleared by the next grow, which prepares what it lowered.
+ *
+ * With either flag set the machine must not run: TCG's regions still reach
+ * past the boundary (region.available can't go below a region per vCPU), so
+ * the first translation would land in pages that were emptied and, under TXM,
+ * aren't executable. QEMU refuses `cont` and `unpark` meanwhile, rather than
+ * trusting everyone who might start the machine to know. See
+ * tctish_code_cache_may_run().
+ */
+static bool tctish_needs_preparing;
+
+/*
+ * Rounds a range *inward* to whole pages, false if nothing is left.
+ *
+ * For giving memory up. A page that is only partly past the boundary is still
+ * partly in use, and handing it back would take live code with it.
+ */
+static bool tctish_pages_within(char **start, size_t *length)
+{
+    uintptr_t page = qemu_real_host_page_size();
+    uintptr_t begin = ROUND_UP((uintptr_t)*start, page);
+    uintptr_t end = ((uintptr_t)*start + *length) & ~(page - 1);
+
+    if (end <= begin) {
+        return false;
+    }
+
+    *start = (char *)begin;
+    *length = end - begin;
+    return true;
+}
+
+/*
+ * The chunk the app wants the code buffer brought into use in, in bytes.
+ *
+ * Zero -- the default, and what every other host does -- means all at once.
+ * Carried in the environment rather than as an accelerator property because it
+ * is the same decision as TCTISH_JIT_BLESS and travels the same way: the app
+ * owns it, because the app is what arranges the debugger each chunk needs.
+ */
+static size_t G_GNUC_UNUSED tctish_requested_chunk(void)
+{
+    const char *value = getenv("TCTISH_CODE_CACHE_CHUNK");
+    unsigned long mib;
+
+    if (value == NULL || *value == '\0') {
+        return 0;
+    }
+
+    mib = strtoul(value, NULL, 10);
+    return (size_t)mib * MiB;
+}
 
 /*
  * This is an array of struct tcg_region_tree's, with padding.
@@ -345,6 +508,30 @@ static void tcg_region_bounds(size_t curr_region, void **pstart, void **pend)
     *pend = end;
 }
 
+/*
+ * How many whole regions fit inside the first `bytes` of the buffer.
+ *
+ * Whole ones only: a region that runs past the limit contains memory that has
+ * not been prepared, and a vCPU handed it would translate into pages that fault
+ * the moment they are executed.
+ */
+static size_t tcg_regions_within(size_t bytes)
+{
+    void *limit = region.start_aligned + bytes;
+    size_t n;
+
+    for (n = 0; n < region.n; n++) {
+        void *start, *end;
+
+        tcg_region_bounds(n, &start, &end);
+        if (end > limit) {
+            break;
+        }
+    }
+
+    return n;
+}
+
 static void tcg_region_assign(TCGContext *s, size_t curr_region)
 {
     void *start, *end;
@@ -359,7 +546,13 @@ static void tcg_region_assign(TCGContext *s, size_t curr_region)
 
 static bool tcg_region_alloc__locked(TCGContext *s)
 {
-    if (region.current == region.n) {
+    /*
+     * Against .available rather than .n, so that a buffer only partly prepared
+     * runs out early and flushes rather than handing out memory that cannot be
+     * executed. When all of it is usable the two are equal and this is the
+     * check it has always been.
+     */
+    if (region.current >= region.available) {
         return false;
     }
     tcg_region_assign(s, region.current);
@@ -470,6 +663,24 @@ static size_t tcg_n_regions(size_t tb_size, unsigned max_threads)
         return max_threads;
     }
     return MIN(n_regions, max_threads * 8);
+#endif
+}
+
+/*
+ * The fewest regions that can be in use at once without a flush failing.
+ *
+ * tcg_region_reset_all() gives every context a region and asserts if one cannot
+ * be had, so dropping below this would turn a full code cache into a crash.
+ *
+ * One per thread that translates: tcg_region_init() is told how many there
+ * can be, which is the vCPU count under MTTCG and one otherwise.
+ */
+static size_t tcg_min_regions(unsigned max_threads)
+{
+#ifdef CONFIG_USER_ONLY
+    return 1;
+#else
+    return max_threads;
 #endif
 }
 
@@ -620,6 +831,13 @@ static int alloc_code_gen_buffer_splitwx_memfd(size_t size, Error **errp)
 #ifdef CONFIG_DARWIN
 #include <mach/mach.h>
 
+#include <mach/vm_purgable.h>
+
+extern kern_return_t mach_vm_purgable_control(vm_map_t target_task,
+                                              mach_vm_address_t address,
+                                              vm_purgable_t control,
+                                              int *state);
+
 extern kern_return_t mach_vm_remap(vm_map_t target_task,
                                    mach_vm_address_t *target_address,
                                    mach_vm_size_t size,
@@ -636,6 +854,24 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task,
 #if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
 #include <sys/types.h>
 #include <sys/sysctl.h>
+/*
+ * Whether the app asked us to hand JIT regions to an attached debugger.
+ *
+ * The decision belongs to the app, not to QEMU, because it is the app that
+ * arranges for the debugger to be attached with the script that speaks this
+ * protocol. A trap with no script listening kills the process.
+ *
+ * The app keys this off TXM presence, matching StikJIT's own gate, so the two
+ * cannot disagree. Upstream tests __builtin_available(iOS 26) here instead,
+ * which answers a different question: whether the OS *might* need blessing,
+ * not whether anything is listening to do it.
+ */
+static bool jit_region_blessing_requested(void)
+{
+    const char *requested = getenv("TCTISH_JIT_BLESS");
+    return requested != NULL && requested[0] == '1';
+}
+
 static int is_debugger_attached(void)
 {
     int mib[4];
@@ -660,11 +896,101 @@ static int is_debugger_attached(void)
     return (info.kp_proc.p_flag & P_TRACED) != 0;
 }
 
-static void break_prepare_jit_region(mach_vm_address_t addr, size_t len)
+/*
+ * The two calls of StikJIT's universal protocol: x16 selects the operation,
+ * brk #0xf00d traps into the attached script, and the answer comes back in x0.
+ *
+ * Naked because the protocol is written in terms of registers. The arguments
+ * have to reach the trap in x0 and x1 exactly as the caller passed them, and
+ * the answer has to leave in x0 -- a prologue that spilled either would be
+ * talking to the script about the wrong memory.
+ *
+ * This replaces upstream's one-way brk #0x69, which cannot report where the
+ * region ended up and has no way to tell the script it is finished.
+ */
+__attribute__((noinline, optnone, naked))
+static void *jit26_prepare_region(void *addr, size_t len)
 {
-    asm ("mov x0, %0\n"
-         "mov x1, %1\n"
-         "brk #0x69" :: "r" (addr), "r" (len) : "x0", "x1");
+    asm ("mov x16, #1\n"
+         "brk #0xf00d\n"
+         "ret");
+}
+
+/*
+ * Releases the script once every region it will ever be asked about exists.
+ *
+ * Not merely tidy: the script sits in its stop loop until it sees this, so
+ * whatever is driving it -- for us, a blocked helper extension -- never returns
+ * without it. Nothing mapped after this point can be prepared.
+ */
+__attribute__((noinline, optnone, naked))
+static void jit26_detach(void)
+{
+    asm ("mov x16, #0\n"
+         "brk #0xf00d\n"
+         "ret");
+}
+#endif
+
+#if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
+/*
+ * The purgeable piece holding byte `offset` of the buffer, as offsets. The
+ * first starts after the buffer's first page, and the last ends with the
+ * buffer; see tctish_purgeable.
+ */
+static void tctish_piece_at(size_t offset, size_t size, size_t *start,
+                            size_t *end)
+{
+    size_t page = qemu_real_host_page_size();
+
+    *start = MAX(QEMU_ALIGN_DOWN(offset, TCTISH_PURGEABLE_PIECE), page);
+    *end = MIN(QEMU_ALIGN_DOWN(offset, TCTISH_PURGEABLE_PIECE) +
+               TCTISH_PURGEABLE_PIECE, size);
+}
+
+/*
+ * Maps the buffer for blessing as purgeable pieces behind an ordinary first
+ * page, and returns whether it could. See tctish_purgeable.
+ *
+ * The first page is apart because it holds the prologue, which has to survive
+ * every release. Everything is mapped as alloc_code_gen_buffer_anon() would
+ * map it otherwise, read-execute from the start; the purgeable flag travels in
+ * mmap()'s descriptor, as Darwin takes VM flags for anonymous memory. On any
+ * refusal nothing is left mapped and the caller maps the ordinary way.
+ */
+static bool tctish_alloc_purgeable(size_t size)
+{
+    size_t page = qemu_real_host_page_size();
+    size_t start, end;
+    char *buf;
+
+    buf = mmap(NULL, size, PROT_READ | PROT_EXEC, MAP_PRIVATE | MAP_ANONYMOUS,
+               -1, 0);
+    if (buf == MAP_FAILED) {
+        error_report("code cache: no buffer to make purgeable (%s)",
+                     strerror(errno));
+        return false;
+    }
+
+    for (size_t offset = page; offset < size; offset = end) {
+        tctish_piece_at(offset, size, &start, &end);
+
+        if (mmap(buf + start, end - start, PROT_READ | PROT_EXEC,
+                 MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, VM_FLAGS_PURGABLE,
+                 0) == MAP_FAILED) {
+            error_report("code cache: no purgeable piece at %zu MiB (%s); "
+                         "releases under TXM will be refused or final",
+                         (size_t)(start / MiB), strerror(errno));
+            munmap(buf, size);
+            return false;
+        }
+    }
+
+    info_report("code cache: purgeable after the first page, so it can be "
+                "released and prepared again");
+    region.start_aligned = buf;
+    region.total_size = size;
+    return true;
 }
 #endif
 
@@ -676,14 +1002,17 @@ static int alloc_code_gen_buffer_splitwx_vmremap(size_t size, Error **errp)
     int orig_prot = PROT_READ | PROT_WRITE;
 
 #if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
-    /* iOS 26 with TXM requires new workaround*/
-    if (__builtin_available(iOS 26, visionOS 26, watchOS 26, tvOS 26, *)) {
+    /* TXM requires the region to start out executable. */
+    if (jit_region_blessing_requested()) {
         orig_prot = PROT_READ | PROT_EXEC;
+        tctish_purgeable = tctish_alloc_purgeable(size);
     }
 #endif
 
-    if (!alloc_code_gen_buffer_anon(size, orig_prot,
-                                    MAP_PRIVATE | MAP_ANONYMOUS, errp)) {
+    /* Negative on failure, not zero: upstream's `!` never caught one. */
+    if (!tctish_purgeable &&
+        alloc_code_gen_buffer_anon(size, orig_prot,
+                                   MAP_PRIVATE | MAP_ANONYMOUS, errp) < 0) {
         return -1;
     }
 
@@ -715,19 +1044,68 @@ static int alloc_code_gen_buffer_splitwx_vmremap(size_t size, Error **errp)
     }
 
 #if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
-    if (__builtin_available(iOS 26, visionOS 26, watchOS 26, tvOS 26, *)) {
-        if (is_debugger_attached()) {
-            /* let debugger modify the page permission */
-            break_prepare_jit_region(buf_rx, size);
+    if (jit_region_blessing_requested()) {
+        /*
+         * Sampled once, because everything below has to agree about whether a
+         * script is listening: trapping with none attached kills the process,
+         * and a script left waiting for its detach hangs the helper driving it.
+         */
+        bool attached = is_debugger_attached();
+        bool prepared = true;
+        size_t chunk = tctish_requested_chunk();
+        size_t first = (chunk != 0 && chunk < size) ? chunk : size;
+
+        if (attached) {
+            /*
+             * The script prepares the RX mapping and answers with its address.
+             * It is entitled to answer with a different one -- that is what
+             * passing NULL asks it to do -- but buf_rw is an alias of the
+             * region we mapped ourselves, so anything else would leave the two
+             * halves of the split mapping pointing at different memory.
+             */
+            void *blessed = jit26_prepare_region((void *)buf_rx, first);
+
+            if (blessed != (void *)buf_rx) {
+                error_setg(errp, "debugger prepared %p, not the jit region %p",
+                           blessed, (void *)buf_rx);
+                prepared = false;
+            }
         }
 
         /* finally mark the read-write portion as RW */
-        if (mprotect((void *)buf_rw, size, PROT_READ | PROT_WRITE) != 0) {
+        if (prepared && mprotect((void *)buf_rw, size,
+                                 PROT_READ | PROT_WRITE) != 0) {
             error_setg_errno(errp, errno, "mprotect for jit splitwx (rw)");
+            prepared = false;
+        }
+
+        /*
+         * Let the script go, and with it the helper that is blocked driving it.
+         * Anything still to be prepared gets a helper of its own later, which is
+         * the whole point of chunking: one short freeze now instead of one long
+         * one. Issued on the failure paths too, or nothing would ever return.
+         */
+        if (attached) {
+            jit26_detach();
+        }
+
+        if (!prepared) {
             munmap((void *)buf_rx, size);
             munmap((void *)buf_rw, size);
             return -1;
         }
+
+        /*
+         * Only what was prepared may be executed, so only that much is offered
+         * to TCG. The rest is mapped and writable but has never been through a
+         * debugger, and would fault the instant it was jumped to.
+         *
+         * With nothing attached nothing was prepared and nothing can be, so a
+         * limit would buy nothing: leave the buffer whole and let JIT fail the
+         * way it was already going to.
+         */
+        tctish_usable_bytes = attached ? first : size;
+        tctish_chunked = attached && first < size;
     }
 #endif
 
@@ -824,6 +1202,14 @@ void tcg_region_init(size_t tb_size, int splitwx, unsigned max_threads)
     size_t region_size;
     int have_prot, need_prot;
 
+    /*
+     * How much of the buffer to start with, in bytes; zero for all of it, which
+     * is what everything except a chunk-blessed iOS JIT wants. Local because
+     * the regions are laid out once and never move -- making more of the buffer
+     * usable later is raising a count, not re-partitioning.
+     */
+    size_t initial_usable;
+
     /* Size the buffer.  */
     if (tb_size == 0) {
         size_t phys_mem = qemu_get_host_physmem();
@@ -844,6 +1230,18 @@ void tcg_region_init(size_t tb_size, int splitwx, unsigned max_threads)
     have_prot = alloc_code_gen_buffer(tb_size, splitwx, &error_fatal);
     assert(have_prot >= 0);
 
+    /*
+     * What the allocator managed to prepare, now that it has run.
+     *
+     * Only a chunk-blessed iOS JIT sets these; every other host -- TCTI
+     * included, which never blesses because it never executes what it
+     * generates -- leaves tctish_usable_bytes at zero, and a zero here would
+     * read as "none of the buffer is usable" rather than "no limit". The
+     * clamp below the partitioning settles that; this hands the region sizing
+     * the byte count it has to fit the vCPUs inside.
+     */
+    initial_usable = tctish_chunked ? tctish_usable_bytes : 0;
+
     /* Request large pages for the buffer and the splitwx.  */
     qemu_madvise(region.start_aligned, region.total_size, QEMU_MADV_HUGEPAGE);
     if (tcg_splitwx_diff) {
@@ -857,6 +1255,42 @@ void tcg_region_init(size_t tb_size, int splitwx, unsigned max_threads)
      * the buffer; we will assign those to the last region.
      */
     region.n = tcg_n_regions(tb_size, max_threads);
+
+    /*
+     * If only part of the buffer starts out usable, the regions have to be small
+     * enough that every vCPU can be given one from inside that part.
+     *
+     * Getting this wrong is not a performance problem. A flush hands one region
+     * to each context and asserts if it cannot, so too few regions crashes at
+     * the first flush -- and papering over that by handing out regions past the
+     * usable boundary is far worse, because those are pages a debugger has never
+     * prepared and the failure is an illegal instruction fetch in generated
+     * code, thousands of instructions from anything that explains it.
+     *
+     * So the regions are made to fit instead. Splitting the buffer more finely
+     * costs a slightly larger region tree and nothing else.
+     */
+    if (initial_usable != 0) {
+        size_t needed = tcg_min_regions(max_threads);
+
+        /* The hard floor: every vCPU must hold one from inside the usable part. */
+        size_t least = DIV_ROUND_UP(tb_size * needed, initial_usable);
+
+        /*
+         * And then some. At exactly the floor every vCPU holds the only region
+         * it will ever get, so the first one to fill up takes the whole cache
+         * down with it -- the effective size becomes whatever the busiest thread
+         * fits in a quarter of the buffer, and the rest is never touched. Four
+         * apiece leaves room to move on without a flush, which is what regions
+         * are for.
+         */
+        size_t wanted = least * 4;
+
+        /* Not past where a region stops being worth having; QEMU's own floor. */
+        size_t finest = MAX(least, tb_size / (2 * MiB));
+
+        region.n = MAX(region.n, MIN(wanted, finest));
+    }
     region_size = tb_size / region.n;
     region_size = QEMU_ALIGN_DOWN(region_size, page_size);
 
@@ -869,6 +1303,41 @@ void tcg_region_init(size_t tb_size, int splitwx, unsigned max_threads)
     region.total_size -= page_size;
 
     /*
+     * Settle the boundary against the buffer as partitioned.
+     *
+     * Two things are being fixed. A host that did not chunk has no boundary at
+     * all and must read as "all of it", not as zero -- otherwise
+     * tctish_code_cache_grow() would see nothing usable and set the limit *down*
+     * to whatever it was asked for. And total_size has just lost its final guard
+     * page, so a blessing measured against the whole allocation would sit a page
+     * past anything TCG can reach.
+     */
+    if (!tctish_chunked || tctish_usable_bytes > region.total_size) {
+        tctish_usable_bytes = region.total_size;
+    }
+
+    /*
+     * How much may be translated into to begin with. All of it unless someone
+     * has said otherwise, and never less than the vCPUs can hold between them
+     * however small a chunk was asked for -- a cache too small to give every
+     * context a region is not a small cache, it is a failed assertion.
+     */
+    region.min_available = MIN(tcg_min_regions(max_threads), region.n);
+    region.available = region.n;
+    if (initial_usable != 0) {
+        region.available = tcg_regions_within(initial_usable);
+    }
+
+    /*
+     * Never the MAX of the two. The count above is a hard safety limit -- past
+     * it lie pages no debugger has prepared -- so raising it to satisfy the
+     * floor would trade an assertion here for an illegal instruction fetch
+     * later. The region sizing above exists to make both true at once; if it
+     * ever fails to, that is a bug to hear about at startup.
+     */
+    g_assert(region.available >= region.min_available);
+
+    /*
      * The first region will be smaller than the others, via the prologue,
      * which has yet to be allocated.  For now, the first region begins at
      * the page boundary.
@@ -877,6 +1346,12 @@ void tcg_region_init(size_t tb_size, int splitwx, unsigned max_threads)
 
     /* init the region struct */
     qemu_mutex_init(&region.lock);
+
+    /*
+     * Before the ready flag below, because that is what lets the app call in
+     * from its own thread -- and every one of those calls takes this.
+     */
+    qemu_mutex_init(&tctish_cache_lock);
 
     /*
      * Set guard pages in the rw buffer, as that's the one into which
@@ -930,6 +1405,9 @@ void tcg_region_init(size_t tb_size, int splitwx, unsigned max_threads)
      * It is also the only context for CONFIG_USER_ONLY.
      */
     tcg_region_initial_alloc__locked(&tcg_init_ctx);
+
+    /* Last, and with a barrier: see tcg_region_ready(). */
+    qatomic_store_release(&region.ready, true);
 }
 
 void tcg_region_prologue_set(TCGContext *s)
@@ -990,4 +1468,705 @@ size_t tcg_code_capacity(void)
     capacity -= region.n * TCG_HIGHWATER;
 
     return capacity;
+}
+
+/*
+ * Whether the regions exist yet.
+ *
+ * The buffer is allocated before it is partitioned, so there is a window in
+ * which the code cache has a size and can be asked about -- tctiSH does exactly
+ * that, from its own thread, as soon as the size is non-zero -- while
+ * region.lock is still uninitialised memory and every field beside it is zero.
+ *
+ * Its own flag rather than a non-zero `region.n`, because `region.n` is written
+ * first and is read during the rest of the setup; only something written last
+ * can stand for "all of this is safe to read".
+ */
+static bool tcg_region_ready(void)
+{
+    return qatomic_load_acquire(&region.ready);
+}
+
+static size_t tcg_region_usable_size(void)
+{
+    size_t n;
+
+    if (!tcg_region_ready()) {
+        return 0;
+    }
+
+    qemu_mutex_lock(&region.lock);
+    n = region.available;
+    qemu_mutex_unlock(&region.lock);
+
+    return n * (region.size - TCG_HIGHWATER);
+}
+
+static void tcg_region_set_usable(size_t bytes)
+{
+    size_t n;
+
+    if (!tcg_region_ready()) {
+        return;
+    }
+
+    n = MAX(tcg_regions_within(bytes), region.min_available);
+
+    qemu_mutex_lock(&region.lock);
+    region.available = n;
+    qemu_mutex_unlock(&region.lock);
+}
+
+static size_t tcg_region_usable_end(void)
+{
+    void *start, *end;
+    size_t n;
+
+    if (!tcg_region_ready()) {
+        return 0;
+    }
+
+    qemu_mutex_lock(&region.lock);
+    n = region.available;
+    qemu_mutex_unlock(&region.lock);
+
+    if (n == 0) {
+        return 0;
+    }
+
+    /*
+     * Asked of the region rather than worked out as n * .stride.
+     *
+     * The last region is the one that matters: tcg_region_init() hands it
+     * whatever pages are left over once the buffer has been divided, so as soon
+     * as every region is available n * .stride falls *short* of where TCG may
+     * really translate -- and a caller that believed it would unprotect and
+     * discard pages inside a region still being handed out. That failure
+     * arrives as an illegal instruction fetch in generated code.
+     */
+    tcg_region_bounds(n - 1, &start, &end);
+
+    /*
+     * Past the guard page, which belongs to the region and is not ours to give
+     * -- but never past the buffer. The final region is handed whatever pages
+     * were left over by the division and ends at total_size, which already
+     * excludes the last guard page, so adding one there would name a byte that
+     * does not exist.
+     */
+    return MIN((size_t)((char *)end + qemu_real_host_page_size()
+                        - (char *)region.start_aligned),
+               region.total_size);
+}
+
+/*
+ * Whether this build hands JIT pages to a debugger before they can be executed.
+ *
+ * Exactly the condition the helpers above are compiled under. TCTI never
+ * generates anything the host executes directly, so it never blesses -- which
+ * means its code buffer is usable in full from the start and has nothing to
+ * grow.
+ */
+#if !defined(CONFIG_TCG_INTERPRETER) && !defined(CONFIG_TCG_THREADED_INTERPRETER) \
+    && defined(CONFIG_DARWIN) && defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE \
+    && !TARGET_OS_SIMULATOR
+#define TCTISH_BLESSING_POSSIBLE 1
+#else
+#define TCTISH_BLESSING_POSSIBLE 0
+#endif
+
+/* How much of the code buffer exists at all, in bytes. */
+size_t tctish_code_cache_total(void)
+{
+    return tcg_region_ready() ? region.total_size : 0;
+}
+
+/*
+ * How much the last release actually handed back, or 0 if it could not.
+ *
+ * Reported rather than merely logged: `error_report` goes to stderr, and nothing
+ * captures QEMU's stderr outside a debugger session -- so on the devices where
+ * this matters most, a failure would be silent.
+ */
+static size_t tctish_released_bytes;
+
+/* How many times a release has been attempted, and what went wrong last. */
+static size_t tctish_release_attempts;
+
+/*
+ * Kept apart for the two halves of the split mapping.
+ *
+ * They are not the same question. The writable alias is ordinary private
+ * anonymous memory; the executable one is an alias of it made by
+ * mach_vm_remap(), is read-execute, and is shared with the first. If only the
+ * second refuses, the shape of the mapping is the problem and there is
+ * something to be done about it; if both do, remapped memory simply cannot be
+ * handed back and the whole idea has to go.
+ */
+static int tctish_release_errno_rw;
+static int tctish_release_errno_rx;
+
+size_t tctish_code_cache_released(void)
+{
+    return tctish_released_bytes;
+}
+
+size_t tctish_code_cache_release_attempts(void)
+{
+    return qatomic_load_acquire(&tctish_release_attempts);
+}
+
+/*
+ * Counts an attempt, once its outcome is recorded. Last, and with release
+ * ordering, because the app watches the count and reads the outcome the moment
+ * it moves. Measured on device: counted first, a 512 MiB release was still
+ * under way when the app looked, and read back as having given nothing.
+ */
+static void tctish_release_attempted(void)
+{
+    qatomic_store_release(&tctish_release_attempts,
+                          tctish_release_attempts + 1);
+}
+
+int tctish_code_cache_release_errno(void)
+{
+    return tctish_release_errno_rw;
+}
+
+int tctish_code_cache_release_errno_rx(void)
+{
+    return tctish_release_errno_rx;
+}
+
+#ifdef CONFIG_DARWIN
+/*
+ * How much of [start, start + length) the kernel holds a copy of, resident or
+ * compressed. Whole pages; `start` and `length` are page-aligned by the caller.
+ */
+static size_t tctish_resident_bytes(char *start, size_t length)
+{
+    size_t page = qemu_real_host_page_size();
+    size_t total = 0;
+    char vec[256];
+
+    for (size_t done = 0; done < length;) {
+        size_t chunk = MIN(length - done, sizeof(vec) * page);
+        size_t pages = chunk / page;
+
+        if (mincore(start + done, chunk, vec) != 0) {
+            return 0;
+        }
+        for (size_t i = 0; i < pages; i++) {
+            if (vec[i] & (MINCORE_INCORE | MINCORE_PAGED_OUT)) {
+                total += page;
+            }
+        }
+        done += chunk;
+    }
+
+    return total;
+}
+#endif
+
+/*
+ * Hands the unused tail of the code buffer back to the system.
+ *
+ * `MADV_FREE_REUSABLE` is the Darwin call that actually moves the needle. Plain
+ * `MADV_FREE` leaves the pages counted against the process until something
+ * reclaims them, which is no use to an app trying not to be killed for its
+ * footprint; REUSABLE drops them from it there and then.
+ *
+ * Both halves of the split mapping get it. They are two views of the same pages,
+ * and a page still mapped for execution somewhere is not a page the system can
+ * take back.
+ *
+ * Call with tctish_cache_lock held.
+ */
+static void tctish_pay_release__locked(void)
+{
+#ifdef CONFIG_DARWIN
+    size_t total = region.total_size;
+    size_t keep = tctish_usable_bytes;
+    char *rw = (char *)region.start_aligned;
+    size_t length;
+    bool everything = false;
+
+    /* Only what a shrink gave up; see tctish_release_pending. */
+    if (!tctish_release_pending) {
+        return;
+    }
+    tctish_release_pending = false;
+
+    /* Everything after the prologue; see tctish_code_cache_release_all(). */
+    if (tctish_release_everything) {
+        tctish_release_everything = false;
+        everything = true;
+        keep = (char *)region.after_prologue - rw;
+    }
+
+    /*
+     * Cleared here rather than only on the paths that go on to try, so that the
+     * figure always describes the shrink being paid out now. Left standing, the
+     * previous success would be read back as this one's.
+     */
+    tctish_released_bytes = 0;
+
+    /*
+     * Zero is only a boundary nobody has set, except when everything is going:
+     * under TCTI there is no prologue, so everything starts at the very front.
+     */
+    if ((keep == 0 && !everything) || keep >= total || rw == NULL) {
+        return;
+    }
+
+    if (tctish_release_upto > total) {
+        tctish_release_upto = total;
+    }
+    if (tctish_release_upto <= keep) {
+        return;
+    }
+
+    length = tctish_release_upto - keep;
+
+    /* Whole pages only, and never a page that is partly still in use. */
+    {
+        char *from = rw + keep;
+
+        if (!tctish_pages_within(&from, &length)) {
+            return;
+        }
+        keep = from - rw;
+    }
+
+    /*
+     * After a release of everything, nothing past the prologue's page may be
+     * assumed prepared, whatever the kernel makes of the advice below: the
+     * protection changes first. So the next grow prepares from here. (After an
+     * ordinary shrink the boundary is already where the shrink put it.)
+     */
+    if (everything) {
+        tctish_usable_bytes = keep;
+        qatomic_set(&tctish_needs_preparing, true);
+    }
+
+#ifdef MADV_FREE_REUSABLE
+    bool released = true;
+    size_t resident;
+
+    /*
+     * Counted separately from the bytes, because "gave nothing back" and "was
+     * never asked" are the same number and only one of them is a problem. See
+     * tctish_release_attempted() for why the count comes at the end.
+     */
+    tctish_release_errno_rw = 0;
+    tctish_release_errno_rx = 0;
+
+#if TCTISH_BLESSING_POSSIBLE
+    /*
+     * Emptied instead, where the buffer allows it: see tctish_purgeable. Every
+     * piece lying wholly within the range goes, which for a release of
+     * everything is all of them; a piece the range only reaches into is kept,
+     * whole, still prepared and still executable.
+     *
+     * Each is made non-volatile again at once. The pages are gone either way;
+     * what matters is that the kernel cannot purge a piece on its own later,
+     * from under code TCG has translated into it since.
+     */
+    if (tctish_purgeable) {
+        size_t size = region.total_size;
+        size_t emptied = 0;
+        size_t start, end;
+
+        for (size_t offset = keep; offset < keep + length; offset = end) {
+            int state = VM_PURGABLE_EMPTY;
+            size_t in_core;
+            kern_return_t ret;
+
+            tctish_piece_at(offset, size, &start, &end);
+            if (start < keep || end > keep + length) {
+                continue;
+            }
+
+            in_core = tctish_resident_bytes(rw + start, end - start);
+            ret = mach_vm_purgable_control(mach_task_self(),
+                                           (mach_vm_address_t)(rw + start),
+                                           VM_PURGABLE_SET_STATE, &state);
+            if (ret != KERN_SUCCESS) {
+                /* Nothing changed there, so nothing is lost. */
+                error_report("code cache: could not empty the piece at %zu "
+                             "MiB: %d", (size_t)(start / MiB), ret);
+                tctish_release_errno_rw = EPERM;
+                break;
+            }
+            emptied += in_core;
+
+            state = VM_PURGABLE_NONVOLATILE;
+            ret = mach_vm_purgable_control(mach_task_self(),
+                                           (mach_vm_address_t)(rw + start),
+                                           VM_PURGABLE_SET_STATE, &state);
+            if (ret != KERN_SUCCESS) {
+                /*
+                 * Volatile memory can be taken at any moment, so none of it
+                 * may be translated into. Refusing to grow is what ensures
+                 * that, and the app, failing to prepare, asks what to do.
+                 */
+                error_report("code cache: could not keep the piece at %zu "
+                             "MiB: %d; growth stops here", (size_t)(start / MiB), ret);
+                tctish_ever_unprotected = true;
+                break;
+            }
+        }
+
+        tctish_released_bytes = emptied;
+        tctish_release_attempted();
+        return;
+    }
+#endif
+
+    /* What was resident, which is what comes off the footprint; not the range. */
+    resident = tctish_resident_bytes(rw + keep, length);
+
+    /*
+     * The executable alias first, and only after making it writable.
+     *
+     * Measured on device: the writable mapping accepts MADV_FREE_REUSABLE and
+     * the executable one answers EPERM. The kernel will not discard pages
+     * through a read-execute view of them, and while it holds on to them
+     * through that view the writable side's consent counts for nothing.
+     *
+     * Under TXM this is one-way: those addresses can never be executed again
+     * in this process; see tctish_ever_unprotected. Growth stops here, and a
+     * release of everything is refused outright. Only reached under TXM when
+     * the buffer couldn't be made purgeable.
+     */
+    if (tcg_splitwx_diff != 0) {
+        char *rx = rw + tcg_splitwx_diff;
+
+        if (mprotect(rx + keep, length, PROT_READ | PROT_WRITE) != 0) {
+            /*
+             * Taken before anything else runs. error_report() goes through
+             * glib and stdio, either of which may leave errno as it pleases --
+             * and this number is the whole point of keeping the two halves
+             * apart, so reading it back second-hand would defeat the exercise.
+             */
+            tctish_release_errno_rx = errno;
+            error_report("code cache: could not unprotect %zu bytes (rx): %s",
+                         length, strerror(tctish_release_errno_rx));
+            released = false;
+        } else {
+            /*
+             * Recorded the moment the protection changes, and not below with
+             * the outcome: from here on the restore in tctish_code_cache_grow()
+             * has work to do whether or not the kernel takes the pages.
+             */
+            tctish_ever_unprotected = true;
+
+            if (madvise(rx + keep, length, MADV_FREE_REUSABLE) != 0) {
+                /* Before reporting; see above. */
+                tctish_release_errno_rx = errno;
+                error_report("code cache: could not release %zu bytes (rx): %s",
+                             length, strerror(tctish_release_errno_rx));
+                released = false;
+            }
+        }
+    }
+
+    if (madvise(rw + keep, length, MADV_FREE_REUSABLE) != 0) {
+        /* Not fatal: the pages stay ours, and the cap on growth still holds. */
+        tctish_release_errno_rw = errno;
+        error_report("code cache: could not release %zu bytes (rw): %s",
+                     length, strerror(tctish_release_errno_rw));
+        released = false;
+    }
+
+    /* What was resident, which is what comes off the footprint; not the range. */
+    tctish_released_bytes = released ? resident : 0;
+    tctish_release_attempted();
+#endif
+#endif
+}
+
+/*
+ * Pays out whatever release is pending, and marks a release of everything
+ * settled either way, so that nobody waits on one that came to nothing. Call
+ * with tctish_cache_lock held.
+ */
+static void tctish_release_unused__locked(void)
+{
+    bool everything = tctish_release_pending && tctish_release_everything;
+
+    tctish_pay_release__locked();
+
+    if (everything) {
+        qatomic_store_release(&tctish_release_all_outstanding, false);
+    }
+}
+
+void tctish_release_unused(void)
+{
+    if (!tcg_region_ready()) {
+        return;
+    }
+
+    qemu_mutex_lock(&tctish_cache_lock);
+    tctish_release_unused__locked();
+    qemu_mutex_unlock(&tctish_cache_lock);
+}
+
+/* How much of it may be translated into right now, in bytes. */
+size_t tctish_code_cache_usable(void)
+{
+    return tcg_region_usable_size();
+}
+
+/* How much translated code is in it, in bytes. */
+size_t tctish_code_cache_used(void)
+{
+    return tcg_code_size();
+}
+
+/*
+ * Whether growing the cache needs a debugger attached first.
+ *
+ * True only where pages must be prepared before they will execute. Under TCTI
+ * nothing is ever executed directly, so nothing needs preparing and growing is
+ * just arithmetic -- no helper, no trap, and no freeze.
+ */
+bool tctish_code_cache_needs_debugger(void)
+{
+#if TCTISH_BLESSING_POSSIBLE
+    return jit_region_blessing_requested();
+#else
+    return false;
+#endif
+}
+
+/* Whether there is anything left to bring into use. */
+bool tctish_code_cache_can_grow(void)
+{
+#if TCTISH_BLESSING_POSSIBLE
+    if (jit_region_blessing_requested() && tctish_ever_unprotected) {
+        return false;
+    }
+#endif
+    return tcg_region_ready() && tctish_usable_bytes < region.total_size;
+}
+
+/*
+ * Reduces the usable part of the code buffer to `target` bytes, and returns what
+ * is usable afterwards -- or 0 if nothing changed.
+ *
+ * Two halves, deliberately. The cap comes down immediately, which costs nothing
+ * and stops the cache being grown any further. The memory itself comes back at
+ * the next flush, because that is the only moment the tail is provably empty --
+ * so a flush is asked for rather than waited for.
+ *
+ * Anything released has to be prepared again before it can be executed: the
+ * pages the system takes back are not the pages that come back, and whatever
+ * made the old ones executable did not survive them. Lowering
+ * `tctish_usable_bytes` is what makes the next grow re-prepare rather than
+ * assume.
+ */
+size_t tctish_code_cache_shrink(size_t target)
+{
+    size_t previous;
+
+    /*
+     * Nothing to move until the buffer has been partitioned; see
+     * tcg_region_usable_size(), which answers zero until then and cannot answer
+     * zero afterwards. Without this the boundary would be set from a region
+     * layout that does not exist yet, and land on zero.
+     */
+    if (tcg_region_usable_size() == 0) {
+        return 0;
+    }
+
+    qemu_mutex_lock(&tctish_cache_lock);
+    previous = tctish_usable_bytes;
+
+    if (target >= previous) {
+        qemu_mutex_unlock(&tctish_cache_lock);
+        return 0;
+    }
+
+    tcg_region_set_usable(target);
+
+    /* What the regions actually came to, which is where the release will cut. */
+    tctish_usable_bytes = tcg_region_usable_end();
+
+    /*
+     * The highest boundary any unpaid shrink started from, so that two of them
+     * before a single flush still give back everything between them.
+     */
+    if (!tctish_release_pending || previous > tctish_release_upto) {
+        tctish_release_upto = previous;
+    }
+    tctish_release_pending = true;
+    qemu_mutex_unlock(&tctish_cache_lock);
+
+    /*
+     * Outside the lock. The flush it asks for ends in a release, which takes
+     * the same lock, and there is nothing to be gained by making that wait on
+     * this.
+     */
+    tctish_request_flush();
+
+    return tcg_region_usable_size();
+}
+
+/*
+ * Hands the whole code buffer back to the system at the next flush, all but
+ * the page holding the prologue, and returns whether a release was arranged.
+ *
+ * A shrink can only go as low as a region per vCPU, and after a flush those
+ * first regions are exactly where TCG translates into again, so a shrink gives
+ * back the tail and keeps nearly everything that was ever resident. This takes
+ * the kept regions too.
+ *
+ * Only for a machine that cannot run until the app has put the usable size
+ * back with tctish_code_cache_grow(): in tctiSH, a parked one.
+ *
+ * Refused wherever the buffer has an executable alias and is not purgeable.
+ * Releasing through that alias costs its addresses their executability for
+ * good under TXM (see tctish_ever_unprotected), and before TXM nothing puts it
+ * back. A purgeable buffer is emptied instead, which touches neither alias;
+ * see tctish_purgeable. So: TCTI, where nothing is executed from the buffer at
+ * all, and JIT under TXM when the buffer could be made purgeable.
+ *
+ * The flush is asked for here, and runs on the vCPUs even while the machine
+ * is stopped; watch tctish_code_cache_release_attempts() to see it happen.
+ */
+bool tctish_code_cache_release_all(void)
+{
+    if (tcg_region_usable_size() == 0 ||
+        (tcg_splitwx_diff != 0 && !tctish_purgeable)) {
+        return false;
+    }
+
+    qemu_mutex_lock(&tctish_cache_lock);
+    tctish_release_everything = true;
+    tctish_release_upto = region.total_size;
+    tctish_release_pending = true;
+    qatomic_store_release(&tctish_release_all_outstanding, true);
+    qemu_mutex_unlock(&tctish_cache_lock);
+
+    tctish_request_flush();
+    return true;
+}
+
+/* Whether a release of everything is still waiting for its flush. */
+bool tctish_code_cache_release_all_outstanding(void)
+{
+    return qatomic_load_acquire(&tctish_release_all_outstanding);
+}
+
+/* Whether a release of everything has left the cache to be prepared again. */
+bool tctish_code_cache_needs_preparing(void)
+{
+    return qatomic_read(&tctish_needs_preparing);
+}
+
+/* Whether the machine may run, as far as the code cache goes. */
+bool tctish_code_cache_may_run(void)
+{
+    return !tctish_code_cache_release_all_outstanding() &&
+           !tctish_code_cache_needs_preparing();
+}
+
+/*
+ * Brings the code buffer into use up to `target` bytes, and returns how much is
+ * usable afterwards -- or zero if nothing changed.
+ *
+ * The caller chooses the target rather than this stepping by some size of its
+ * own, because the ladder is a policy question: how far the user let it go, how
+ * big a freeze they will sit through. All this enforces is the buffer's own
+ * limit.
+ *
+ * The caller must have a debugger attached before calling this, because that is
+ * what makes the new pages executable, and this cannot arrange one: the trap
+ * below stops every thread in the process, so the thread that would have gone
+ * looking for a helper is stopped along with the rest. In tctiSH the app
+ * attaches one and then calls in.
+ *
+ * No vCPU needs stopping, and no flush is needed. The pages being prepared are
+ * ones no context can reach -- tcg_region_alloc__locked() will not hand them out
+ * until the count is raised, which is the last thing done here -- so everything
+ * already translated stays exactly where it is.
+ *
+ * A release waiting to be paid does have to be seen off first, though, which is
+ * what the lock is for: see tctish_cache_lock.
+ */
+size_t tctish_code_cache_grow(size_t target)
+{
+    size_t total;
+    size_t usable;
+
+    /* As in the shrink: there is no point preparing regions that do not exist. */
+    if (tcg_region_usable_size() == 0) {
+        return 0;
+    }
+
+    total = region.total_size;
+
+    qemu_mutex_lock(&tctish_cache_lock);
+
+    if (tctish_usable_bytes >= total) {
+        goto unchanged;
+    }
+
+    if (target > total) {
+        target = total;
+    }
+    if (target <= tctish_usable_bytes) {
+        goto unchanged;
+    }
+
+#if TCTISH_BLESSING_POSSIBLE
+    if (jit_region_blessing_requested()) {
+        void *rx = (void *)((uintptr_t)region.start_aligned + tcg_splitwx_diff);
+        void *from = (char *)rx + tctish_usable_bytes;
+        size_t len = target - tctish_usable_bytes;
+        void *prepared;
+
+        /* Released pages cannot be made executable again; see the flag. */
+        if (tctish_ever_unprotected) {
+            error_report("code cache: cannot grow past a release under TXM");
+            goto unchanged;
+        }
+
+        /* Trapping with nothing listening kills the process. */
+        if (!is_debugger_attached()) {
+            goto unchanged;
+        }
+
+        /*
+         * `from` is not page-aligned, and deliberately need not be.
+         *
+         * A script stepping a page at a time from an unaligned start covers one
+         * page fewer than the range spans -- but the page it misses at each end
+         * is a region's guard page, never a page TCG hands out: regions end one
+         * page short (tcg_region_bounds()), and both `tctish_usable_bytes` and
+         * `target` land on region boundaries or beyond them.
+         *
+         * Aligning `from` outward instead would be the real mistake, since that
+         * is the direction that lets a usable page go unprepared.
+         */
+        prepared = jit26_prepare_region(from, len);
+        jit26_detach();
+
+        if (prepared != from) {
+            goto unchanged;
+        }
+    }
+#endif
+
+    tctish_usable_bytes = target;
+    tcg_region_set_usable(target);
+    usable = tcg_region_usable_size();
+    qatomic_set(&tctish_needs_preparing, false);
+    qemu_mutex_unlock(&tctish_cache_lock);
+    return usable;
+
+unchanged:
+    qemu_mutex_unlock(&tctish_cache_lock);
+    return 0;
 }
