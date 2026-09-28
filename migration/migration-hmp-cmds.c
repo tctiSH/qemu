@@ -29,7 +29,10 @@
 #include "qemu/cutils.h"
 #include "qemu/error-report.h"
 #include "qemu/sockets.h"
+#include "qemu/units.h"
 #include "system/runstate.h"
+#include "system/ramblock.h"
+#include "hw/core/boards.h"
 #include "ui/qemu-spice.h"
 #include "system/system.h"
 #include "options.h"
@@ -494,6 +497,72 @@ void hmp_savevm(Monitor *mon, const QDict *qdict)
 
     save_snapshot(qdict_get_try_str(qdict, "name"),
                   true, NULL, false, NULL, &err);
+    hmp_handle_error(mon, err);
+}
+
+/*
+ * tctiSH: parks a machine whose state has just been saved, by giving all of
+ * its RAM back to the host. The pages read as zero until hmp_unpark loads the
+ * snapshot's back, and the load skips the ones that were zero anyway, so a
+ * parked machine costs the host nothing for its memory. See
+ * background-footprint.md, Lever C.
+ *
+ * All but the first megabyte. That holds the PC's shadowed BIOS, which a
+ * reset starts from: QEMU leaves the i440FX's PAM mapping RAM over the BIOS
+ * across a reset, and SeaBIOS copies itself back from ROM only on a reboot
+ * the guest asks for (see qemu_reboot() in roms/seabios/src/fw/shadow.c).
+ * Zeroed, a `system_reset` of a parked machine -- tctiSH's "start afresh" --
+ * runs into nothing and never boots. Measured on the Mac harness. It costs a
+ * megabyte at most.
+ *
+ * Refused while the VM runs: a running guest would carry on with its memory
+ * gone. Nothing here checks that a snapshot exists; that is the caller's to
+ * know before asking.
+ */
+#define TCTISH_PARK_KEEP (1 * MiB)
+
+void hmp_park(Monitor *mon, const QDict *qdict)
+{
+    MachineState *ms = MACHINE(qdev_get_machine());
+    RAMBlock *rb = ms->ram ? ms->ram->ram_block : NULL;
+    Error *err = NULL;
+
+    if (runstate_is_running()) {
+        error_setg(&err, "the VM is running; stop it first");
+    } else if (rb == NULL) {
+        error_setg(&err, "this machine has no RAM block to discard");
+    } else if (rb->used_length > TCTISH_PARK_KEEP &&
+               ram_block_discard_range(rb, TCTISH_PARK_KEEP,
+                                       rb->used_length - TCTISH_PARK_KEEP)) {
+        error_setg(&err, "discarding '%s' failed", rb->idstr);
+    } else {
+        tctish_set_parked(true);
+    }
+
+    hmp_handle_error(mon, err);
+}
+
+/*
+ * tctiSH: brings a parked machine back. Loads the snapshot and starts it; the
+ * clock catches up from when the snapshot was taken, as after any load (see
+ * cpu_enable_ticks).
+ *
+ * A failed load leaves the VM stopped and still parked, so `cont` goes on
+ * refusing until a load succeeds or the machine is reset.
+ */
+void hmp_unpark(Monitor *mon, const QDict *qdict)
+{
+    const char *name = qdict_get_str(qdict, "name");
+    Error *err = NULL;
+
+    if (!tctish_is_parked()) {
+        error_setg(&err, "the VM is not parked");
+    } else if (runstate_is_running()) {
+        error_setg(&err, "the VM is running");
+    } else if (load_snapshot(name, NULL, false, NULL, &err)) {
+        vm_start();
+    }
+
     hmp_handle_error(mon, err);
 }
 

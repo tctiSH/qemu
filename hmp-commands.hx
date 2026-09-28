@@ -378,6 +378,35 @@ SRST
 ERST
 
     {
+        .name       = "park",
+        .args_type  = "",
+        .params     = "",
+        .help       = "give a stopped, saved VM's RAM back to the host",
+        .cmd        = hmp_park,
+    },
+
+SRST
+``park``
+  tctiSH: give every page of the machine's RAM back to the host. Only while
+  the VM is stopped, and only once its state has been saved: the guest's
+  memory reads as zero afterwards, until ``unpark`` loads it back.
+ERST
+
+    {
+        .name       = "unpark",
+        .args_type  = "name:s",
+        .params     = "tag",
+        .help       = "load a parked VM's snapshot, catch its clock up, and start it",
+        .cmd        = hmp_unpark,
+    },
+
+SRST
+``unpark`` *tag*
+  tctiSH: load the snapshot *tag* into a parked VM, move its clock on by
+  however long it was stopped, and start it. Left stopped if the load fails.
+ERST
+
+    {
         .name       = "delvm",
         .args_type  = "name:s",
         .params     = "tag",

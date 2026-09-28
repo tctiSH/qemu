@@ -8,6 +8,14 @@ bool runstate_check(RunState state);
 void runstate_set(RunState new_state);
 RunState runstate_get(void);
 bool runstate_is_running(void);
+
+/*
+ * tctiSH: whether the machine's RAM has been given back by the `park` monitor
+ * command and not yet loaded again. A parked machine must not run, and must
+ * not be saved: its memory reads as zero.
+ */
+bool tctish_is_parked(void);
+void tctish_set_parked(bool parked);
 bool runstate_needs_reset(void);
 void runstate_replay_enable(void);
 
