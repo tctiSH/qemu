@@ -76,6 +76,12 @@ void qmp_cont(Error **errp)
         return;
     }
 
+    /* tctiSH: its RAM reads as zero until `unpark` loads it back. */
+    if (tctish_is_parked()) {
+        error_setg(errp, "The VM is parked; unpark it instead.");
+        return;
+    }
+
     if (runstate_needs_reset()) {
         error_setg(errp, "Resetting the Virtual Machine is required");
         return;

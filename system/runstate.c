@@ -508,6 +508,19 @@ static int qemu_debug_requested(void)
     return r;
 }
 
+/* tctiSH: see tctish_is_parked */
+static bool tctish_parked;
+
+bool tctish_is_parked(void)
+{
+    return tctish_parked;
+}
+
+void tctish_set_parked(bool parked)
+{
+    tctish_parked = parked;
+}
+
 /*
  * Reset the VM. Issue an event unless @reason is SHUTDOWN_CAUSE_NONE.
  */
@@ -520,6 +533,16 @@ void qemu_system_reset(ShutdownCause reason)
     bool guest_state_rebuilt = false;
     int ret;
     ResetType type;
+
+    /*
+     * tctiSH: a reset boots from firmware, which needs nothing from RAM. Except
+     * the one inside a snapshot load, which comes before the RAM is read back:
+     * a load that fails after it has to leave the machine parked, or `unpark`
+     * refuses to try again and `cont` runs an empty machine.
+     */
+    if (reason != SHUTDOWN_CAUSE_SNAPSHOT_LOAD) {
+        tctish_parked = false;
+    }
 
     cpu_synchronize_all_states();
 
@@ -736,6 +759,15 @@ void qemu_system_guest_pvshutdown(void)
 
 void qemu_system_reset_request(ShutdownCause reason)
 {
+    /*
+     * tctiSH: and at the request too, not only when the reset happens. The
+     * main loop can get to the reset only after the monitor has finished its
+     * input, so a `system_reset` followed at once by `cont` would otherwise
+     * have the `cont` refused as parked, and a stopped machine reset into
+     * prelaunch that nothing ever starts.
+     */
+    tctish_parked = false;
+
     if (reboot_action == REBOOT_ACTION_SHUTDOWN &&
         reason != SHUTDOWN_CAUSE_SUBSYSTEM_RESET) {
         shutdown_requested = reason;

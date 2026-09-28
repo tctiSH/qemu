@@ -3275,6 +3275,12 @@ bool save_snapshot(const char *name, bool overwrite, const char *vmstate,
         return false;
     }
 
+    /* tctiSH: a parked machine's RAM reads as zero; saving it loses the session. */
+    if (tctish_is_parked()) {
+        error_setg(errp, "The VM is parked; unpark it before saving.");
+        return false;
+    }
+
     if (migration_is_blocked(errp)) {
         return false;
     }
@@ -3533,7 +3539,10 @@ bool load_snapshot(const char *name, const char *vmstate,
         return false;
     }
 
-    /* tctiSH: its clock catches up from when the snapshot was taken. */
+    /* tctiSH: RAM holds a whole machine again, whoever asked for the load. */
+    tctish_set_parked(false);
+
+    /* tctiSH: and its clock catches up from when the snapshot was taken. */
     tctish_clock_loaded(sn.date_sec * NANOSECONDS_PER_SECOND + sn.date_nsec);
     return true;
 
