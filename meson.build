@@ -498,6 +498,12 @@ ucontext_probe = '''
 # For POSIX prefer ucontext, but it's not always possible. The fallback
 # is sigcontext.
 supported_backends = []
+
+ucontext = dependency('libucontext', required : false)
+if ucontext.found() or get_option('ucontext').enabled()
+  supported_backends += ['libucontext']
+endif
+
 if host_os == 'windows'
   supported_backends += ['windows']
 elif host_os == 'emscripten'
@@ -514,6 +520,10 @@ if coroutine_backend == 'auto'
 elif coroutine_backend not in supported_backends
   error('"@0@" backend requested but not available.  Available backends: @1@' \
         .format(coroutine_backend, ', '.join(supported_backends)))
+endif
+
+if coroutine_backend == 'libucontext'
+  coroutine_backend = 'ucontext'
 endif
 
 # Compiles if SafeStack *not* enabled
@@ -869,6 +879,13 @@ elif host_os == 'openbsd'
     # Disable OpenBSD W^X if available
     emulator_link_args = cc.get_supported_link_arguments('-Wl,-z,wxneeded')
   endif
+endif
+
+if not ucontext.found() and get_option('ucontext').enabled()
+  libucontext_proj = subproject('libucontext',
+                                default_options: ['default_library=static',
+                                                  'freestanding=true'])
+  ucontext = libucontext_proj.get_variable('libucontext_dep')
 endif
 
 ###############################################
@@ -2492,6 +2509,7 @@ endif
 config_host_data.set('CONFIG_PIXMAN', pixman.found())
 config_host_data.set('CONFIG_PASST', enable_passt)
 config_host_data.set('CONFIG_SLIRP', slirp.found())
+config_host_data.set('CONFIG_LIBUCONTEXT', ucontext.found())
 config_host_data.set('CONFIG_SNAPPY', snappy.found())
 config_host_data.set('CONFIG_SOLARIS', host_os == 'sunos')
 if have_tcg
@@ -3795,7 +3813,7 @@ util_ss = util_ss.apply({})
 libqemuutil = static_library('qemuutil',
                              build_by_default: false,
                              sources: util_ss.sources() + stub_ss.sources() + genh,
-                             dependencies: [util_ss.dependencies(), libm, threads, glib, socket, malloc, rt, pixman, opengl])
+                             dependencies: [util_ss.dependencies(), libm, threads, glib, socket, malloc, rt, pixman, opengl, ucontext])
 qemuutil = declare_dependency(link_with: libqemuutil,
                               sources: genh + version_res,
                               dependencies: [event_loop_base])
@@ -4886,6 +4904,7 @@ summary(summary_info, bool_yn: true, section: 'Targets and accelerators')
 
 # Block layer
 summary_info = {}
+summary_info += {'libucontext support': ucontext.found()}
 summary_info += {'coroutine backend': coroutine_backend}
 summary_info += {'coroutine pool':    have_coroutine_pool}
 if have_block

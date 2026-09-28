@@ -80,8 +80,8 @@ meson_options_help() {
   printf "%s\n" '  --sysconfdir=VALUE       Sysconf data directory [etc]'
   printf "%s\n" '  --tls-priority=VALUE     Default TLS protocol/cipher priority string'
   printf "%s\n" '                           [NORMAL]'
-  printf "%s\n" '  --with-coroutine=CHOICE  coroutine backend to use (choices:'
-  printf "%s\n" '                           auto/sigaltstack/ucontext/wasm/windows)'
+  printf "%s\n" '  --with-coroutine=CHOICE  coroutine backend to use (choices: auto/libuconte'
+  printf "%s\n" '                           xt/sigaltstack/ucontext/wasm/windows)'
   printf "%s\n" '  --with-pkgversion=VALUE  use specified string as sub-version of the'
   printf "%s\n" '                           package'
   printf "%s\n" '  --with-suffix=VALUE      Suffix for QEMU data/modules/config directories'
@@ -199,6 +199,7 @@ meson_options_help() {
   printf "%s\n" '  tpm             TPM support'
   printf "%s\n" '  u2f             U2F emulation support'
   printf "%s\n" '  uadk            UADK Library support'
+  printf "%s\n" '  ucontext        libucontext support'
   printf "%s\n" '  usb-redir       libusbredir support'
   printf "%s\n" '  valgrind        valgrind debug support for coroutine stacks'
   printf "%s\n" '  vde             vde network backend support'
@@ -532,6 +533,8 @@ _meson_option_parse() {
     --disable-uadk) printf "%s" -Duadk=disabled ;;
     --enable-ubsan) printf "%s" -Dubsan=true ;;
     --disable-ubsan) printf "%s" -Dubsan=false ;;
+    --enable-ucontext) printf "%s" -Ducontext=enabled ;;
+    --disable-ucontext) printf "%s" -Ducontext=disabled ;;
     --enable-usb-redir) printf "%s" -Dusb_redir=enabled ;;
     --disable-usb-redir) printf "%s" -Dusb_redir=disabled ;;
     --enable-valgrind) printf "%s" -Dvalgrind=enabled ;;
