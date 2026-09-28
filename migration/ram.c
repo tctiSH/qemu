@@ -364,6 +364,85 @@ struct RAMSrcPageRequest {
     QSIMPLEQ_ENTRY(RAMSrcPageRequest) next_req;
 };
 
+#ifdef CONFIG_DARWIN
+/*
+ * tctiSH: which host pages of guest RAM the kernel has no copy of.
+ *
+ * On Darwin, reading anonymous memory that was never written charges a
+ * zero-filled page to phys_footprint, where Linux would map the shared zero
+ * page for nothing. Saving a snapshot reads every page to find the zero ones,
+ * and loading one reads every zero page before deciding whether to clear it,
+ * so either takes the footprint to the whole of guest RAM. A page that is
+ * neither resident nor compressed has never been written since it was
+ * mapped, so it is zero, and both can skip it without reading it. That
+ * includes pages handed back by free page reporting, because
+ * ram_block_discard_range maps fresh memory over them.
+ *
+ * Asked a window at a time, just before the pages are needed, so that the
+ * answer is never older than the few pages it describes.
+ */
+#define UNTOUCHED_WINDOW_PAGES 256
+
+typedef struct {
+    RAMBlock *block;
+    ram_addr_t start;   /* offset in the block of the first host page */
+    size_t pages;       /* host pages described by vec */
+    char vec[UNTOUCHED_WINDOW_PAGES];
+} UntouchedWindow;
+
+/*
+ * Private anonymous memory, in host-sized pages: the only kind that reads as
+ * zero when it has no pages, and the only kind a discard maps fresh memory
+ * over rather than punching a hole in a file someone else might share.
+ */
+static bool ram_block_is_private_anon(RAMBlock *rb)
+{
+    return rb->fd < 0 && !qemu_ram_is_shared(rb) &&
+           rb->page_size == qemu_real_host_page_size();
+}
+
+static bool ram_page_untouched(UntouchedWindow *w, RAMBlock *rb,
+                               ram_addr_t offset)
+{
+    size_t page = qemu_real_host_page_size();
+    ram_addr_t first = QEMU_ALIGN_DOWN(offset, page);
+
+    if (!ram_block_is_private_anon(rb)) {
+        return false;
+    }
+
+    if (w->block != rb || first < w->start ||
+        first >= w->start + w->pages * page) {
+        size_t len = MIN((ram_addr_t)UNTOUCHED_WINDOW_PAGES * page,
+                         rb->used_length - first);
+
+        if (mincore(rb->host + first, len, w->vec)) {
+            w->block = NULL;
+            return false;
+        }
+        w->block = rb;
+        w->start = first;
+        w->pages = DIV_ROUND_UP(len, page);
+    }
+
+    return !(w->vec[(first - w->start) / page] &
+             (MINCORE_INCORE | MINCORE_PAGED_OUT));
+}
+
+/* Records a write the window cannot have seen, made after it was taken. */
+static void ram_page_written(UntouchedWindow *w, RAMBlock *rb,
+                             ram_addr_t offset)
+{
+    size_t page = qemu_real_host_page_size();
+    ram_addr_t first = QEMU_ALIGN_DOWN(offset, page);
+
+    if (w->block == rb && first >= w->start &&
+        first < w->start + w->pages * page) {
+        w->vec[(first - w->start) / page] |= MINCORE_INCORE;
+    }
+}
+#endif
+
 /* State of RAM for migration */
 struct RAMState {
     /*
@@ -434,10 +513,83 @@ struct RAMState {
      * Protected by @bitmap_mutex.
      */
     PageLocationHint page_hint;
+#ifdef CONFIG_DARWIN
+    /* tctiSH: see ram_page_untouched */
+    UntouchedWindow untouched;
+    /*
+     * tctiSH: what a stopped save found, in target pages, and how many whole
+     * host pages were resident but held nothing but zeroes. Those last are
+     * handed back as the save passes, by ram_hand_back_zero_host_page.
+     */
+    uint64_t saw_untouched;
+    uint64_t saw_resident_zero;
+    uint64_t saw_data;
+    uint64_t saw_zero_host_pages;
+    unsigned host_page_zeroes;
+    /* tctiSH: see ram_hand_back_zero_host_page */
+    RAMBlock *zero_run_block;
+    ram_addr_t zero_run_start;
+    ram_addr_t zero_run_length;
+    uint64_t handed_back;
+#endif
 };
 typedef struct RAMState RAMState;
 
 static RAMState *ram_state;
+
+#ifdef CONFIG_DARWIN
+/*
+ * tctiSH: gives back the run of zero host pages collected so far.
+ *
+ * Only while the guest is stopped. The pages were found to hold nothing but
+ * zeroes, and a discard makes them read as zero again, so the guest cannot
+ * tell -- unless it wrote to one in between, which a stopped guest cannot.
+ * If the VM has been started again since the run was collected, the run is
+ * dropped rather than trusted.
+ */
+static void ram_hand_back_zero_run(RAMState *rs)
+{
+    RAMBlock *rb = rs->zero_run_block;
+
+    if (rb != NULL && !runstate_is_running() &&
+        !ram_block_discard_is_disabled() &&
+        ram_block_discard_range(rb, rs->zero_run_start,
+                                rs->zero_run_length) == 0) {
+        rs->handed_back += rs->zero_run_length;
+    }
+
+    rs->zero_run_block = NULL;
+    rs->zero_run_length = 0;
+}
+
+/*
+ * tctiSH: a host page the save found resident and entirely zero.
+ *
+ * Saving already reads every resident page to find the zero ones, so these
+ * cost nothing more to find, and until the guest writes to them again they
+ * are footprint holding nothing. Neighbours are gathered into one discard,
+ * because each discard maps fresh memory over its range and a run of them is
+ * one call rather than many.
+ */
+static void ram_hand_back_zero_host_page(RAMState *rs, RAMBlock *rb,
+                                         ram_addr_t offset)
+{
+    size_t page = qemu_real_host_page_size();
+
+    if (!ram_block_is_private_anon(rb)) {
+        return;
+    }
+
+    if (rs->zero_run_block != rb ||
+        rs->zero_run_start + rs->zero_run_length != offset) {
+        ram_hand_back_zero_run(rs);
+        rs->zero_run_block = rb;
+        rs->zero_run_start = offset;
+    }
+
+    rs->zero_run_length += page;
+}
+#endif
 
 static NotifierWithReturnList precopy_notifier_list;
 
@@ -1221,9 +1373,35 @@ static int save_zero_page(RAMState *rs, PageSearchStatus *pss,
         return 0;
     }
 
-    if (!buffer_is_zero(p, TARGET_PAGE_SIZE)) {
+#ifdef CONFIG_DARWIN
+    /*
+     * tctiSH: see ram_page_untouched. Only while the guest is stopped, as it
+     * is for savevm, since a running guest could write the page after the
+     * kernel was asked about it.
+     */
+    bool untouched = !runstate_is_running() &&
+                     ram_page_untouched(&rs->untouched, pss->block, offset);
+#else
+    bool untouched = false;
+#endif
+
+    if (!untouched && !buffer_is_zero(p, TARGET_PAGE_SIZE)) {
+#ifdef CONFIG_DARWIN
+        if (!runstate_is_running()) {
+            rs->saw_data++;
+        }
+#endif
         return 0;
     }
+
+#ifdef CONFIG_DARWIN
+    if (untouched) {
+        rs->saw_untouched++;
+    } else if (!runstate_is_running()) {
+        rs->saw_resident_zero++;
+        rs->host_page_zeroes++;
+    }
+#endif
 
     qatomic_add(&mig_stats.zero_pages, 1);
 
@@ -2230,6 +2408,10 @@ static int ram_save_host_page(RAMState *rs, PageSearchStatus *pss)
     /* Update host page boundary information */
     pss_host_page_prepare(pss);
 
+#ifdef CONFIG_DARWIN
+    rs->host_page_zeroes = 0;
+#endif
+
     do {
         page_dirty = migration_bitmap_clear_dirty(rs, pss->block, pss->page);
 
@@ -2268,6 +2450,19 @@ static int ram_save_host_page(RAMState *rs, PageSearchStatus *pss)
 
         pss_find_next_dirty(pss);
     } while (pss_within_range(pss));
+
+#ifdef CONFIG_DARWIN
+    /*
+     * tctiSH: every target page in this host page was resident and zero, all
+     * of them seen by this pass, with the guest stopped throughout.
+     */
+    if (pagesize_bits > 1 && rs->host_page_zeroes == pagesize_bits &&
+        !runstate_is_running()) {
+        rs->saw_zero_host_pages++;
+        ram_hand_back_zero_host_page(
+            rs, pss->block, (ram_addr_t)pss->host_page_start << TARGET_PAGE_BITS);
+    }
+#endif
 
     pss_host_page_finish(pss);
 
@@ -3428,6 +3623,22 @@ static int ram_save_complete(QEMUFile *f, void *opaque)
         }
     }
 
+#ifdef CONFIG_DARWIN
+    ram_hand_back_zero_run(rs);
+
+    /* tctiSH: to stderr, which the app keeps, rather than to the monitor. */
+    if (!runstate_is_running()) {
+        fprintf(stderr, "tctiSH: savevm: %" PRIu64 " MiB with data, %" PRIu64
+                " MiB untouched, %" PRIu64 " MiB resident zero (%" PRIu64
+                " MiB in whole host pages, %" PRIu64 " MiB handed back)\n",
+                rs->saw_data * TARGET_PAGE_SIZE >> 20,
+                rs->saw_untouched * TARGET_PAGE_SIZE >> 20,
+                rs->saw_resident_zero * TARGET_PAGE_SIZE >> 20,
+                rs->saw_zero_host_pages * qemu_real_host_page_size() >> 20,
+                rs->handed_back >> 20);
+    }
+#endif
+
     qemu_put_be64(f, RAM_SAVE_FLAG_EOS);
 
     trace_ram_save_complete(rs->migration_dirty_pages, 1);
@@ -4306,6 +4517,10 @@ static int ram_load_precopy(QEMUFile *f)
 {
     MigrationIncomingState *mis = migration_incoming_get_current();
     int flags = 0, ret = 0, invalid_flags = 0, i = 0;
+#ifdef CONFIG_DARWIN
+    /* tctiSH: see ram_page_untouched */
+    UntouchedWindow untouched = { 0 };
+#endif
 
     if (migrate_mapped_ram()) {
         invalid_flags |= (RAM_SAVE_FLAG_HOOK | RAM_SAVE_FLAG_MULTIFD_FLUSH |
@@ -4316,6 +4531,7 @@ static int ram_load_precopy(QEMUFile *f)
     while (!ret && !(flags & RAM_SAVE_FLAG_EOS)) {
         ram_addr_t addr;
         void *host = NULL, *host_bak = NULL;
+        RAMBlock *block = NULL;
         uint8_t ch;
 
         /*
@@ -4348,8 +4564,7 @@ static int ram_load_precopy(QEMUFile *f)
 
         if (flags & (RAM_SAVE_FLAG_ZERO | RAM_SAVE_FLAG_PAGE |
                      RAM_SAVE_FLAG_XBZRLE)) {
-            RAMBlock *block = ram_block_from_stream(mis, f, flags,
-                                                    RAM_CHANNEL_PRECOPY);
+            block = ram_block_from_stream(mis, f, flags, RAM_CHANNEL_PRECOPY);
 
             host = host_from_ram_block_offset(block, addr);
             /*
@@ -4383,6 +4598,11 @@ static int ram_load_precopy(QEMUFile *f)
             if (!migration_incoming_in_colo_state()) {
                 ramblock_recv_bitmap_set(block, host);
             }
+#ifdef CONFIG_DARWIN
+            if (flags & (RAM_SAVE_FLAG_PAGE | RAM_SAVE_FLAG_XBZRLE)) {
+                ram_page_written(&untouched, block, addr);
+            }
+#endif
 
             trace_ram_load_loop(block->idstr, (uint64_t)addr, flags, host);
         }
@@ -4409,6 +4629,16 @@ static int ram_load_precopy(QEMUFile *f)
                 ret = -EINVAL;
                 break;
             }
+#ifdef CONFIG_DARWIN
+            /*
+             * tctiSH: see ram_page_untouched. Under COLO the page may be going
+             * to a cache rather than to guest RAM, so leave that alone.
+             */
+            if (!migrate_colo() &&
+                ram_page_untouched(&untouched, block, addr)) {
+                break;
+            }
+#endif
             ram_handle_zero(host, TARGET_PAGE_SIZE);
             break;
 
