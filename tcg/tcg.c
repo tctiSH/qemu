@@ -39,6 +39,7 @@
 #include "exec/tlb-common.h"
 #include "tcg/startup.h"
 #include "tcg/tcg-op-common.h"
+#include "tcg/tcg-apple-jit.h"
 
 #if UINTPTR_MAX == UINT32_MAX
 # define ELF_CLASS  ELFCLASS32

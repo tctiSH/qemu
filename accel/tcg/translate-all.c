@@ -22,6 +22,7 @@
 #include "trace.h"
 #include "disas/disas.h"
 #include "tcg/tcg.h"
+#include "tcg/tcg-apple-jit.h"
 #include "exec/mmap-lock.h"
 #include "tb-internal.h"
 #include "exec/tb-flush.h"

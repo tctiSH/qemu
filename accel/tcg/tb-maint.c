@@ -31,6 +31,7 @@
 #include "tb-internal.h"
 #include "system/tcg.h"
 #include "tcg/tcg.h"
+#include "tcg/tcg-apple-jit.h"
 #include "tb-hash.h"
 #include "tb-context.h"
 #include "internal-common.h"
