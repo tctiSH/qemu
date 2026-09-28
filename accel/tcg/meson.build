@@ -5,7 +5,6 @@ endif
 tcg_ss = ss.source_set()
 
 tcg_ss.add(files(
-  'cpu-exec.c',
   'cpu-exec-common.c',
   'tcg-runtime.c',
   'tcg-runtime-gvec.c',
@@ -21,6 +20,10 @@ endif
 
 user_ss.add_all(tcg_ss)
 system_ss.add_all(tcg_ss)
+
+# Per target, so that the TB lookup can inline the target's state; see
+# tb_cpu_state() in cpu-exec.c.
+specific_ss.add(files('cpu-exec.c'))
 
 user_ss.add(files(
   'user-exec.c',
