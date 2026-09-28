@@ -13,9 +13,13 @@
 #endif
 
 /* GETPC is the true target of the return instruction that we'll execute.  */
-#ifdef CONFIG_TCG_INTERPRETER
+#if defined(CONFIG_TCG_INTERPRETER)
 extern __thread uintptr_t tci_tb_ptr;
 # define GETPC() tci_tb_ptr
+#elif defined(CONFIG_TCG_THREADED_INTERPRETER)
+/* Set by TCTI's call gadget: the gadget stream position of the call. */
+extern __thread uintptr_t tcti_call_return_address;
+# define GETPC() tcti_call_return_address
 #else
 # define GETPC() \
     ((uintptr_t)__builtin_extract_return_addr(__builtin_return_address(0)))

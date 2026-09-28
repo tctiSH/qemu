@@ -94,7 +94,7 @@ bool in_code_gen_buffer(const void *p)
     return (size_t)(p - region.start_aligned) <= region.total_size;
 }
 
-#ifndef CONFIG_TCG_INTERPRETER
+#if !defined(CONFIG_TCG_INTERPRETER) && !defined(CONFIG_TCG_THREADED_INTERPRETER)
 static int host_prot_read_exec(void)
 {
 #if defined(CONFIG_LINUX) && defined(HOST_AARCH64) && defined(PROT_BTI)
@@ -577,7 +577,7 @@ static int alloc_code_gen_buffer_anon(size_t size, int prot,
     return prot;
 }
 
-#ifndef CONFIG_TCG_INTERPRETER
+#if !defined(CONFIG_TCG_INTERPRETER) && !defined(CONFIG_TCG_THREADED_INTERPRETER)
 #ifdef CONFIG_POSIX
 #include "qemu/memfd.h"
 
@@ -735,11 +735,11 @@ static int alloc_code_gen_buffer_splitwx_vmremap(size_t size, Error **errp)
     return PROT_READ | PROT_WRITE;
 }
 #endif /* CONFIG_DARWIN */
-#endif /* CONFIG_TCG_INTERPRETER */
+#endif /* !CONFIG_TCG_INTERPRETER && !CONFIG_TCG_THREADED_INTERPRETER */
 
 static int alloc_code_gen_buffer_splitwx(size_t size, Error **errp)
 {
-#ifndef CONFIG_TCG_INTERPRETER
+#if !defined(CONFIG_TCG_INTERPRETER) && !defined(CONFIG_TCG_THREADED_INTERPRETER)
 # ifdef CONFIG_DARWIN
     return alloc_code_gen_buffer_splitwx_vmremap(size, errp);
 # endif
@@ -779,8 +779,12 @@ static int alloc_code_gen_buffer(size_t size, int splitwx, Error **errp)
      */
     prot = PROT_NONE;
     flags = MAP_PRIVATE | MAP_ANONYMOUS;
-#ifdef CONFIG_DARWIN
-    /* Applicable to both iOS and macOS (Apple Silicon). */
+#if defined(CONFIG_DARWIN) && !defined(CONFIG_TCG_THREADED_INTERPRETER)
+    /*
+     * Applicable to both iOS and macOS (Apple Silicon). TCTI's code buffer
+     * is data, never executed, and it exists for hosts that may not map
+     * JIT memory at all -- where asking for MAP_JIT fails the mmap.
+     */
     if (!splitwx) {
         flags |= MAP_JIT;
     }
@@ -881,7 +885,7 @@ void tcg_region_init(size_t tb_size, int splitwx, unsigned max_threads)
      * Work with the page protections set up with the initial mapping.
      */
     need_prot = PROT_READ | PROT_WRITE;
-#ifndef CONFIG_TCG_INTERPRETER
+#if !defined(CONFIG_TCG_INTERPRETER) && !defined(CONFIG_TCG_THREADED_INTERPRETER)
     if (tcg_splitwx_diff == 0) {
         need_prot |= host_prot_read_exec();
     }

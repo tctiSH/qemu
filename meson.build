@@ -56,6 +56,7 @@ bsd_oses = ['gnu/kfreebsd', 'freebsd', 'netbsd', 'openbsd', 'dragonfly', 'darwin
 supported_oses = ['windows', 'freebsd', 'netbsd', 'openbsd', 'darwin', 'sunos', 'linux', 'emscripten']
 supported_cpus = ['ppc64', 's390x', 'riscv64', 'x86_64',
   'aarch64', 'loongarch64', 'sparc64', 'wasm64']
+tcti_supported_cpus = ['aarch64']
 
 cpu = host_machine.cpu_family()
 
@@ -959,6 +960,11 @@ if have_tcg
   endif
   if get_option('tcg_interpreter')
     tcg_arch = 'tci'
+  elif get_option('tcg_threaded_interpreter')
+    if cpu not in tcti_supported_cpus
+      error('Unsupported CPU @0@ for TCTI, try --enable-tcg-interpreter'.format(cpu))
+    endif
+    tcg_arch = '@0@-tcti'.format(cpu)
   endif
   add_project_arguments('-iquote', meson.current_source_dir() / 'tcg' / tcg_arch,
                         language: all_languages)
@@ -2515,6 +2521,7 @@ config_host_data.set('CONFIG_SOLARIS', host_os == 'sunos')
 if have_tcg
   config_host_data.set('CONFIG_TCG', 1)
   config_host_data.set('CONFIG_TCG_INTERPRETER', tcg_arch == 'tci')
+  config_host_data.set('CONFIG_TCG_THREADED_INTERPRETER', tcg_arch.endswith('-tcti'))
 endif
 config_host_data.set('CONFIG_TPM', have_tpm)
 config_host_data.set('CONFIG_TSAN', get_option('tsan'))
@@ -4885,6 +4892,8 @@ summary_info += {'TCG support':       config_all_accel.has_key('CONFIG_TCG')}
 if config_all_accel.has_key('CONFIG_TCG')
   if get_option('tcg_interpreter')
     summary_info += {'TCG backend':   'TCI (TCG with bytecode interpreter, slow)'}
+  elif get_option('tcg_threaded_interpreter')
+    summary_info += {'TCG backend':   'TCTI (TCG with threaded-dispatch interpreter, for hosts without JIT)'}
   else
     summary_info += {'TCG backend':   'native (@0@)'.format(cpu)}
   endif

@@ -3035,6 +3035,16 @@ static bool fold_xor(OptContext *ctx, TCGOp *op)
     return fold_masks_zos(ctx, op, z_mask, o_mask, s_mask);
 }
 
+/*
+ * Whether loads and stores relative to env are folded into moves of the
+ * values last stored there. FIXME: this breaks TCTI.
+ */
+#ifdef CONFIG_TCG_THREADED_INTERPRETER
+#define fold_mem_copies false
+#else
+#define fold_mem_copies true
+#endif
+
 /* Propagate constants and copies, fold constant expressions. */
 void tcg_optimize(TCGContext *s)
 {
@@ -3153,16 +3163,19 @@ void tcg_optimize(TCGContext *s)
             break;
         case INDEX_op_ld:
         case INDEX_op_ld_vec:
-            done = fold_tcg_ld_memcopy(&ctx, op);
+            done = fold_mem_copies ? fold_tcg_ld_memcopy(&ctx, op)
+                                   : finish_folding(&ctx, op);
             break;
         case INDEX_op_st8:
         case INDEX_op_st16:
         case INDEX_op_st32:
-            done = fold_tcg_st(&ctx, op);
+            done = fold_mem_copies ? fold_tcg_st(&ctx, op)
+                                   : finish_folding(&ctx, op);
             break;
         case INDEX_op_st:
         case INDEX_op_st_vec:
-            done = fold_tcg_st_memcopy(&ctx, op);
+            done = fold_mem_copies ? fold_tcg_st_memcopy(&ctx, op)
+                                   : finish_folding(&ctx, op);
             break;
         case INDEX_op_mb:
             done = fold_mb(&ctx, op);

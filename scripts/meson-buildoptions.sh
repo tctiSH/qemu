@@ -52,6 +52,9 @@ meson_options_help() {
   printf "%s\n" '                           Enable stricter set of Rust warnings'
   printf "%s\n" '  --enable-strip           Strip targets on install'
   printf "%s\n" '  --enable-tcg-interpreter TCG with bytecode interpreter (slow)'
+  printf "%s\n" '  --enable-tcg-threaded-interpreter'
+  printf "%s\n" '                           TCG with threaded-dispatch interpreter, for'
+  printf "%s\n" '                           AArch64 hosts that cannot JIT'
   printf "%s\n" '  --enable-trace-backends=CHOICES'
   printf "%s\n" '                           Set available tracing backends [log] (choices:'
   printf "%s\n" '                           dtrace/ftrace/log/nop/simple/syslog/ust)'
@@ -518,6 +521,8 @@ _meson_option_parse() {
     --disable-tcg) printf "%s" -Dtcg=disabled ;;
     --enable-tcg-interpreter) printf "%s" -Dtcg_interpreter=true ;;
     --disable-tcg-interpreter) printf "%s" -Dtcg_interpreter=false ;;
+    --enable-tcg-threaded-interpreter) printf "%s" -Dtcg_threaded_interpreter=true ;;
+    --disable-tcg-threaded-interpreter) printf "%s" -Dtcg_threaded_interpreter=false ;;
     --tls-priority=*) quote_sh "-Dtls_priority=$2" ;;
     --enable-tools) printf "%s" -Dtools=enabled ;;
     --disable-tools) printf "%s" -Dtools=disabled ;;

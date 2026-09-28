@@ -44,6 +44,8 @@ static void initialize_debug_host(CPUDebug *s)
 #endif
 #if defined(CONFIG_TCG_INTERPRETER)
     s->info.print_insn = print_insn_tci;
+#elif defined(CONFIG_TCG_THREADED_INTERPRETER)
+    s->info.print_insn = print_insn_tcti;
 #elif defined(__x86_64__)
     s->info.mach = bfd_mach_x86_64;
     s->info.cap_arch = CS_ARCH_X86;

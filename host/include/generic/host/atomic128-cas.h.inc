@@ -11,7 +11,8 @@
 #ifndef HOST_ATOMIC128_CAS_H
 #define HOST_ATOMIC128_CAS_H
 
-#if defined(CONFIG_ATOMIC128)
+/* FIXME: this doesn't work in TCTI */
+#if defined(CONFIG_ATOMIC128) && !defined(CONFIG_TCG_THREADED_INTERPRETER)
 static inline Int128 ATTRIBUTE_ATOMIC128_OPT
 atomic16_cmpxchg(Int128 *ptr, Int128 cmp, Int128 new)
 {
