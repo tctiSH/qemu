@@ -27,6 +27,7 @@
 #include "qemu/iov.h"
 #include "qemu/module.h"
 #include "system/qtest.h"
+#include "migration/qemu-file-types.h"
 
 static void coroutine_fn virtio_9p_push_and_notify(V9fsPDU *pdu)
 {
@@ -253,6 +254,64 @@ static void virtio_9p_device_unrealize(DeviceState *dev)
 
 /* virtio-9p device */
 
+/*
+ * The requests that were in flight when the snapshot was taken.
+ *
+ * VMSTATE_VIRTIO_DEVICE below carries the queue itself -- indices, features,
+ * config -- but not `elems`, which is this device's own record of the
+ * VirtQueueElements it has popped and not yet pushed back. Without them a
+ * resumed guest waits for replies to requests the host has forgotten it owes,
+ * and the mount hangs on first use rather than failing visibly.
+ *
+ * Upstream does not need this because upstream does not get here: a 9p export
+ * installs a migration blocker (see v9fs_attach(), where tctiSH removes it).
+ *
+ * This is deliberately not a VMState subsection. A VirtQueueElement is not a
+ * plain struct -- qemu_put_virtqueue_element() writes the guest addresses and
+ * lengths it was built from, and the loader re-maps them -- so it has to go
+ * through the legacy save/load hooks, which virtio_save()/virtio_load() still
+ * call. (dc->vmsd and vdc->load are different fields; only vdc->vmsd would
+ * conflict.)
+ */
+static void virtio_9p_save_device(VirtIODevice *vdev, QEMUFile *f)
+{
+    V9fsVirtioState *v = VIRTIO_9P(vdev);
+    unsigned i;
+
+    for (i = 0; i < MAX_REQ; i++) {
+        if (v->elems[i] == NULL) {
+            qemu_put_be32(f, 0);
+        } else {
+            qemu_put_be32(f, 1);
+            qemu_put_virtqueue_element(vdev, f, v->elems[i]);
+        }
+    }
+}
+
+static int virtio_9p_load_device(VirtIODevice *vdev, QEMUFile *f,
+                                 int version_id)
+{
+    V9fsVirtioState *v = VIRTIO_9P(vdev);
+    unsigned i;
+
+    for (i = 0; i < MAX_REQ; i++) {
+        if (qemu_get_be32(f)) {
+            v->elems[i] = qemu_get_virtqueue_element(vdev, f,
+                                                     sizeof(VirtQueueElement));
+        } else {
+            /*
+             * Cleared rather than left alone. The array is zeroed at realize,
+             * but a load is not obliged to be the first thing that happens to
+             * a device, and a stale pointer here would be pushed back to a
+             * queue it never came from.
+             */
+            v->elems[i] = NULL;
+        }
+    }
+
+    return 0;
+}
+
 static const VMStateDescription vmstate_virtio_9p = {
     .name = "virtio-9p",
     .minimum_version_id = 1,
@@ -281,6 +340,8 @@ static void virtio_9p_class_init(ObjectClass *klass, const void *data)
     vdc->get_features = virtio_9p_get_features;
     vdc->get_config = virtio_9p_get_config;
     vdc->reset = virtio_9p_reset;
+    vdc->save = virtio_9p_save_device;
+    vdc->load = virtio_9p_load_device;
 }
 
 static const TypeInfo virtio_device_info = {

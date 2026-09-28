@@ -439,15 +439,12 @@ static int coroutine_fn put_fid(V9fsPDU *pdu, V9fsFidState *fidp)
      * Don't free the fid if it is in reclaim list
      */
     if (!fidp->ref && fidp->clunked) {
-        if (fidp->fid == pdu->s->root_fid) {
-            /*
-             * if the clunked fid is root fid then we
-             * have unmounted the fs on the client side.
-             * delete the migration blocker. Ideally, this
-             * should be hooked to transport close notification
-             */
-            migrate_del_blocker(&pdu->s->migration_blocker);
-        }
+        /*
+         * Upstream drops the migration blocker here, when the root fid is
+         * clunked. tctiSH never takes one -- see v9fs_attach() -- so there is
+         * nothing to drop, and root_fid is now only a record of which fid the
+         * mount came in on.
+         */
         return free_fid(pdu, fidp);
     }
     return 0;
@@ -1583,18 +1580,23 @@ static void coroutine_fn v9fs_attach(void *opaque)
     }
 
     /*
-     * disable migration if we haven't done already.
-     * attach could get called multiple times for the same export.
+     * Upstream installs a migration blocker here, because a 9p export has host
+     * state -- open fds, in-flight requests -- that the wire format does not
+     * carry, so a migrated guest would resume pointing at files the destination
+     * does not have.
+     *
+     * tctiSH is not migrating. It snapshots and resumes the same VM on the same
+     * device against the same export, which is the one case the blocker's
+     * reasoning does not cover, and without this every `-loadvm` would refuse.
+     * What still is not carried is in-flight requests, which is what the
+     * save/load pair in virtio-9p-device.c exists to fix.
+     *
+     * Attach can be called more than once for the same export, so the first fid
+     * through is the one recorded. Nothing reads it any more -- put_fid() used
+     * to, to decide when to drop the blocker -- but it is the only record of
+     * which fid the mount came in on, and costs a comparison.
      */
-    if (!s->migration_blocker) {
-        error_setg(&s->migration_blocker,
-                   "Migration is disabled when VirtFS export path '%s' is mounted in the guest using mount_tag '%s'",
-                   s->ctx.fs_root ? s->ctx.fs_root : "NULL", s->tag);
-        err = migrate_add_blocker(&s->migration_blocker, NULL);
-        if (err < 0) {
-            clunk_fid(s, fid);
-            goto out;
-        }
+    if (!s->root_fid) {
         s->root_fid = fid;
     }
 
