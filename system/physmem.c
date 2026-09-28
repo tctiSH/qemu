@@ -4181,6 +4181,34 @@ int ram_block_discard_shared_range(RAMBlock *rb, uint64_t offset, size_t length)
 #if defined(CONFIG_MADVISE)
             if (qemu_ram_is_shared(rb) && rb->fd < 0) {
                 ret = madvise(host_startaddr, length, QEMU_MADV_REMOVE);
+#if defined(CONFIG_DARWIN)
+            } else if (rb->fd < 0) {
+                /*
+                 * tctiSH: Darwin's MADV_DONTNEED succeeds and frees nothing.
+                 * The pages stay in phys_footprint, which is the figure jetsam
+                 * kills by, so free page reporting would look healthy from
+                 * both sides while returning no memory at all.
+                 *
+                 * Mapping fresh anonymous memory over the range is the Darwin
+                 * equivalent of Linux's MADV_DONTNEED: the pages are freed
+                 * there and then, and read back as zero, as promised above.
+                 * They are also indistinguishable from pages never touched,
+                 * which is what lets a snapshot skip them (ram_page_untouched
+                 * in migration/ram.c).
+                 *
+                 * Not MADV_FREE_REUSABLE, which frees them from the footprint
+                 * but leaves them mapped with their old contents: a snapshot
+                 * then saves and restores them as data, and pages reused
+                 * afterwards are not counted again.
+                 */
+                if (mmap(host_startaddr, length, PROT_READ | PROT_WRITE,
+                         MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0) ==
+                    MAP_FAILED) {
+                    ret = -1;
+                } else {
+                    ret = 0;
+                }
+#endif
             } else {
                 ret = madvise(host_startaddr, length, QEMU_MADV_DONTNEED);
             }
