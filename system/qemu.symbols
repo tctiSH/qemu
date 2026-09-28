@@ -11,4 +11,24 @@
 
   /* tctiSH's accessors, which the app reaches by dlsym() on the framework. */
   tctish_snapshot_was_missing;
+
+  /*
+   * Without these the shared-lib build hides them and every lookup fails --
+   * which qemu_launcher.c answers with 0/false rather than an error, so the
+   * failure looks like a cache that never moves.
+   */
+  tctish_code_cache_total;
+  tctish_code_cache_usable;
+  tctish_code_cache_used;
+  tctish_code_cache_can_grow;
+  tctish_code_cache_needs_debugger;
+  tctish_code_cache_grow;
+  tctish_code_cache_shrink;
+  tctish_code_cache_release_all;
+  tctish_code_cache_release_all_outstanding;
+  tctish_code_cache_needs_preparing;
+  tctish_code_cache_released;
+  tctish_code_cache_release_attempts;
+  tctish_code_cache_release_errno;
+  tctish_code_cache_release_errno_rx;
 };

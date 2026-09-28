@@ -82,6 +82,12 @@ void qmp_cont(Error **errp)
         return;
     }
 
+    /* tctiSH: generated code would run into pages that aren't there. */
+    if (!tctish_code_cache_may_run()) {
+        error_setg(errp, "The code cache was released; prepare it first.");
+        return;
+    }
+
     if (runstate_needs_reset()) {
         error_setg(errp, "Resetting the Virtual Machine is required");
         return;

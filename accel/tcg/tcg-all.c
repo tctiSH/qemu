@@ -28,6 +28,7 @@
 #include "exec/replay-core.h"
 #include "exec/icount.h"
 #include "tcg/startup.h"
+#include "tcg/tcg.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "qemu/accel.h"
@@ -166,6 +167,13 @@ static int tcg_init_machine(AccelState *as, MachineState *ms)
     page_init();
     tb_htable_init();
     tcg_init(s->tb_size * MiB, s->splitwx_enabled, max_threads);
+
+    /*
+     * After tcg_init(), because the code buffer has to exist before anything
+     * can ask to shrink it; and here rather than inside TCG because the bottom
+     * half must be created on the main loop's thread, once.
+     */
+    tctish_flush_init();
 
 #if defined(CONFIG_SOFTMMU)
     /*

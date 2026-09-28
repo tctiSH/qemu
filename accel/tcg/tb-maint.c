@@ -35,6 +35,7 @@
 #include "tb-hash.h"
 #include "tb-context.h"
 #include "internal-common.h"
+#include "qemu/main-loop.h"
 #ifdef CONFIG_USER_ONLY
 #include "user/page-protection.h"
 #define runstate_is_running()  true
@@ -764,6 +765,45 @@ static void tb_remove(TranslationBlock *tb)
 }
 #endif /* CONFIG_USER_ONLY */
 
+#ifndef CONFIG_USER_ONLY
+/*
+ * Runs the flush a code-cache shrink needs, on a thread entitled to ask for one.
+ *
+ * A bottom half because scheduling one is the single thing QEMU lets an
+ * arbitrary thread do, and the caller is the app's own: a flush wants the
+ * main loop and the lock, and this is how it gets both.
+ */
+static QEMUBH *tctish_shrink_bh;
+
+static void tctish_shrink_now(void *opaque)
+{
+    if (first_cpu != NULL) {
+        queue_tb_flush(first_cpu);
+    }
+}
+
+/* Created at init, so a shrink never has to create one from the wrong thread. */
+void tctish_flush_init(void)
+{
+    tctish_shrink_bh = qemu_bh_new(tctish_shrink_now, NULL);
+}
+
+void tctish_request_flush(void)
+{
+    if (tctish_shrink_bh != NULL) {
+        qemu_bh_schedule(tctish_shrink_bh);
+    }
+}
+#else
+void tctish_flush_init(void)
+{
+}
+
+void tctish_request_flush(void)
+{
+}
+#endif /* CONFIG_USER_ONLY */
+
 /*
  * Flush all the translation blocks.
  * Must be called from a context in which no cpus are running,
@@ -787,6 +827,14 @@ void tb_flush__exclusive_or_serial(void)
     tb_remove_all();
 
     tcg_region_reset_all();
+
+    /*
+     * Nothing in the buffer is live at this instant -- every TB has just been
+     * discarded and every context has gone back to region zero -- which makes
+     * this the one safe moment to hand the tail of it back to the system.
+     */
+    tctish_release_unused();
+
     /* XXX: flush processor icache at this point if cache flush is expensive */
     qatomic_inc(&tb_ctx.tb_flush_count);
     qemu_plugin_flush_cb();

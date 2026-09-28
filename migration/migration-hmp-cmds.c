@@ -558,6 +558,8 @@ void hmp_unpark(Monitor *mon, const QDict *qdict)
         error_setg(&err, "the VM is not parked");
     } else if (runstate_is_running()) {
         error_setg(&err, "the VM is running");
+    } else if (!tctish_code_cache_may_run()) {
+        error_setg(&err, "the code cache was released; prepare it first");
     } else if (load_snapshot(name, NULL, false, NULL, &err)) {
         vm_start();
     }

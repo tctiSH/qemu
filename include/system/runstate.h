@@ -16,6 +16,8 @@ bool runstate_is_running(void);
  */
 bool tctish_is_parked(void);
 void tctish_set_parked(bool parked);
+/* tctiSH: false while a released code cache waits to be prepared (tcg/region.c). */
+bool tctish_code_cache_may_run(void);
 bool runstate_needs_reset(void);
 void runstate_replay_enable(void);
 
