@@ -40,14 +40,16 @@
 #ifndef TCG_TARGET_H
 #define TCG_TARGET_H
 
+/*
+ * The gadget stream is written in 8-byte pointers and immediates. One-byte
+ * units keep the size arithmetic in tcg.c trivial.
+ */
 #define TCG_TARGET_INSN_UNIT_SIZE        1
 #define MAX_CODE_GEN_BUFFER_SIZE  ((size_t)-1)
 
 // We're an interpreted target; even if we're JIT-compiling to our interpreter's
 // weird psuedo-native bytecode. We'll indicate that we're intepreted.
 #define TCG_TARGET_INTERPRETER 1
-
-#include "tcg-target-has.h"
 
 //
 // Platform metadata.
@@ -100,8 +102,5 @@ typedef enum {
 
 // We're interpreted, so we'll use our own code to run TB_EXEC.
 #define HAVE_TCG_QEMU_TB_EXEC
-
-void tci_disas(uint8_t opc);
-
 
 #endif /* TCG_TARGET_H */

@@ -4,66 +4,42 @@
  * Copyright (c) 2009, 2011 Stefan Weil
  */
 
-//
-// Supported optional scalar instructions.
-//
+#ifndef TCG_TARGET_HAS_H
+#define TCG_TARGET_HAS_H
 
-// Divs.
-#define TCG_TARGET_HAS_div_i32          1
-#define TCG_TARGET_HAS_rem_i32          1
-#define TCG_TARGET_HAS_div_i64          1
-#define TCG_TARGET_HAS_rem_i64          1
+/*
+ * Since QEMU 10.1, whether a scalar op is supported is decided by its
+ * TCGOutOp in tcg-target.c.inc; what is left here is what tcg.c and
+ * tcg-op.c still read as macros.
+ */
 
-// Extends.
-#define TCG_TARGET_HAS_ext8s_i32        1
-#define TCG_TARGET_HAS_ext16s_i32       1
-#define TCG_TARGET_HAS_ext8u_i32        1
-#define TCG_TARGET_HAS_ext16u_i32       1
-#define TCG_TARGET_HAS_ext8s_i64        1
-#define TCG_TARGET_HAS_ext16s_i64       1
-#define TCG_TARGET_HAS_ext32s_i64       1
-#define TCG_TARGET_HAS_ext8u_i64        1
-#define TCG_TARGET_HAS_ext16u_i64       1
-#define TCG_TARGET_HAS_ext32u_i64       1
+// Our 32-bit values live zero-extended in 64-bit registers, so truncation is
+// a plain move.
 #define TCG_TARGET_HAS_extr_i64_i32     0
 
-// Register extractions.
-#define TCG_TARGET_HAS_extrl_i64_i32    1
-#define TCG_TARGET_HAS_extrh_i64_i32    1
+// This operation exists specifically to allow us to provide differing register
+// constraints for 8-bit loads and stores. We don't need to do so, so we'll leave
+// this unimplemented, as we gain nothing by it.
+#define TCG_TARGET_HAS_qemu_ldst_i128   0
 
-// Negations.
-#define TCG_TARGET_HAS_not_i32          1
-#define TCG_TARGET_HAS_not_i64          1
-
-// Logicals.
-#define TCG_TARGET_HAS_andc_i32         1
-#define TCG_TARGET_HAS_orc_i32          1
-#define TCG_TARGET_HAS_eqv_i32          1
-#define TCG_TARGET_HAS_rot_i32          1
-#define TCG_TARGET_HAS_negsetcond_i32   0
-#define TCG_TARGET_HAS_negsetcond_i64   0
-#define TCG_TARGET_HAS_nand_i32         1
-#define TCG_TARGET_HAS_nor_i32          1
-#define TCG_TARGET_HAS_andc_i64         1
-#define TCG_TARGET_HAS_eqv_i64          1
-#define TCG_TARGET_HAS_orc_i64          1
-#define TCG_TARGET_HAS_rot_i64          1
-#define TCG_TARGET_HAS_nor_i64          1
-#define TCG_TARGET_HAS_nand_i64         1
-
-// Bitwise operations.
-#define TCG_TARGET_HAS_clz_i32          1
-#define TCG_TARGET_HAS_ctz_i32          1
-#define TCG_TARGET_HAS_clz_i64          1
-#define TCG_TARGET_HAS_ctz_i64          1
 #define TCG_TARGET_HAS_tst              0
 
-// Swaps.
-#define TCG_TARGET_HAS_bswap16_i32      1
-#define TCG_TARGET_HAS_bswap32_i32      1
-#define TCG_TARGET_HAS_bswap16_i64      1
-#define TCG_TARGET_HAS_bswap32_i64      1
-#define TCG_TARGET_HAS_bswap64_i64      1
+/*
+ * extract and sextract are valid exactly where we have a single gadget for
+ * them: the 8-, 16- and 32-bit zero and sign extensions. Everything else is
+ * expanded by tcg-op.c into shifts and masks, as before 10.1 -- but these
+ * three are what the ext8u..ext32s ops became, and without them each
+ * extension would cost a constant load and an AND.
+ */
+#define TCG_TARGET_extract_valid(type, ofs, len) \
+    ((ofs) == 0 && ((len) == 8 || (len) == 16 || \
+                    ((len) == 32 && (type) == TCG_TYPE_I64)))
+#define TCG_TARGET_sextract_valid(type, ofs, len) \
+    TCG_TARGET_extract_valid(type, ofs, len)
+
+// We don't currently support gadgets with more than three arguments,
+// so we can't yet create deposit gadgets.
+#define TCG_TARGET_deposit_valid(type, ofs, len)   0
 
 //
 // Supported optional vector instructions.
@@ -94,39 +70,4 @@
 #define TCG_TARGET_HAS_cmpsel_vec       0
 #define TCG_TARGET_HAS_tst_vec          0
 
-//
-// Unsupported instructions.
-//
-
-// There's no direct instruction with which to count the number of ones,
-// so we'll leave this implemented as other instructions.
-#define TCG_TARGET_HAS_ctpop_i32        0
-#define TCG_TARGET_HAS_ctpop_i64        0
-
-// This operation exists specifically to allow us to provide differing register
-// constraints for 8-bit loads and stores. We don't need to do so, so we'll leave
-// this unimplemented, as we gain nothing by it.
-#define TCG_TARGET_HAS_qemu_st8_i32     0
-#define TCG_TARGET_HAS_qemu_ldst_i128   0
-
-// These should always be zero on our 64B platform.
-#define TCG_TARGET_HAS_muls2_i64        0
-#define TCG_TARGET_HAS_add2_i32         0
-#define TCG_TARGET_HAS_sub2_i32         0
-#define TCG_TARGET_HAS_mulu2_i32        0
-#define TCG_TARGET_HAS_add2_i64         0
-#define TCG_TARGET_HAS_sub2_i64         0
-#define TCG_TARGET_HAS_mulu2_i64        0
-#define TCG_TARGET_HAS_muluh_i64        0
-#define TCG_TARGET_HAS_mulsh_i64        0
-#define TCG_TARGET_HAS_extract2_i32     0
-#define TCG_TARGET_HAS_muls2_i32        0
-#define TCG_TARGET_HAS_muluh_i32        0
-#define TCG_TARGET_HAS_mulsh_i32        0
-#define TCG_TARGET_HAS_extract2_i64     0
-
-// We don't currently support gadgets with more than three arguments,
-// so we can't yet create movcond, deposit, or extract gadgets.
-#define TCG_TARGET_extract_valid(type, ofs, len)   0
-#define TCG_TARGET_sextract_valid(type, ofs, len)  0
-#define TCG_TARGET_deposit_valid(type, ofs, len)   0
+#endif

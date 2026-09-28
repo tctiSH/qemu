@@ -37,18 +37,10 @@
 #define TCG_TARGET_CALL_RET_I128        TCG_CALL_RET_NORMAL
 
 #include "tcg/tcg-ldst.h"
+#include "tcti-gadget-defs.h"
 
 // Grab our gadget headers.
 #include "tcti_gadgets.h"
-
-/* Marker for missing code. */
-#define TODO() \
-    do { \
-        fprintf(stderr, "TODO %s:%u: %s()\n", \
-                __FILE__, __LINE__, __func__); \
-        g_assert_not_reached(); \
-    } while (0)
-
 
 /* Enable TCTI assertions only when debugging TCG (and without NDEBUG defined).
  * Without assertions, the interpreter runs much faster. */
@@ -58,120 +50,40 @@
 # define tcti_assert(cond) ((void)0)
 #endif
 
+/*
+ * The shapes of the generated gadget tables: one gadget per register (or
+ * immediate) in each dimension.
+ */
+typedef const void *TCTIGadget1[TCG_TARGET_GP_REGS];
+typedef const void *TCTIGadget2[TCG_TARGET_GP_REGS][TCG_TARGET_GP_REGS];
+typedef const void *TCTIGadget3[TCG_TARGET_GP_REGS][TCG_TARGET_GP_REGS][TCG_TARGET_GP_REGS];
+
+/* A gadget family per condition, named by its AArch64 condition code. */
+#define TCTI_COND_TABLE(prefix) {           \
+    [TCG_COND_EQ]  = &prefix ## eq,         \
+    [TCG_COND_NE]  = &prefix ## ne,         \
+    [TCG_COND_LT]  = &prefix ## lt,         \
+    [TCG_COND_GE]  = &prefix ## ge,         \
+    [TCG_COND_LE]  = &prefix ## le,         \
+    [TCG_COND_GT]  = &prefix ## gt,         \
+    [TCG_COND_LTU] = &prefix ## lo,         \
+    [TCG_COND_GEU] = &prefix ## hs,         \
+    [TCG_COND_LEU] = &prefix ## ls,         \
+    [TCG_COND_GTU] = &prefix ## hi,         \
+}
 
 /********************************
  *  TCG Constraints Definitions *
  ********************************/
 
+/*
+ * Only the vector ops, and our own, are described here; the scalar ops carry
+ * their constraints in their TCGOutOp, below.
+ */
 static TCGConstraintSetIndex
 tcg_target_op_def(TCGOpcode op, TCGType type, unsigned flags)
 {
     switch (op) {
-
-    case INDEX_op_ld8u_i32:
-    case INDEX_op_ld8s_i32:
-    case INDEX_op_ld16u_i32:
-    case INDEX_op_ld16s_i32:
-    case INDEX_op_ld_i32:
-    case INDEX_op_ld8u_i64:
-    case INDEX_op_ld8s_i64:
-    case INDEX_op_ld16u_i64:
-    case INDEX_op_ld16s_i64:
-    case INDEX_op_ld32u_i64:
-    case INDEX_op_ld32s_i64:
-    case INDEX_op_ld_i64:
-    case INDEX_op_not_i32:
-    case INDEX_op_not_i64:
-    case INDEX_op_neg_i32:
-    case INDEX_op_neg_i64:
-    case INDEX_op_ext8s_i32:
-    case INDEX_op_ext8s_i64:
-    case INDEX_op_ext16s_i32:
-    case INDEX_op_ext16s_i64:
-    case INDEX_op_ext8u_i32:
-    case INDEX_op_ext8u_i64:
-    case INDEX_op_ext16u_i32:
-    case INDEX_op_ext16u_i64:
-    case INDEX_op_ext32s_i64:
-    case INDEX_op_ext32u_i64:
-    case INDEX_op_ext_i32_i64:
-    case INDEX_op_extu_i32_i64:
-    case INDEX_op_bswap16_i32:
-    case INDEX_op_bswap16_i64:
-    case INDEX_op_bswap32_i32:
-    case INDEX_op_bswap32_i64:
-    case INDEX_op_bswap64_i64:
-    case INDEX_op_extrl_i64_i32:
-    case INDEX_op_extrh_i64_i32:
-        return C_O1_I1(r, r);
-
-    case INDEX_op_st8_i32:
-    case INDEX_op_st16_i32:
-    case INDEX_op_st_i32:
-    case INDEX_op_st8_i64:
-    case INDEX_op_st16_i64:
-    case INDEX_op_st32_i64:
-    case INDEX_op_st_i64:
-        return C_O0_I2(r, r);
-
-    case INDEX_op_div_i32:
-    case INDEX_op_div_i64:
-    case INDEX_op_divu_i32:
-    case INDEX_op_divu_i64:
-    case INDEX_op_rem_i32:
-    case INDEX_op_rem_i64:
-    case INDEX_op_remu_i32:
-    case INDEX_op_remu_i64:
-    case INDEX_op_add_i32:
-    case INDEX_op_add_i64:
-    case INDEX_op_sub_i32:
-    case INDEX_op_sub_i64:
-    case INDEX_op_mul_i32:
-    case INDEX_op_mul_i64:
-    case INDEX_op_and_i32:
-    case INDEX_op_and_i64:
-    case INDEX_op_andc_i32:
-    case INDEX_op_andc_i64:
-    case INDEX_op_eqv_i32:
-    case INDEX_op_eqv_i64:
-    case INDEX_op_nand_i32:
-    case INDEX_op_nand_i64:
-    case INDEX_op_nor_i32:
-    case INDEX_op_nor_i64:
-    case INDEX_op_or_i32:
-    case INDEX_op_or_i64:
-    case INDEX_op_orc_i32:
-    case INDEX_op_orc_i64:
-    case INDEX_op_xor_i32:
-    case INDEX_op_xor_i64:
-    case INDEX_op_shl_i32:
-    case INDEX_op_shl_i64:
-    case INDEX_op_shr_i32:
-    case INDEX_op_shr_i64:
-    case INDEX_op_sar_i32:
-    case INDEX_op_sar_i64:
-    case INDEX_op_rotl_i32:
-    case INDEX_op_rotl_i64:
-    case INDEX_op_rotr_i32:
-    case INDEX_op_rotr_i64:
-    case INDEX_op_setcond_i32:
-    case INDEX_op_setcond_i64:
-    case INDEX_op_clz_i32:
-    case INDEX_op_clz_i64:
-    case INDEX_op_ctz_i32:
-    case INDEX_op_ctz_i64:
-        return C_O1_I2(r, r, r);
-
-    case INDEX_op_brcond_i32:
-    case INDEX_op_brcond_i64:
-        return C_O0_I2(r, r);
-
-    case INDEX_op_qemu_ld_i32:
-    case INDEX_op_qemu_ld_i64:
-        return C_O1_I2(r, r, r);
-    case INDEX_op_qemu_st_i32:
-    case INDEX_op_qemu_st_i64:
-        return C_O0_I3(r, r, r);
 
     //
     // Vector ops.
@@ -270,109 +182,21 @@ static TCGReg tcg_target_call_oarg_reg(TCGCallReturnKind kind, int slot)
 }
 
 #ifdef CONFIG_DEBUG_TCG
-static const char *const tcg_target_reg_names[TCG_TARGET_GP_REGS] = {
-    "r00",
-    "r01",
-    "r02",
-    "r03",
-    "r04",
-    "r05",
-    "r06",
-    "r07",
-    "r08",
-    "r09",
-    "r10",
-    "r11",
-    "r12",
-    "r13",
-    "r14",
-    "r15",
+static const char *const tcg_target_reg_names[TCG_TARGET_NB_REGS] = {
+    "r00", "r01", "r02", "r03", "r04", "r05", "r06", "r07",
+    "r08", "r09", "r10", "r11", "r12", "r13", "r14", "r15",
+    "x16", "x17", "x18", "x19", "x20", "x21", "x22", "x23",
+    "x24", "x25", "x26", "x27", "x28", "fp",  "lr",  "sp",
+    "v00", "v01", "v02", "v03", "v04", "v05", "v06", "v07",
+    "v08", "v09", "v10", "v11", "v12", "v13", "v14", "v15",
+    "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23",
+    "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31",
 };
 #endif
 
 /*************************
  *  TCG Emitter Helpers  *
  *************************/
-
-/* Bitfield n...m (in 32 bit value). */
-#define BITS(n, m) (((0xffffffffU << (31 - n)) >> (31 - n + m)) << m)
-
-/**
- * Macro that defines a look-up tree for named QEMU_LD gadgets.
- */
-#define LD_MEMOP_LOOKUP(variable, arg, suffix) \
-    switch (get_memop(arg) & MO_SSIZE) { \
-        case MO_UB:   variable = gadget_qemu_ld_ub_   ## suffix; break; \
-        case MO_SB:   variable = gadget_qemu_ld_sb_   ## suffix; break; \
-        case MO_UW: variable = gadget_qemu_ld_leuw_ ## suffix; break; \
-        case MO_SW: variable = gadget_qemu_ld_lesw_ ## suffix; break; \
-        case MO_UL: variable = gadget_qemu_ld_leul_ ## suffix; break; \
-        case MO_SL: variable = gadget_qemu_ld_lesl_ ## suffix; break; \
-        case MO_UQ:  variable = gadget_qemu_ld_leq_  ## suffix; break; \
-        default: \
-            g_assert_not_reached(); \
-    }
-#define LD_MEMOP_HANDLER(variable, arg, suffix, a_bits, s_bits) \
-        if (a_bits >= s_bits) { \
-            LD_MEMOP_LOOKUP(variable, arg, aligned_ ## suffix ); \
-        } else { \
-            LD_MEMOP_LOOKUP(gadget, arg, unaligned_ ## suffix); \
-        }
-
-
-
-/**
- * Macro that defines a look-up tree for named QEMU_ST gadgets.
- */
-#define ST_MEMOP_LOOKUP(variable, arg, suffix) \
-    switch (get_memop(arg) & MO_SSIZE) { \
-        case MO_UB:   variable = gadget_qemu_st_ub_   ## suffix; break; \
-        case MO_UW: variable = gadget_qemu_st_leuw_ ## suffix; break; \
-        case MO_UL: variable = gadget_qemu_st_leul_ ## suffix; break; \
-        case MO_UQ:  variable = gadget_qemu_st_leq_  ## suffix; break; \
-        default: \
-            g_assert_not_reached(); \
-    }
-#define ST_MEMOP_HANDLER(variable, arg, suffix, a_bits, s_bits) \
-        if (a_bits >= s_bits) { \
-            ST_MEMOP_LOOKUP(variable, arg, aligned_ ## suffix ); \
-        } else { \
-            ST_MEMOP_LOOKUP(gadget, arg, unaligned_ ## suffix); \
-        }
-
-
-#define LOOKUP_SPECIAL_CASE_LDST_GADGET(arg, name, mode) \
-    switch(tlb_mask_table_ofs(s, get_mmuidx(arg))) { \
-        case -32:  \
-            gadget = (a_bits >= s_bits) ?  \
-                gadget_qemu_ ## name ## _aligned_ ## mode ## _off32_i64 : \
-                gadget_qemu_ ## name ## _unaligned_ ## mode ## _off32_i64; \
-            break; \
-        case -48:  \
-            gadget = (a_bits >= s_bits) ?  \
-                gadget_qemu_ ## name ## _aligned_ ## mode ## _off48_i64 : \
-                gadget_qemu_ ## name ## _unaligned_ ## mode ## _off48_i64; \
-            break; \
-        case -64: \
-            gadget = (a_bits >= s_bits) ? \
-                gadget_qemu_ ## name ## _aligned_ ## mode ## _off64_i64 : \
-                gadget_qemu_ ## name ## _unaligned_ ## mode ## _off64_i64; \
-            break; \
-        case -96: \
-            gadget = (a_bits >= s_bits) ? \
-                gadget_qemu_ ## name ## _aligned_ ## mode ## _off96_i64 : \
-                gadget_qemu_ ## name ## _unaligned_ ## mode ## _off96_i64; \
-            break; \
-        case -128: \
-            gadget = (a_bits >= s_bits) ? \
-                gadget_qemu_ ## name ## _aligned_ ## mode ## _off128_i64 : \
-                gadget_qemu_ ## name ## _unaligned_ ## mode ## _off128_i64; \
-            break;\
-        default: \
-            gadget = gadget_qemu_ ## name ## _slowpath_ ## mode ## _off0_i64; \
-            break; \
-        }
-
 
 static bool patch_reloc(tcg_insn_unit *code_ptr, int type,
                         intptr_t value, intptr_t addend)
@@ -381,33 +205,14 @@ static bool patch_reloc(tcg_insn_unit *code_ptr, int type,
     tcg_debug_assert(type == sizeof(tcg_target_long));
     tcg_debug_assert(addend == 0);
     tcg_debug_assert(value != 0);
-    if (TCG_TARGET_REG_BITS == 32) {
-        tcg_patch32(code_ptr, value);
-    } else {
-        tcg_patch64(code_ptr, value);
-    }
+    tcg_patch64(code_ptr, value);
     return true;
 }
-
-#if defined(CONFIG_DEBUG_TCG_INTERPRETER)
-/* Show current bytecode. Used by tcg interpreter. */
-void tci_disas(uint8_t opc)
-{
-    const TCGOpDef *def = &tcg_op_defs[opc];
-    fprintf(stderr, "TCG %s %u, %u, %u\n",
-            def->name, def->nb_oargs, def->nb_iargs, def->nb_cargs);
-}
-#endif
 
 /* Write value (native size). */
 static void tcg_out_immediate(TCGContext *s, tcg_target_ulong v)
 {
-    if (TCG_TARGET_REG_BITS == 32) {
-        //tcg_out32(s, v);
-        tcg_out64(s, v);
-    } else {
-        tcg_out64(s, v);
-    }
+    tcg_out64(s, v);
 }
 
 void tb_target_set_jmp_target(const TranslationBlock *tb, int n,
@@ -420,37 +225,6 @@ void tb_target_set_jmp_target(const TranslationBlock *tb, int n,
     /* Patch it to be match our target address. */
     qatomic_set((uint64_t *)immediate_addr, addr);
 }
-
-
-/**
- * TCTI Thunk Helpers
- */
-
-#ifdef CONFIG_SOFTMMU
-
-// TODO: relocate these prototypes?
-tcg_target_ulong helper_ldub_mmu_signed(CPUArchState *env, uint64_t addr, MemOpIdx oi, uintptr_t retaddr);
-tcg_target_ulong helper_lduw_mmu_signed(CPUArchState *env, uint64_t addr, MemOpIdx oi, uintptr_t retaddr);
-tcg_target_ulong helper_ldul_mmu_signed(CPUArchState *env, uint64_t addr, MemOpIdx oi, uintptr_t retaddr);
-
-tcg_target_ulong helper_ldub_mmu_signed(CPUArchState *env, uint64_t addr, MemOpIdx oi, uintptr_t retaddr)
-{
-    return (int8_t)helper_ldub_mmu(env, addr, oi, retaddr);
-}
-
-tcg_target_ulong helper_lduw_mmu_signed(CPUArchState *env, uint64_t addr, MemOpIdx oi, uintptr_t retaddr)
-{
-    return (int16_t)helper_lduw_mmu(env, addr, oi, retaddr);
-}
-
-tcg_target_ulong helper_ldul_mmu_signed(CPUArchState *env, uint64_t addr, MemOpIdx oi, uintptr_t retaddr)
-{
-    return (int32_t)helper_ldul_mmu(env, addr, oi, retaddr);
-}
-
-#else
-#error TCTI currently only supports use of the soft MMU.
-#endif
 
 
 /**
@@ -616,14 +390,14 @@ static bool tcg_out_mov(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg)
         if (ret < 32 && arg < 32) {
             tcg_out_movr(s, type, ret, arg);
             break;
-        } 
+        }
         // If this is a vector register to GP, issue a UMOV.
         else if (ret < 32) {
             void *gadget = (type == TCG_TYPE_I32) ? gadget_umov_s0 : gadget_umov_d0;
             tcg_out_binary_gadget(s, gadget, ret, w_arg);
             break;
-        } 
-        
+        }
+
         // If this is a GP to vector move, insert the vealue using INS.
         else if (arg < 32) {
             void *gadget = (type == TCG_TYPE_I32) ? gadget_ins_s0 : gadget_ins_d0;
@@ -710,15 +484,11 @@ static void tcg_out_ext8s(TCGContext *s, TCGType type, TCGReg rd, TCGReg rs)
 {
     switch (type) {
     case TCG_TYPE_I32:
-        tcg_debug_assert(TCG_TARGET_HAS_ext8s_i32);
         tcg_out_binary_gadget(s, gadget_ext8s_i32, rd, rs);
         break;
-#if TCG_TARGET_REG_BITS == 64
     case TCG_TYPE_I64:
-        tcg_debug_assert(TCG_TARGET_HAS_ext8s_i64);
         tcg_out_binary_gadget(s, gadget_ext8s_i64, rd, rs);
         break;
-#endif
     default:
         g_assert_not_reached();
     }
@@ -733,15 +503,11 @@ static void tcg_out_ext16s(TCGContext *s, TCGType type, TCGReg rd, TCGReg rs)
 {
     switch (type) {
     case TCG_TYPE_I32:
-        tcg_debug_assert(TCG_TARGET_HAS_ext16s_i32);
         tcg_out_binary_gadget(s, gadget_ext16s_i32, rd, rs);
         break;
-#if TCG_TARGET_REG_BITS == 64
     case TCG_TYPE_I64:
-        tcg_debug_assert(TCG_TARGET_HAS_ext16s_i64);
         tcg_out_binary_gadget(s, gadget_ext16s_i64, rd, rs);
         break;
-#endif
     default:
         g_assert_not_reached();
     }
@@ -754,15 +520,11 @@ static void tcg_out_ext16u(TCGContext *s, TCGReg rd, TCGReg rs)
 
 static void tcg_out_ext32s(TCGContext *s, TCGReg rd, TCGReg rs)
 {
-    tcg_debug_assert(TCG_TARGET_REG_BITS == 64);
-    tcg_debug_assert(TCG_TARGET_HAS_ext32s_i64);
     tcg_out_binary_gadget(s, gadget_ext32s_i64, rd, rs);
 }
 
 static void tcg_out_ext32u(TCGContext *s, TCGReg rd, TCGReg rs)
 {
-    tcg_debug_assert(TCG_TARGET_REG_BITS == 64);
-    tcg_debug_assert(TCG_TARGET_HAS_ext32u_i64);
     tcg_out_binary_gadget(s, gadget_ext32u_i64, rd, rs);
 }
 
@@ -778,7 +540,6 @@ static void tcg_out_extu_i32_i64(TCGContext *s, TCGReg rd, TCGReg rs)
 
 static void tcg_out_extrl_i64_i32(TCGContext *s, TCGReg rd, TCGReg rs)
 {
-    tcg_debug_assert(TCG_TARGET_REG_BITS == 64);
     tcg_out_binary_gadget(s, gadget_extrl, rd, rs);
 }
 
@@ -842,590 +603,479 @@ static void tcg_out_goto_tb(TCGContext *s, int which)
     set_jmp_reset_offset(s, which);
 }
 
+static void tcg_out_goto_ptr(TCGContext *s, TCGReg a0)
+{
+    /* Never emitted: tcg_cpu_init_cflags() sets CF_NO_GOTO_PTR for TCTI. */
+    g_assert_not_reached();
+}
+
+/* Simple branch. */
+static void tcg_out_br(TCGContext *s, TCGLabel *l)
+{
+    tcg_out_gadget(s, gadget_br);
+    tcti_out_label(s, l);
+}
+
+/* Memory barriers. */
+static void tcg_out_mb(TCGContext *s, unsigned a0)
+{
+    static void* sync[] = {
+        [0 ... TCG_MO_ALL]            = gadget_mb_all,
+        [TCG_MO_ST_ST]                = gadget_mb_st,
+        [TCG_MO_LD_LD]                = gadget_mb_ld,
+        [TCG_MO_LD_ST]                = gadget_mb_ld,
+        [TCG_MO_LD_ST | TCG_MO_LD_LD] = gadget_mb_ld,
+    };
+    tcg_out_gadget(s, sync[a0 & TCG_MO_ALL]);
+}
+
+/*
+ * There are no carry gadgets, so the carry ops are C_NotImplemented and
+ * tcg-op.c never asks for these.
+ */
+static void tcg_out_set_carry(TCGContext *s)
+{
+    g_assert_not_reached();
+}
+
+static void tcg_out_set_borrow(TCGContext *s)
+{
+    g_assert_not_reached();
+}
+
 /* We expect to use a 7-bit scaled negative offset from ENV.  */
 #define MIN_TLB_MASK_TABLE_OFS  -512
 
-/**
- * Generate every other operation.
+/*
+ * Arithmetic and logic. Every one of these is a single gadget per register
+ * combination, with an _i32 and an _i64 flavour where the width matters.
  */
-static void tcg_out_op(TCGContext *s, TCGOpcode opc, TCGType type,
-                       const TCGArg args[TCG_MAX_OP_ARGS],
-                       const int const_args[TCG_MAX_OP_ARGS])
+
+#define TCTI_BINARY_OP(name, gadget32, gadget64)                            \
+    static void tgen_##name(TCGContext *s, TCGType type,                    \
+                            TCGReg a0, TCGReg a1, TCGReg a2)                \
+    {                                                                       \
+        tcg_out_ternary_gadget(s, type == TCG_TYPE_I32 ? gadget32 : gadget64, \
+                               a0, a1, a2);                                 \
+    }                                                                       \
+    static const TCGOutOpBinary outop_##name = {                            \
+        .base.static_constraint = C_O1_I2(r, r, r),                         \
+        .out_rrr = tgen_##name,                                             \
+    };
+
+TCTI_BINARY_OP(add,  gadget_add_i32,  gadget_add_i64)
+TCTI_BINARY_OP(and,  gadget_and_i32,  gadget_and_i64)
+TCTI_BINARY_OP(andc, gadget_andc_i32, gadget_andc_i64)
+TCTI_BINARY_OP(clz,  gadget_clz_i32,  gadget_clz_i64)
+TCTI_BINARY_OP(ctz,  gadget_ctz_i32,  gadget_ctz_i64)
+TCTI_BINARY_OP(divs, gadget_div_i32,  gadget_div_i64)
+TCTI_BINARY_OP(divu, gadget_divu_i32, gadget_divu_i64)
+TCTI_BINARY_OP(eqv,  gadget_eqv_i32,  gadget_eqv_i64)
+TCTI_BINARY_OP(mul,  gadget_mul_i32,  gadget_mul_i64)
+TCTI_BINARY_OP(nand, gadget_nand_i32, gadget_nand_i64)
+TCTI_BINARY_OP(nor,  gadget_nor_i32,  gadget_nor_i64)
+TCTI_BINARY_OP(or,   gadget_or_i32,   gadget_or_i64)
+TCTI_BINARY_OP(orc,  gadget_orc_i32,  gadget_orc_i64)
+TCTI_BINARY_OP(rems, gadget_rem_i32,  gadget_rem_i64)
+TCTI_BINARY_OP(remu, gadget_remu_i32, gadget_remu_i64)
+TCTI_BINARY_OP(rotl, gadget_rotl_i32, gadget_rotl_i64)
+TCTI_BINARY_OP(rotr, gadget_rotr_i32, gadget_rotr_i64)
+TCTI_BINARY_OP(sar,  gadget_sar_i32,  gadget_sar_i64)
+TCTI_BINARY_OP(shl,  gadget_shl_i32,  gadget_shl_i64)
+TCTI_BINARY_OP(shr,  gadget_shr_i32,  gadget_shr_i64)
+TCTI_BINARY_OP(xor,  gadget_xor_i32,  gadget_xor_i64)
+
+#undef TCTI_BINARY_OP
+
+static void tgen_sub(TCGContext *s, TCGType type,
+                     TCGReg a0, TCGReg a1, TCGReg a2)
 {
-    switch (opc) {
-
-    // Simple branch.
-    case INDEX_op_br:
-        tcg_out_gadget(s, gadget_br);
-        tcti_out_label(s, arg_label(args[0]));
-        break;
-
-
-    // Set condition flag.
-    // a0 = Rd, a1 = Rn, a2 = Rm
-    case INDEX_op_setcond_i32:
-    {
-        void *gadget;
-
-        // We have to emit a different gadget per condition; we'll select which.
-        switch(args[3]) {
-            case TCG_COND_EQ:  gadget = gadget_setcond_i32_eq; break;
-            case TCG_COND_NE:  gadget = gadget_setcond_i32_ne; break;
-            case TCG_COND_LT:  gadget = gadget_setcond_i32_lt; break;
-            case TCG_COND_GE:  gadget = gadget_setcond_i32_ge; break;
-            case TCG_COND_LE:  gadget = gadget_setcond_i32_le; break;
-            case TCG_COND_GT:  gadget = gadget_setcond_i32_gt; break;
-            case TCG_COND_LTU: gadget = gadget_setcond_i32_lo; break;
-            case TCG_COND_GEU: gadget = gadget_setcond_i32_hs; break;
-            case TCG_COND_LEU: gadget = gadget_setcond_i32_ls; break;
-            case TCG_COND_GTU: gadget = gadget_setcond_i32_hi; break;
-            default:
-                g_assert_not_reached();
-        }
-
-        tcg_out_ternary_gadget(s, gadget, args[0], args[1], args[2]);
-        break;
-    }
-
-    case INDEX_op_setcond_i64:
-    {
-        void *gadget;
-
-        // We have to emit a different gadget per condition; we'll select which.
-        switch(args[3]) {
-            case TCG_COND_EQ:  gadget = gadget_setcond_i64_eq; break;
-            case TCG_COND_NE:  gadget = gadget_setcond_i64_ne; break;
-            case TCG_COND_LT:  gadget = gadget_setcond_i64_lt; break;
-            case TCG_COND_GE:  gadget = gadget_setcond_i64_ge; break;
-            case TCG_COND_LE:  gadget = gadget_setcond_i64_le; break;
-            case TCG_COND_GT:  gadget = gadget_setcond_i64_gt; break;
-            case TCG_COND_LTU: gadget = gadget_setcond_i64_lo; break;
-            case TCG_COND_GEU: gadget = gadget_setcond_i64_hs; break;
-            case TCG_COND_LEU: gadget = gadget_setcond_i64_ls; break;
-            case TCG_COND_GTU: gadget = gadget_setcond_i64_hi; break;
-            default:
-                g_assert_not_reached();
-        }
-
-        tcg_out_ternary_gadget(s, gadget, args[0], args[1], args[2]);
-        break;
-    }
-
-    /**
-     * Load instructions.
-     */
-
-    case INDEX_op_ld8u_i32:
-    case INDEX_op_ld8u_i64:
-        tcg_out_ldst_gadget(s, gadget_ld8u, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_ld8s_i32:
-        tcg_out_ldst_gadget(s, gadget_ld8s_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_ld8s_i64:
-        tcg_out_ldst_gadget(s, gadget_ld8s_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_ld16u_i32:
-    case INDEX_op_ld16u_i64:
-        tcg_out_ldst_gadget(s, gadget_ld16u, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_ld16s_i32:
-        tcg_out_ldst_gadget(s, gadget_ld16s_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_ld16s_i64:
-        tcg_out_ldst_gadget(s, gadget_ld16s_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_ld_i32:
-    case INDEX_op_ld32u_i64:
-        tcg_out_ldst_gadget(s, gadget_ld32u, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_ld_i64:
-        tcg_out_ldst_gadget(s, gadget_ld_i64, args[0], args[1], args[2]);
-        break;
-   
-    case INDEX_op_ld32s_i64:
-        tcg_out_ldst_gadget(s, gadget_ld32s_i64, args[0], args[1], args[2]);
-        break;
-
-
-    /**
-     * Store instructions.
-     */
-    case INDEX_op_st8_i32:
-    case INDEX_op_st8_i64:
-        tcg_out_ldst_gadget(s, gadget_st8, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_st16_i32:
-    case INDEX_op_st16_i64:
-        tcg_out_ldst_gadget(s, gadget_st16, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_st_i32:
-    case INDEX_op_st32_i64:
-        tcg_out_ldst_gadget(s, gadget_st_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_st_i64:
-        tcg_out_ldst_gadget(s, gadget_st_i64, args[0], args[1], args[2]);
-        break;
-
-    /**
-     * Arithmetic instructions.
-     */
-
-    case INDEX_op_add_i32:
-        tcg_out_ternary_gadget(s, gadget_add_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_sub_i32:
-        tcg_out_ternary_gadget(s, gadget_sub_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_mul_i32:
-        tcg_out_ternary_gadget(s, gadget_mul_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_nand_i32:     /* Optional (TCG_TARGET_HAS_nand_i32). */
-        tcg_out_ternary_gadget(s, gadget_nand_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_nor_i32:     /* Optional (TCG_TARGET_HAS_nor_i32). */
-        tcg_out_ternary_gadget(s, gadget_nor_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_and_i32:
-        tcg_out_ternary_gadget(s, gadget_and_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_andc_i32:     /* Optional (TCG_TARGET_HAS_andc_i32). */
-        tcg_out_ternary_gadget(s, gadget_andc_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_orc_i32:      /* Optional (TCG_TARGET_HAS_orc_i64). */
-        tcg_out_ternary_gadget(s, gadget_orc_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_eqv_i32:      /* Optional (TCG_TARGET_HAS_orc_i64). */
-        tcg_out_ternary_gadget(s, gadget_eqv_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_or_i32:
-        tcg_out_ternary_gadget(s, gadget_or_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_xor_i32:
-        tcg_out_ternary_gadget(s, gadget_xor_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_shl_i32:
-        tcg_out_ternary_gadget(s, gadget_shl_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_shr_i32:
-        tcg_out_ternary_gadget(s, gadget_shr_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_sar_i32:
-        tcg_out_ternary_gadget(s, gadget_sar_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_rotr_i32:     /* Optional (TCG_TARGET_HAS_rot_i32). */
-        tcg_out_ternary_gadget(s, gadget_rotr_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_rotl_i32:     /* Optional (TCG_TARGET_HAS_rot_i32). */
-        tcg_out_ternary_gadget(s, gadget_rotl_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_add_i64:
-        tcg_out_ternary_gadget(s, gadget_add_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_sub_i64:
-        tcg_out_ternary_gadget(s, gadget_sub_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_mul_i64:
-        tcg_out_ternary_gadget(s, gadget_mul_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_and_i64:
-        tcg_out_ternary_gadget(s, gadget_and_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_andc_i64:     /* Optional (TCG_TARGET_HAS_andc_i64). */
-        tcg_out_ternary_gadget(s, gadget_andc_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_orc_i64:      /* Optional (TCG_TARGET_HAS_orc_i64). */
-        tcg_out_ternary_gadget(s, gadget_orc_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_eqv_i64:      /* Optional (TCG_TARGET_HAS_eqv_i64). */
-        tcg_out_ternary_gadget(s, gadget_eqv_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_nand_i64:     /* Optional (TCG_TARGET_HAS_nand_i64). */
-        tcg_out_ternary_gadget(s, gadget_nand_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_nor_i64:      /* Optional (TCG_TARGET_HAS_nor_i64). */
-        tcg_out_ternary_gadget(s, gadget_nor_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_or_i64:
-        tcg_out_ternary_gadget(s, gadget_or_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_xor_i64:
-        tcg_out_ternary_gadget(s, gadget_xor_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_shl_i64:
-        tcg_out_ternary_gadget(s, gadget_shl_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_shr_i64:
-        tcg_out_ternary_gadget(s, gadget_shr_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_sar_i64:
-        tcg_out_ternary_gadget(s, gadget_sar_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_rotl_i64:     /* Optional (TCG_TARGET_HAS_rot_i64). */
-        tcg_out_ternary_gadget(s, gadget_rotl_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_rotr_i64:     /* Optional (TCG_TARGET_HAS_rot_i64). */
-        tcg_out_ternary_gadget(s, gadget_rotr_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_div_i64:      /* Optional (TCG_TARGET_HAS_div_i64). */
-        tcg_out_ternary_gadget(s, gadget_div_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_divu_i64:     /* Optional (TCG_TARGET_HAS_div_i64). */
-        tcg_out_ternary_gadget(s, gadget_divu_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_rem_i64:      /* Optional (TCG_TARGET_HAS_div_i64). */
-        tcg_out_ternary_gadget(s, gadget_rem_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_remu_i64:     /* Optional (TCG_TARGET_HAS_div_i64). */
-        tcg_out_ternary_gadget(s, gadget_remu_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_brcond_i64:
-    {
-        static uint8_t last_brcond_i64 = 0;
-        void *gadget;
-
-        // We have to emit a different gadget per condition; we'll select which.
-        switch(args[2]) {
-            case TCG_COND_EQ:  gadget = gadget_brcond_i64_eq; break;
-            case TCG_COND_NE:  gadget = gadget_brcond_i64_ne; break;
-            case TCG_COND_LT:  gadget = gadget_brcond_i64_lt; break;
-            case TCG_COND_GE:  gadget = gadget_brcond_i64_ge; break;
-            case TCG_COND_LE:  gadget = gadget_brcond_i64_le; break;
-            case TCG_COND_GT:  gadget = gadget_brcond_i64_gt; break;
-            case TCG_COND_LTU: gadget = gadget_brcond_i64_lo; break;
-            case TCG_COND_GEU: gadget = gadget_brcond_i64_hs; break;
-            case TCG_COND_LEU: gadget = gadget_brcond_i64_ls; break;
-            case TCG_COND_GTU: gadget = gadget_brcond_i64_hi; break;
-            default:
-                g_assert_not_reached();
-        }
-
-        // We'll select the which branch to used based on a cycling counter.
-        // This means we'll pick one of 16 identical brconds. Spreading this out
-        // helps the processor's branch prediction be less "squished", as not every
-        // branch is going throuh the same instruction.
-        tcg_out_ternary_gadget(s, gadget, last_brcond_i64, args[0], args[1]);
-        last_brcond_i64 = (last_brcond_i64 + 1) % TCG_TARGET_GP_REGS;
-
-        // Branch target immediate.
-        tcti_out_label(s, arg_label(args[3]));
-        break;
-    }
-
-
-    case INDEX_op_bswap16_i32:  /* Optional (TCG_TARGET_HAS_bswap16_i32). */
-    case INDEX_op_bswap16_i64:  /* Optional (TCG_TARGET_HAS_bswap16_i64). */
-        tcg_out_binary_gadget(s, gadget_bswap16, args[0], args[1]);
-        break;
-
-    case INDEX_op_bswap32_i32:  /* Optional (TCG_TARGET_HAS_bswap32_i32). */
-    case INDEX_op_bswap32_i64:  /* Optional (TCG_TARGET_HAS_bswap32_i64). */
-        tcg_out_binary_gadget(s, gadget_bswap32, args[0], args[1]);
-        break;
-
-    case INDEX_op_bswap64_i64:  /* Optional (TCG_TARGET_HAS_bswap64_i64). */
-        tcg_out_binary_gadget(s, gadget_bswap64, args[0], args[1]);
-        break;
-
-    case INDEX_op_not_i64:      /* Optional (TCG_TARGET_HAS_not_i64). */
-        tcg_out_binary_gadget(s, gadget_not_i64, args[0], args[1]);
-        break;
-
-    case INDEX_op_neg_i64:      /* Optional (TCG_TARGET_HAS_neg_i64). */
-        tcg_out_binary_gadget(s, gadget_neg_i64, args[0], args[1]);
-        break;
-
-    case INDEX_op_clz_i64:      /* Optional (TCG_TARGET_HAS_clz_i64). */
-        tcg_out_ternary_gadget(s, gadget_clz_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_ctz_i64:      /* Optional (TCG_TARGET_HAS_ctz_i64). */
-        tcg_out_ternary_gadget(s, gadget_ctz_i64, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_extrh_i64_i32:
-        tcg_out_binary_gadget(s, gadget_extrh, args[0], args[1]);
-        break;
-
-    case INDEX_op_neg_i32:      /* Optional (TCG_TARGET_HAS_neg_i32). */
-        tcg_out_binary_gadget(s, gadget_neg_i32, args[0], args[1]);
-        break;
-
-    case INDEX_op_clz_i32:      /* Optional (TCG_TARGET_HAS_clz_i32). */
-        tcg_out_ternary_gadget(s, gadget_clz_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_ctz_i32:      /* Optional (TCG_TARGET_HAS_ctz_i32). */
-        tcg_out_ternary_gadget(s, gadget_ctz_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_not_i32:      /* Optional (TCG_TARGET_HAS_not_i32). */
-        tcg_out_binary_gadget(s, gadget_not_i32, args[0], args[1]);
-        break;
-
-    case INDEX_op_div_i32:      /* Optional (TCG_TARGET_HAS_div_i32). */
-        tcg_out_ternary_gadget(s, gadget_div_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_divu_i32:     /* Optional (TCG_TARGET_HAS_div_i32). */
-        tcg_out_ternary_gadget(s, gadget_divu_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_rem_i32:      /* Optional (TCG_TARGET_HAS_div_i32). */
-        tcg_out_ternary_gadget(s, gadget_rem_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_remu_i32:     /* Optional (TCG_TARGET_HAS_div_i32). */
-        tcg_out_ternary_gadget(s, gadget_remu_i32, args[0], args[1], args[2]);
-        break;
-
-    case INDEX_op_brcond_i32:
-    {
-        static uint8_t last_brcond_i32 = 0;
-        void *gadget;
-
-        // We have to emit a different gadget per condition; we'll select which.
-        switch(args[2]) {
-            case TCG_COND_EQ:  gadget = gadget_brcond_i32_eq; break;
-            case TCG_COND_NE:  gadget = gadget_brcond_i32_ne; break;
-            case TCG_COND_LT:  gadget = gadget_brcond_i32_lt; break;
-            case TCG_COND_GE:  gadget = gadget_brcond_i32_ge; break;
-            case TCG_COND_LE:  gadget = gadget_brcond_i32_le; break;
-            case TCG_COND_GT:  gadget = gadget_brcond_i32_gt; break;
-            case TCG_COND_LTU: gadget = gadget_brcond_i32_lo; break;
-            case TCG_COND_GEU: gadget = gadget_brcond_i32_hs; break;
-            case TCG_COND_LEU: gadget = gadget_brcond_i32_ls; break;
-            case TCG_COND_GTU: gadget = gadget_brcond_i32_hi; break;
-            default:
-                g_assert_not_reached();
-        }
-
-        // We'll select the which branch to used based on a cycling counter.
-        // This means we'll pick one of 16 identical brconds. Spreading this out
-        // helps the processor's branch prediction be less "squished", as not every
-        // branch is going throuh the same instruction.
-        tcg_out_ternary_gadget(s, gadget, last_brcond_i32, args[0], args[1]);
-        last_brcond_i32 = (last_brcond_i32 + 1) % TCG_TARGET_GP_REGS;
-
-        // Branch target immediate.
-        tcti_out_label(s, arg_label(args[3]));
-
-        break;
-    }
-
-    case INDEX_op_qemu_ld_i32:
-    {
-        MemOp opc = get_memop(args[2]);
-        unsigned a_bits = memop_alignment_bits(opc);
-        unsigned s_bits = opc & MO_SIZE;
-
-        void *gadget;
-
-        switch(tlb_mask_table_ofs(s, get_mmuidx(args[2]))) {
-            case -32:  LD_MEMOP_HANDLER(gadget, args[2],  off32_i32, a_bits, s_bits); break;
-            case -48:  LD_MEMOP_HANDLER(gadget, args[2],  off48_i32, a_bits, s_bits); break;
-            case -64:  LD_MEMOP_HANDLER(gadget, args[2],  off64_i32, a_bits, s_bits); break;
-            case -96:  LD_MEMOP_HANDLER(gadget, args[2],  off96_i32, a_bits, s_bits); break;
-            case -128: LD_MEMOP_HANDLER(gadget, args[2], off128_i32, a_bits, s_bits); break;
-            default:   LD_MEMOP_LOOKUP(gadget, args[2], slowpath_off0_i32); break;
-        }
-
-        // Args:
-        // - an immediate32 encodes our operation index
-        tcg_out_binary_gadget(s, gadget, args[0], args[1]);
-        tcg_out64(s, args[2]); // TODO: fix encoding to be 4b
-        break;
-    }
-
-    case INDEX_op_qemu_ld_i64:
-    {
-        MemOp opc = get_memop(args[2]);
-        unsigned a_bits = memop_alignment_bits(opc);
-        unsigned s_bits = opc & MO_SIZE;
-
-        void *gadget;
-
-        // Special optimization case: if we have an common case.
-        // Delegate to our special-case handler.
-        if (args[2] == 0x02) {
-            LOOKUP_SPECIAL_CASE_LDST_GADGET(args[2], ld_ub, mode02)
-            tcg_out_binary_gadget(s, gadget, args[0], args[1]);
-        } else if (args[2] == 0x32) {
-            LOOKUP_SPECIAL_CASE_LDST_GADGET(args[2], ld_leq, mode32)
-            tcg_out_binary_gadget(s, gadget, args[0], args[1]);
-        } else if(args[2] == 0x3a) {
-            LOOKUP_SPECIAL_CASE_LDST_GADGET(args[2], ld_leq, mode3a)
-            tcg_out_binary_gadget(s, gadget, args[0], args[1]);
-        }
-        // Otherwise, handle the generic case.
-        else {
-            switch(tlb_mask_table_ofs(s, get_mmuidx(args[2]))) {
-                case -32:  LD_MEMOP_HANDLER(gadget, args[2],  off32_i64, a_bits, s_bits); break;
-                case -48:  LD_MEMOP_HANDLER(gadget, args[2],  off48_i64, a_bits, s_bits); break;
-                case -64:  LD_MEMOP_HANDLER(gadget, args[2],  off64_i64, a_bits, s_bits); break;
-                case -96:  LD_MEMOP_HANDLER(gadget, args[2],  off96_i64, a_bits, s_bits); break;
-                case -128: LD_MEMOP_HANDLER(gadget, args[2], off128_i64, a_bits, s_bits); break;
-                default:   LD_MEMOP_LOOKUP(gadget, args[2], slowpath_off0_i64); break;
-            }
-
-            // Args:
-            // - an immediate32 encodes our operation index
-            tcg_out_binary_gadget(s, gadget, args[0], args[1]);
-            tcg_out64(s, args[2]); // TODO: fix encoding to be 4b
-        }
-
-        break;
-    }
-
-    case INDEX_op_qemu_st_i32:
-    {
-        MemOp opc = get_memop(args[2]);
-        unsigned a_bits = memop_alignment_bits(opc);
-        unsigned s_bits = opc & MO_SIZE;
-
-        void *gadget;
-
-        switch(tlb_mask_table_ofs(s, get_mmuidx(args[2]))) {
-            case -32:  ST_MEMOP_HANDLER(gadget, args[2],  off32_i32, a_bits, s_bits); break;
-            case -48:  ST_MEMOP_HANDLER(gadget, args[2],  off48_i32, a_bits, s_bits); break;
-            case -64:  ST_MEMOP_HANDLER(gadget, args[2],  off64_i32, a_bits, s_bits); break;
-            case -96:  ST_MEMOP_HANDLER(gadget, args[2],  off96_i32, a_bits, s_bits); break;
-            case -128: ST_MEMOP_HANDLER(gadget, args[2], off128_i32, a_bits, s_bits); break;
-            default:   ST_MEMOP_LOOKUP(gadget, args[2], slowpath_off0_i32); break;
-        }
-
-        // Args:
-        // - our gadget encodes the target and address registers
-        // - an immediate32 encodes our operation index
-        tcg_out_binary_gadget(s, gadget, args[0], args[1]);
-        tcg_out64(s, args[2]); // FIXME: double encoded
+    tcg_out_ternary_gadget(s, type == TCG_TYPE_I32 ? gadget_sub_i32 : gadget_sub_i64,
+                           a0, a1, a2);
+}
+
+static const TCGOutOpSubtract outop_sub = {
+    .base.static_constraint = C_O1_I2(r, r, r),
+    .out_rrr = tgen_sub,
+};
+
+static void tgen_neg(TCGContext *s, TCGType type, TCGReg a0, TCGReg a1)
+{
+    tcg_out_binary_gadget(s, type == TCG_TYPE_I32 ? gadget_neg_i32 : gadget_neg_i64,
+                          a0, a1);
+}
+
+static const TCGOutOpUnary outop_neg = {
+    .base.static_constraint = C_O1_I1(r, r),
+    .out_rr = tgen_neg,
+};
+
+static void tgen_not(TCGContext *s, TCGType type, TCGReg a0, TCGReg a1)
+{
+    tcg_out_binary_gadget(s, type == TCG_TYPE_I32 ? gadget_not_i32 : gadget_not_i64,
+                          a0, a1);
+}
+
+static const TCGOutOpUnary outop_not = {
+    .base.static_constraint = C_O1_I1(r, r),
+    .out_rr = tgen_not,
+};
+
+/* Ops we have no gadgets for, and which tcg-op.c expands for us. */
+static const TCGOutOpBinary outop_addco = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+static const TCGOutOpAddSubCarry outop_addci = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+static const TCGOutOpBinary outop_addcio = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+static const TCGOutOpAddSubCarry outop_subbo = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+static const TCGOutOpAddSubCarry outop_subbi = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+static const TCGOutOpAddSubCarry outop_subbio = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+static const TCGOutOpUnary outop_ctpop = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+static const TCGOutOpDeposit outop_deposit = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+static const TCGOutOpDivRem outop_divs2 = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+static const TCGOutOpDivRem outop_divu2 = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+static const TCGOutOpExtract2 outop_extract2 = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+static const TCGOutOpMul2 outop_muls2 = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+static const TCGOutOpBinary outop_mulsh = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+static const TCGOutOpMul2 outop_mulu2 = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+static const TCGOutOpBinary outop_muluh = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+/*
+ * Extensions. TCG_TARGET_extract_valid() only admits the 8-, 16- and 32-bit
+ * cases at offset zero, each of which is one gadget.
+ */
+static void tgen_extract(TCGContext *s, TCGType type, TCGReg a0, TCGReg a1,
+                         unsigned ofs, unsigned len)
+{
+    tcg_debug_assert(ofs == 0);
+    switch (len) {
+    case 8:
+        tcg_out_ext8u(s, a0, a1);
         break;
-    }
-
-    case INDEX_op_qemu_st_i64:
-    {
-        MemOp opc = get_memop(args[2]);
-        unsigned a_bits = memop_alignment_bits(opc);
-        unsigned s_bits = opc & MO_SIZE;
-
-        void *gadget;
-
-        // Special optimization case: if we have an common case.
-        // Delegate to our special-case handler.
-        if (args[2] == 0x02) {
-            LOOKUP_SPECIAL_CASE_LDST_GADGET(args[2], st_ub, mode02)
-            tcg_out_binary_gadget(s, gadget, args[0], args[1]);
-        } else if (args[2] == 0x32) {
-            LOOKUP_SPECIAL_CASE_LDST_GADGET(args[2], st_leq, mode32)
-            tcg_out_binary_gadget(s, gadget, args[0], args[1]);
-        } else if(args[2] == 0x3a) {
-            LOOKUP_SPECIAL_CASE_LDST_GADGET(args[2], st_leq, mode3a)
-            tcg_out_binary_gadget(s, gadget, args[0], args[1]);
-        }
-        // Otherwise, handle the generic case.
-        else {
-            switch(tlb_mask_table_ofs(s, get_mmuidx(args[2]))) {
-                case -32:  ST_MEMOP_HANDLER(gadget, args[2],  off32_i64, a_bits, s_bits); break;
-                case -48:  ST_MEMOP_HANDLER(gadget, args[2],  off48_i64, a_bits, s_bits); break;
-                case -64:  ST_MEMOP_HANDLER(gadget, args[2],  off64_i64, a_bits, s_bits); break;
-                case -96:  ST_MEMOP_HANDLER(gadget, args[2],  off96_i64, a_bits, s_bits); break;
-                case -128: ST_MEMOP_HANDLER(gadget, args[2], off128_i64, a_bits, s_bits); break;
-                default:   ST_MEMOP_LOOKUP(gadget, args[2], slowpath_off0_i64); break;
-            }
-
-            // Args:
-            // - our gadget encodes the target and address registers
-            // - an immediate32 encodes our operation index
-            tcg_out_binary_gadget(s, gadget, args[0], args[1]);
-            tcg_out64(s, args[2]); // FIXME: double encoded
-        }
-
+    case 16:
+        tcg_out_ext16u(s, a0, a1);
         break;
-    }
-
-    // Memory barriers.
-    case INDEX_op_mb:
-    {
-        static void* sync[] = {
-            [0 ... TCG_MO_ALL]            = gadget_mb_all,
-            [TCG_MO_ST_ST]                = gadget_mb_st,
-            [TCG_MO_LD_LD]                = gadget_mb_ld,
-            [TCG_MO_LD_ST]                = gadget_mb_ld,
-            [TCG_MO_LD_ST | TCG_MO_LD_LD] = gadget_mb_ld,
-        };
-        tcg_out_gadget(s, sync[args[0] & TCG_MO_ALL]);
-
+    case 32:
+        tcg_out_ext32u(s, a0, a1);
         break;
-    }
-
-    case INDEX_op_mov_i32:  /* Always emitted via tcg_out_mov.  */
-    case INDEX_op_mov_i64:
-    case INDEX_op_call:     /* Always emitted via tcg_out_call.  */
-    case INDEX_op_exit_tb:  /* Always emitted via tcg_out_exit_tb.  */
-    case INDEX_op_goto_tb:  /* Always emitted via tcg_out_goto_tb.  */
-    case INDEX_op_ext8s_i32:    /* Always emitted via tcg_reg_alloc_op. */
-    case INDEX_op_ext8s_i64:
-    case INDEX_op_ext8u_i32:
-    case INDEX_op_ext8u_i64:
-    case INDEX_op_ext16s_i32:
-    case INDEX_op_ext16s_i64:
-    case INDEX_op_ext16u_i32:
-    case INDEX_op_ext16u_i64:
-    case INDEX_op_ext32s_i64:
-    case INDEX_op_ext32u_i64:
-    case INDEX_op_ext_i32_i64:
-    case INDEX_op_extu_i32_i64:
-    case INDEX_op_extrl_i64_i32:
     default:
         g_assert_not_reached();
     }
 }
+
+static const TCGOutOpExtract outop_extract = {
+    .base.static_constraint = C_O1_I1(r, r),
+    .out_rr = tgen_extract,
+};
+
+static void tgen_sextract(TCGContext *s, TCGType type, TCGReg a0, TCGReg a1,
+                          unsigned ofs, unsigned len)
+{
+    tcg_debug_assert(ofs == 0);
+    switch (len) {
+    case 8:
+        tcg_out_ext8s(s, type, a0, a1);
+        break;
+    case 16:
+        tcg_out_ext16s(s, type, a0, a1);
+        break;
+    case 32:
+        tcg_out_ext32s(s, a0, a1);
+        break;
+    default:
+        g_assert_not_reached();
+    }
+}
+
+static const TCGOutOpExtract outop_sextract = {
+    .base.static_constraint = C_O1_I1(r, r),
+    .out_rr = tgen_sextract,
+};
+
+static void tgen_extrh_i64_i32(TCGContext *s, TCGType t, TCGReg a0, TCGReg a1)
+{
+    tcg_out_binary_gadget(s, gadget_extrh, a0, a1);
+}
+
+static const TCGOutOpUnary outop_extrh_i64_i32 = {
+    .base.static_constraint = C_O1_I1(r, r),
+    .out_rr = tgen_extrh_i64_i32,
+};
+
+/* Byte swaps. The gadgets leave the result zero-extended. */
+static void tgen_bswap16(TCGContext *s, TCGType type,
+                         TCGReg a0, TCGReg a1, unsigned flags)
+{
+    tcg_out_binary_gadget(s, gadget_bswap16, a0, a1);
+    if (flags & TCG_BSWAP_OS) {
+        tcg_out_ext16s(s, type, a0, a0);
+    }
+}
+
+static const TCGOutOpBswap outop_bswap16 = {
+    .base.static_constraint = C_O1_I1(r, r),
+    .out_rr = tgen_bswap16,
+};
+
+static void tgen_bswap32(TCGContext *s, TCGType type,
+                         TCGReg a0, TCGReg a1, unsigned flags)
+{
+    tcg_out_binary_gadget(s, gadget_bswap32, a0, a1);
+    if (type == TCG_TYPE_I64 && (flags & TCG_BSWAP_OS)) {
+        tcg_out_ext32s(s, a0, a0);
+    }
+}
+
+static const TCGOutOpBswap outop_bswap32 = {
+    .base.static_constraint = C_O1_I1(r, r),
+    .out_rr = tgen_bswap32,
+};
+
+static void tgen_bswap64(TCGContext *s, TCGType type, TCGReg a0, TCGReg a1)
+{
+    tcg_out_binary_gadget(s, gadget_bswap64, a0, a1);
+}
+
+static const TCGOutOpUnary outop_bswap64 = {
+    .base.static_constraint = C_O1_I1(r, r),
+    .out_rr = tgen_bswap64,
+};
+
+/*
+ * Comparisons.
+ */
+
+static TCTIGadget3 *const tcti_setcond_i32[16] = TCTI_COND_TABLE(gadget_setcond_i32_);
+static TCTIGadget3 *const tcti_setcond_i64[16] = TCTI_COND_TABLE(gadget_setcond_i64_);
+static TCTIGadget3 *const tcti_brcond_i32[16] = TCTI_COND_TABLE(gadget_brcond_i32_);
+static TCTIGadget3 *const tcti_brcond_i64[16] = TCTI_COND_TABLE(gadget_brcond_i64_);
+static TCTIGadget3 *const tcti_csel[16] = TCTI_COND_TABLE(gadget_csel_);
+static TCTIGadget1 *const tcti_csetm_i32[16] = TCTI_COND_TABLE(gadget_csetm_i32_);
+static TCTIGadget1 *const tcti_csetm_i64[16] = TCTI_COND_TABLE(gadget_csetm_i64_);
+
+/* Set the flags, for a csel or csetm gadget to consume. */
+static void tcti_out_cmp(TCGContext *s, TCGType type, TCGReg a1, TCGReg a2)
+{
+    tcg_out_binary_gadget(s, type == TCG_TYPE_I32 ? gadget_cmp_i32 : gadget_cmp_i64,
+                          a1, a2);
+}
+
+static void tgen_setcond(TCGContext *s, TCGType type, TCGCond cond,
+                         TCGReg dest, TCGReg arg1, TCGReg arg2)
+{
+    TCTIGadget3 *gadget = (type == TCG_TYPE_I32 ? tcti_setcond_i32 : tcti_setcond_i64)[cond];
+
+    tcg_debug_assert(gadget);
+    tcg_out_gadget(s, (*gadget)[dest][arg1][arg2]);
+}
+
+static const TCGOutOpSetcond outop_setcond = {
+    .base.static_constraint = C_O1_I2(r, r, r),
+    .out_rrr = tgen_setcond,
+};
+
+static void tgen_negsetcond(TCGContext *s, TCGType type, TCGCond cond,
+                            TCGReg dest, TCGReg arg1, TCGReg arg2)
+{
+    TCTIGadget1 *gadget = (type == TCG_TYPE_I32 ? tcti_csetm_i32 : tcti_csetm_i64)[cond];
+
+    tcg_debug_assert(gadget);
+    tcti_out_cmp(s, type, arg1, arg2);
+    tcg_out_gadget(s, (*gadget)[dest]);
+}
+
+static const TCGOutOpSetcond outop_negsetcond = {
+    .base.static_constraint = C_O1_I2(r, r, r),
+    .out_rrr = tgen_negsetcond,
+};
+
+static void tgen_brcond(TCGContext *s, TCGType type, TCGCond cond,
+                        TCGReg arg0, TCGReg arg1, TCGLabel *l)
+{
+    static uint8_t last_brcond = 0;
+    TCTIGadget3 *gadget = (type == TCG_TYPE_I32 ? tcti_brcond_i32 : tcti_brcond_i64)[cond];
+
+    tcg_debug_assert(gadget);
+
+    // We'll select the which branch to used based on a cycling counter.
+    // This means we'll pick one of 16 identical brconds. Spreading this out
+    // helps the processor's branch prediction be less "squished", as not every
+    // branch is going throuh the same instruction.
+    tcg_out_gadget(s, (*gadget)[last_brcond][arg0][arg1]);
+    last_brcond = (last_brcond + 1) % TCG_TARGET_GP_REGS;
+
+    // Branch target immediate.
+    tcti_out_label(s, l);
+}
+
+static const TCGOutOpBrcond outop_brcond = {
+    .base.static_constraint = C_O0_I2(r, r),
+    .out_rr = tgen_brcond,
+};
+
+/*
+ * movcond is mandatory since 10.1. Five registers are too many for one
+ * gadget per combination, so it is a compare, which only sets the flags,
+ * and a csel that reads them.
+ */
+static void tgen_movcond(TCGContext *s, TCGType type, TCGCond cond,
+                         TCGReg ret, TCGReg c1, TCGArg c2, bool const_c2,
+                         TCGArg vt, bool const_vt, TCGArg vf, bool const_vf)
+{
+    TCTIGadget3 *gadget = tcti_csel[cond];
+
+    tcg_debug_assert(gadget);
+    tcg_debug_assert(!const_c2 && !const_vt && !const_vf);
+    tcti_out_cmp(s, type, c1, c2);
+    tcg_out_gadget(s, (*gadget)[ret][vt][vf]);
+}
+
+static const TCGOutOpMovcond outop_movcond = {
+    .base.static_constraint = C_O1_I4(r, r, r, r, r),
+    .out = tgen_movcond,
+};
+
+/*
+ * Host loads and stores, relative to a register.
+ */
+
+static void tgen_ld8u(TCGContext *s, TCGType type, TCGReg dest,
+                      TCGReg base, intptr_t offset)
+{
+    tcg_out_ldst_gadget(s, gadget_ld8u, dest, base, offset);
+}
+
+static const TCGOutOpLoad outop_ld8u = {
+    .base.static_constraint = C_O1_I1(r, r),
+    .out = tgen_ld8u,
+};
+
+static void tgen_ld8s(TCGContext *s, TCGType type, TCGReg dest,
+                      TCGReg base, intptr_t offset)
+{
+    if (type == TCG_TYPE_I32) {
+        tcg_out_ldst_gadget(s, gadget_ld8s_i32, dest, base, offset);
+    } else {
+        tcg_out_ldst_gadget(s, gadget_ld8s_i64, dest, base, offset);
+    }
+}
+
+static const TCGOutOpLoad outop_ld8s = {
+    .base.static_constraint = C_O1_I1(r, r),
+    .out = tgen_ld8s,
+};
+
+static void tgen_ld16u(TCGContext *s, TCGType type, TCGReg dest,
+                       TCGReg base, intptr_t offset)
+{
+    tcg_out_ldst_gadget(s, gadget_ld16u, dest, base, offset);
+}
+
+static const TCGOutOpLoad outop_ld16u = {
+    .base.static_constraint = C_O1_I1(r, r),
+    .out = tgen_ld16u,
+};
+
+static void tgen_ld16s(TCGContext *s, TCGType type, TCGReg dest,
+                       TCGReg base, intptr_t offset)
+{
+    if (type == TCG_TYPE_I32) {
+        tcg_out_ldst_gadget(s, gadget_ld16s_i32, dest, base, offset);
+    } else {
+        tcg_out_ldst_gadget(s, gadget_ld16s_i64, dest, base, offset);
+    }
+}
+
+static const TCGOutOpLoad outop_ld16s = {
+    .base.static_constraint = C_O1_I1(r, r),
+    .out = tgen_ld16s,
+};
+
+static void tgen_ld32u(TCGContext *s, TCGType type, TCGReg dest,
+                       TCGReg base, intptr_t offset)
+{
+    tcg_out_ldst_gadget(s, gadget_ld32u, dest, base, offset);
+}
+
+static const TCGOutOpLoad outop_ld32u = {
+    .base.static_constraint = C_O1_I1(r, r),
+    .out = tgen_ld32u,
+};
+
+static void tgen_ld32s(TCGContext *s, TCGType type, TCGReg dest,
+                       TCGReg base, intptr_t offset)
+{
+    tcg_out_ldst_gadget(s, gadget_ld32s_i64, dest, base, offset);
+}
+
+static const TCGOutOpLoad outop_ld32s = {
+    .base.static_constraint = C_O1_I1(r, r),
+    .out = tgen_ld32s,
+};
+
+static void tgen_st8(TCGContext *s, TCGType type, TCGReg data,
+                     TCGReg base, intptr_t offset)
+{
+    tcg_out_ldst_gadget(s, gadget_st8, data, base, offset);
+}
+
+static const TCGOutOpStore outop_st8 = {
+    .base.static_constraint = C_O0_I2(r, r),
+    .out_r = tgen_st8,
+};
+
+static void tgen_st16(TCGContext *s, TCGType type, TCGReg data,
+                      TCGReg base, intptr_t offset)
+{
+    tcg_out_ldst_gadget(s, gadget_st16, data, base, offset);
+}
+
+static const TCGOutOpStore outop_st16 = {
+    .base.static_constraint = C_O0_I2(r, r),
+    .out_r = tgen_st16,
+};
 
 /**
  * Generate immediate stores.
@@ -1440,11 +1090,175 @@ static void tcg_out_st(TCGContext *s, TCGType type, TCGReg arg, TCGReg arg1,
     }
 }
 
+static const TCGOutOpStore outop_st = {
+    .base.static_constraint = C_O0_I2(r, r),
+    .out_r = tcg_out_st,
+};
+
 static inline bool tcg_out_sti(TCGContext *s, TCGType type, TCGArg val,
                                TCGReg base, intptr_t ofs)
 {
     return false;
 }
+
+/*
+ * Guest loads and stores.
+ *
+ * Each is one gadget, which looks the address up in the softmmu TLB itself and
+ * calls into C only on a miss. That lookup reads the CPUTLBDescFast at a fixed
+ * offset from env, so there is a gadget per MMU index; see
+ * tcti-gadget-defs.h. Indices without one, and pages other than 4K, take a
+ * gadget that always calls the C helper.
+ *
+ * The "aligned" gadgets check only the page of the first byte, which is right
+ * for single bytes. Everything else uses the "unaligned" ones, which also
+ * check the page of the last byte, so that an access never straddles into a
+ * page the TLB entry does not describe.
+ *
+ * Every gadget is followed by the MemOpIdx, which the slow path passes to the
+ * helper and the fast path steps over.
+ */
+
+#define TCTI_BY_MMU_IDX(prefix, suffix) {                                   \
+    &prefix ## idx0 ## suffix, &prefix ## idx1 ## suffix,                   \
+    &prefix ## idx2 ## suffix, &prefix ## idx3 ## suffix,                   \
+    &prefix ## idx4 ## suffix, &prefix ## idx5 ## suffix,                   \
+}
+
+QEMU_BUILD_BUG_ON(TCTI_TLB_FAST_MMU_INDICES != 6);
+
+#define TCTI_QEMU_LD_BY_SIZE(variant, type) {                               \
+    [MO_UB] = TCTI_BY_MMU_IDX(gadget_qemu_ld_ub_   ## variant ## _, _ ## type), \
+    [MO_SB] = TCTI_BY_MMU_IDX(gadget_qemu_ld_sb_   ## variant ## _, _ ## type), \
+    [MO_UW] = TCTI_BY_MMU_IDX(gadget_qemu_ld_leuw_ ## variant ## _, _ ## type), \
+    [MO_SW] = TCTI_BY_MMU_IDX(gadget_qemu_ld_lesw_ ## variant ## _, _ ## type), \
+    [MO_UL] = TCTI_BY_MMU_IDX(gadget_qemu_ld_leul_ ## variant ## _, _ ## type), \
+    [MO_SL] = TCTI_BY_MMU_IDX(gadget_qemu_ld_lesl_ ## variant ## _, _ ## type), \
+    [MO_UQ] = TCTI_BY_MMU_IDX(gadget_qemu_ld_leq_  ## variant ## _, _ ## type), \
+}
+
+#define TCTI_QEMU_LD_SLOW(type) {                                           \
+    [MO_UB] = &gadget_qemu_ld_ub_slowpath_any_   ## type,                   \
+    [MO_SB] = &gadget_qemu_ld_sb_slowpath_any_   ## type,                   \
+    [MO_UW] = &gadget_qemu_ld_leuw_slowpath_any_ ## type,                   \
+    [MO_SW] = &gadget_qemu_ld_lesw_slowpath_any_ ## type,                   \
+    [MO_UL] = &gadget_qemu_ld_leul_slowpath_any_ ## type,                   \
+    [MO_SL] = &gadget_qemu_ld_lesl_slowpath_any_ ## type,                   \
+    [MO_UQ] = &gadget_qemu_ld_leq_slowpath_any_  ## type,                   \
+}
+
+#define TCTI_QEMU_ST_BY_SIZE(variant, type) {                               \
+    [MO_8]  = TCTI_BY_MMU_IDX(gadget_qemu_st_ub_   ## variant ## _, _ ## type), \
+    [MO_16] = TCTI_BY_MMU_IDX(gadget_qemu_st_leuw_ ## variant ## _, _ ## type), \
+    [MO_32] = TCTI_BY_MMU_IDX(gadget_qemu_st_leul_ ## variant ## _, _ ## type), \
+    [MO_64] = TCTI_BY_MMU_IDX(gadget_qemu_st_leq_  ## variant ## _, _ ## type), \
+}
+
+#define TCTI_QEMU_ST_SLOW(type) {                                           \
+    [MO_8]  = &gadget_qemu_st_ub_slowpath_any_   ## type,                   \
+    [MO_16] = &gadget_qemu_st_leuw_slowpath_any_ ## type,                   \
+    [MO_32] = &gadget_qemu_st_leul_slowpath_any_ ## type,                   \
+    [MO_64] = &gadget_qemu_st_leq_slowpath_any_  ## type,                   \
+}
+
+/* Indexed [is_aligned][is_i64][memop & MO_SSIZE][mmu_idx]. */
+static TCTIGadget2 *const tcti_qemu_ld_fast[2][2][MO_SSIZE + 1][TCTI_TLB_FAST_MMU_INDICES] = {
+    { TCTI_QEMU_LD_BY_SIZE(unaligned, i32), TCTI_QEMU_LD_BY_SIZE(unaligned, i64) },
+    { TCTI_QEMU_LD_BY_SIZE(aligned, i32),   TCTI_QEMU_LD_BY_SIZE(aligned, i64) },
+};
+
+/* Indexed [is_i64][memop & MO_SSIZE]. */
+static TCTIGadget2 *const tcti_qemu_ld_slow[2][MO_SSIZE + 1] = {
+    TCTI_QEMU_LD_SLOW(i32), TCTI_QEMU_LD_SLOW(i64),
+};
+
+/* Indexed [is_aligned][is_i64][memop & MO_SIZE][mmu_idx]. */
+static TCTIGadget2 *const tcti_qemu_st_fast[2][2][MO_64 + 1][TCTI_TLB_FAST_MMU_INDICES] = {
+    { TCTI_QEMU_ST_BY_SIZE(unaligned, i32), TCTI_QEMU_ST_BY_SIZE(unaligned, i64) },
+    { TCTI_QEMU_ST_BY_SIZE(aligned, i32),   TCTI_QEMU_ST_BY_SIZE(aligned, i64) },
+};
+
+/* Indexed [is_i64][memop & MO_SIZE]. */
+static TCTIGadget2 *const tcti_qemu_st_slow[2][MO_64 + 1] = {
+    TCTI_QEMU_ST_SLOW(i32), TCTI_QEMU_ST_SLOW(i64),
+};
+
+/*
+ * Whether a TLB fast-path gadget can serve this access. The gadgets hard-code
+ * 4K pages and 32-byte TLB entries in their index and comparison arithmetic.
+ */
+static bool tcti_has_fast_path(TCGContext *s, unsigned mmu_idx)
+{
+    if (mmu_idx >= TCTI_TLB_FAST_MMU_INDICES ||
+        TARGET_PAGE_BITS != 12 || CPU_TLB_ENTRY_BITS != 5) {
+        return false;
+    }
+    tcg_debug_assert(tlb_mask_table_ofs(s, mmu_idx) == TCTI_TLB_FAST_OFS(mmu_idx));
+    return true;
+}
+
+static void tgen_qemu_ld(TCGContext *s, TCGType type, TCGReg data,
+                         TCGReg addr, MemOpIdx oi)
+{
+    MemOp opc = get_memop(oi);
+    unsigned mmu_idx = get_mmuidx(oi);
+    bool is_i64 = (type == TCG_TYPE_I64);
+    TCTIGadget2 *gadget;
+
+    /* tcg_target_has_memory_bswap() says no, so TCG swaps separately. */
+    tcg_debug_assert(!(opc & MO_BSWAP));
+
+    if (tcti_has_fast_path(s, mmu_idx)) {
+        bool is_aligned = (opc & MO_SIZE) == MO_8;
+        gadget = tcti_qemu_ld_fast[is_aligned][is_i64][opc & MO_SSIZE][mmu_idx];
+    } else {
+        gadget = tcti_qemu_ld_slow[is_i64][opc & MO_SSIZE];
+    }
+    tcg_debug_assert(gadget);
+
+    tcg_out_gadget(s, (*gadget)[data][addr]);
+    tcg_out64(s, oi);
+}
+
+static const TCGOutOpQemuLdSt outop_qemu_ld = {
+    .base.static_constraint = C_O1_I1(r, r),
+    .out = tgen_qemu_ld,
+};
+
+static const TCGOutOpQemuLdSt2 outop_qemu_ld2 = {
+    .base.static_constraint = C_NotImplemented,
+};
+
+static void tgen_qemu_st(TCGContext *s, TCGType type, TCGReg data,
+                         TCGReg addr, MemOpIdx oi)
+{
+    MemOp opc = get_memop(oi);
+    unsigned mmu_idx = get_mmuidx(oi);
+    bool is_i64 = (type == TCG_TYPE_I64);
+    TCTIGadget2 *gadget;
+
+    tcg_debug_assert(!(opc & MO_BSWAP));
+
+    if (tcti_has_fast_path(s, mmu_idx)) {
+        bool is_aligned = (opc & MO_SIZE) == MO_8;
+        gadget = tcti_qemu_st_fast[is_aligned][is_i64][opc & MO_SIZE][mmu_idx];
+    } else {
+        gadget = tcti_qemu_st_slow[is_i64][opc & MO_SIZE];
+    }
+    tcg_debug_assert(gadget);
+
+    tcg_out_gadget(s, (*gadget)[data][addr]);
+    tcg_out64(s, oi);
+}
+
+static const TCGOutOpQemuLdSt outop_qemu_st = {
+    .base.static_constraint = C_O0_I2(r, r),
+    .out = tgen_qemu_st,
+};
+
+static const TCGOutOpQemuLdSt2 outop_qemu_st2 = {
+    .base.static_constraint = C_NotImplemented,
+};
 
 /* Test if a constant matches the constraint. */
 static bool tcg_target_const_match(int64_t val, int ct,
@@ -1484,7 +1298,7 @@ static void tcg_out_nop_fill(tcg_insn_unit *p, int count)
     }
 
 #define tcg_out_unary_dq_gadget(s, name, is_q, a) \
-    tcg_out_dq_gadget(s, name, unary, is_q, a) 
+    tcg_out_dq_gadget(s, name, unary, is_q, a)
 #define tcg_out_binary_dq_gadget(s, name, is_q, a, b) \
     tcg_out_dq_gadget(s, name, binary, is_q, a, b)
 #define tcg_out_ternary_dq_gadget(s, name, is_q, a, b, c) \
@@ -1527,7 +1341,7 @@ static void tcg_out_nop_fill(tcg_insn_unit *p, int count)
             break;  \
         default: \
             g_assert_not_reached(); \
-    } 
+    }
 #define tcg_out_sized_vector_gadget_no64(s, name, arity, vece, args...) \
     switch(vece) { \
         case MO_8: \
@@ -1553,7 +1367,7 @@ static void tcg_out_nop_fill(tcg_insn_unit *p, int count)
             break; \
         default: \
             g_assert_not_reached(); \
-    } 
+    }
 
 
 #define tcg_out_unary_vector_gadget(s, name, vece, a) \
@@ -1629,7 +1443,7 @@ static void tcg_out_vec_op(TCGContext *s, TCGOpcode opc, unsigned vecl, unsigned
         tcg_out_binary_dq_gadget(s, ldr, is_v128, w0, r1);
         tcg_out64(s, signed_offset_arg);
         break;
-    
+
     // Store memory -> vector: followed by a 64-bit offset immediate
     case INDEX_op_st_vec:
         tcg_out_binary_dq_gadget(s, str, is_v128, w0, r1);
@@ -1981,42 +1795,6 @@ static bool tcg_out_optimized_dupi_vec(TCGContext *s, TCGType type, unsigned vec
 
     // FIXME: implement 32B move optimizations
 
-     
-    // Try to create optimized 32B moves.
-    //else if (vece == MO_32) {
-    //    uint32_t v32 = v64;
-    //    uint32_t n32 = ~v32;
-
-    //    if (is_shimm32(v32, &cmode, &imm8) ||
-    //        is_soimm32(v32, &cmode, &imm8) ||
-    //        is_fimm32(v32, &cmode, &imm8)) {
-    //        tcg_out_insn(s, 3606, MOVI, q, rd, 0, cmode, imm8);
-    //        return;
-    //    }
-    //    if (is_shimm32(n32, &cmode, &imm8) ||
-    //        is_soimm32(n32, &cmode, &imm8)) {
-    //        tcg_out_insn(s, 3606, MVNI, q, rd, 0, cmode, imm8);
-    //        return;
-    //    }
-
-    //    //
-    //    // Restrict the set of constants to those we can load with
-    //    // two instructions.  Others we load from the pool.
-    //    //
-    //    i = is_shimm32_pair(v32, &cmode, &imm8);
-    //    if (i) {
-    //        tcg_out_insn(s, 3606, MOVI, q, rd, 0, cmode, imm8);
-    //        tcg_out_insn(s, 3606, ORR, q, rd, 0, i, extract32(v32, i * 4, 8));
-    //        return;
-    //    }
-    //    i = is_shimm32_pair(n32, &cmode, &imm8);
-    //    if (i) {
-    //        tcg_out_insn(s, 3606, MVNI, q, rd, 0, cmode, imm8);
-    //        tcg_out_insn(s, 3606, BIC, q, rd, 0, i, extract32(n32, i * 4, 8));
-    //        return;
-    //    }
-    //} 
-
     return false;
 }
 
@@ -2130,9 +1908,13 @@ static void tcg_out_tb_start(TCGContext *s)
     /* nothing to do */
 }
 
+/*
+ * The qemu_ld/st gadgets do not byte-swap, so have TCG do it around them. Only
+ * a big-endian access asks, which for an x86 guest means MOVBE.
+ */
 bool tcg_target_has_memory_bswap(MemOp memop)
 {
-    return true;
+    return false;
 }
 
 /**
@@ -2187,8 +1969,9 @@ uintptr_t QEMU_DISABLE_CFI tcg_qemu_tb_exec(CPUArchState *env, const void *v_tb_
         : "x0", "x1",  "x2",  "x3",  "x4",  "x5",  "x6",  "x7",
           "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15",
 
-        // We also use x26/x27 for temporary values, and x28 as our bytecode poitner.
-        "x25", "x26", "x27", "x28", "cc", "memory"
+        // We also use x24, x26 and x27 for temporary values, x25 for the
+        // return address mirror, and x28 as our bytecode pointer.
+        "x24", "x25", "x26", "x27", "x28", "cc", "memory"
     );
 
     return return_value;
@@ -2229,11 +2012,11 @@ int print_insn_tcti(bfd_vma addr, disassemble_info *info)
         symbol_name[sizeof(symbol_name) - 1] = 0;
         info->fprintf_func(info->stream, "%s", symbol_name);
     } else {
-        info->fprintf_func(info->stream, "%016lx", block);
+        info->fprintf_func(info->stream, "%016" PRIx64, block);
     }
 
 #else
-    info->fprintf_func(info->stream, "%016lx", block);
+    info->fprintf_func(info->stream, "%016" PRIx64, block);
 #endif
 
     return sizeof(block);
