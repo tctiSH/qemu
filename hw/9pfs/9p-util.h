@@ -100,6 +100,41 @@ static inline int errno_to_dotl(int err) {
 }
 
 #ifdef CONFIG_DARWIN
+/*
+ * Let the 9p server follow symlinks out of the export.
+ *
+ * tctiSH mounts an iOS folder by creating a symlink to it at the root of the
+ * shared folder (QEMUInterface.mount()), and the guest reaches it through the
+ * one export it already has. Upstream refuses to follow that: every path
+ * component is resolved with O_NOFOLLOW, and local_lstat() reports with
+ * AT_SYMLINK_NOFOLLOW, so the guest is handed a symlink naming an absolute iOS
+ * path that means nothing inside the VM -- a broken link, and no way through.
+ * Clearing the three flags makes the server resolve it instead, so the guest
+ * sees the directory the link points at, which is what the whole mount feature
+ * depends on.
+ *
+ * This is the symlink-escape protection, and turning it off is not free: a
+ * symlink *the guest creates* is now followed too, so the guest can name
+ * anything the app process can open rather than being confined to the shared
+ * folder. What makes that bearable here and not in general is that the guest
+ * is not a separate principal -- whoever runs it already owns the app and its
+ * container -- and the container is most of what is reachable anyway.
+ *
+ * The real fix is the one the mount code was originally written for: a 9p
+ * device per mounted folder, added live over the monitor, which is what
+ * scan_for_new_virtfs_channels() in tctictl is still rescanning PCI for. That
+ * needs the fsdev_add monitor command this fork used to carry, and it would let
+ * this come back out.
+ *
+ * Contained to hw/9pfs: nothing outside it includes this header.
+ */
+#undef XATTR_NOFOLLOW
+#define XATTR_NOFOLLOW 0
+#undef O_NOFOLLOW
+#define O_NOFOLLOW 0
+#undef AT_SYMLINK_NOFOLLOW
+#define AT_SYMLINK_NOFOLLOW 0
+
 #define qemu_fgetxattr(...) fgetxattr(__VA_ARGS__, 0, 0)
 #else
 #define qemu_fgetxattr fgetxattr
