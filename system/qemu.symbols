@@ -1,0 +1,11 @@
+{
+  qemu_init;
+  qemu_main_loop;
+  qemu_cleanup;
+  bql_lock_impl;
+  bql_unlock;
+  g_assertion_message_expr;
+  qemu_thread_create;
+  replay_mutex_lock;
+  replay_mutex_unlock;
+};

@@ -65,6 +65,8 @@ option('tools', type : 'feature', value : 'auto',
        description: 'build support utilities that come with QEMU')
 option('qga_vss', type : 'feature', value: 'auto',
        description: 'build QGA VSS support (broken with MinGW)')
+option('shared_lib', type: 'boolean', value: false,
+       description: 'Build QEMU as a shared library')
 
 option('malloc_trim', type : 'feature', value : 'auto',
        description: 'enable libc malloc_trim() for memory optimization')
