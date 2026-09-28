@@ -4542,6 +4542,11 @@ endif
 
 if have_tools
   tools_link_args = enable_modules ? ['@block.syms'] : []
+  if get_option('shared_lib')
+    qemu_img_lib = shared_library('qemu-img', [files('qemu-img.c'), hxdep],
+             link_args: tools_link_args, link_depends: block_syms,
+             dependencies: [authz, block, crypto, io, qom, qemuutil], install: true)
+  endif
   qemu_img = executable('qemu-img', [files('qemu-img.c'), hxdep],
              link_args: tools_link_args, link_depends: block_syms,
              dependencies: [authz, block, crypto, io, qom, qemuutil], install: true)
