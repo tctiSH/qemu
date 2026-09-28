@@ -28,6 +28,31 @@
 #include "trace.h"
 #include "disas/disas.h"
 #include "exec/cpu-interrupt.h"
+
+/*
+ * The state a TB is looked up by, which is asked for on every lookup --
+ * including helper_lookup_tb_ptr(), which generated code calls on every
+ * indirect jump.
+ *
+ * Common code can only reach it through the TCGCPUOps hook, and QEMU 10.1
+ * made that the only way: the call, and a struct returned through memory, on
+ * that path cost 6-9% on branchy guest code (an interpreter, gzip) under the
+ * native JIT. Where this file is compiled for one target that can supply the
+ * state inline, it does.
+ */
+#if defined(COMPILING_PER_TARGET) && defined(TARGET_I386)
+#include "tcg/tb-cpu-state.h"
+
+static inline TCGTBCPUState tb_cpu_state(CPUState *cpu)
+{
+    return x86_tb_cpu_state(cpu);
+}
+#else
+static inline TCGTBCPUState tb_cpu_state(CPUState *cpu)
+{
+    return cpu->cc->tcg_ops->get_tb_cpu_state(cpu);
+}
+#endif
 #include "exec/page-protection.h"
 #include "exec/mmap-lock.h"
 #include "exec/translation-block.h"
@@ -389,7 +414,7 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
      */
     cpu->neg.can_do_io = true;
 
-    TCGTBCPUState s = cpu->cc->tcg_ops->get_tb_cpu_state(cpu);
+    TCGTBCPUState s = tb_cpu_state(cpu);
     s.cflags = curr_cflags(cpu);
 
     if (check_for_breakpoints(cpu, s.pc, &s.cflags)) {
@@ -561,7 +586,7 @@ void cpu_exec_step_atomic(CPUState *cpu)
         g_assert(!cpu->running);
         cpu->running = true;
 
-        TCGTBCPUState s = cpu->cc->tcg_ops->get_tb_cpu_state(cpu);
+        TCGTBCPUState s = tb_cpu_state(cpu);
         s.cflags = curr_cflags(cpu);
 
         /* Execute in a serial context. */
@@ -947,7 +972,7 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
 
         while (!cpu_handle_interrupt(cpu, &last_tb)) {
             TranslationBlock *tb;
-            TCGTBCPUState s = cpu->cc->tcg_ops->get_tb_cpu_state(cpu);
+            TCGTBCPUState s = tb_cpu_state(cpu);
             s.cflags = cpu->cflags_next_tb;
 
             /*
