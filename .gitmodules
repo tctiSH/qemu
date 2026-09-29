@@ -1,47 +1,62 @@
 [submodule "roms/seabios"]
 	path = roms/seabios
 	url = https://gitlab.com/qemu-project/seabios.git/
+	update = none
 [submodule "roms/SLOF"]
 	path = roms/SLOF
 	url = https://gitlab.com/qemu-project/SLOF.git
+	update = none
 [submodule "roms/ipxe"]
 	path = roms/ipxe
 	url = https://gitlab.com/qemu-project/ipxe.git
+	update = none
 [submodule "roms/openbios"]
 	path = roms/openbios
 	url = https://gitlab.com/qemu-project/openbios.git
+	update = none
 [submodule "roms/qemu-palcode"]
 	path = roms/qemu-palcode
 	url = https://gitlab.com/qemu-project/qemu-palcode.git
+	update = none
 [submodule "roms/u-boot"]
 	path = roms/u-boot
         # upstream is https://github.com/u-boot/u-boot
 	url = https://gitlab.com/qemu-project/u-boot.git
+	update = none
 [submodule "roms/skiboot"]
 	path = roms/skiboot
 	url = https://gitlab.com/qemu-project/skiboot.git
+	update = none
 [submodule "roms/QemuMacDrivers"]
 	path = roms/QemuMacDrivers
 	url = https://gitlab.com/qemu-project/QemuMacDrivers.git
+	update = none
 [submodule "roms/seabios-hppa"]
 	path = roms/seabios-hppa
 	url = https://gitlab.com/qemu-project/seabios-hppa.git
+	update = none
 [submodule "roms/u-boot-sam460ex"]
 	path = roms/u-boot-sam460ex
         # upstream is https://github.com/zbalaton/u-boot-sam460ex
 	url = https://gitlab.com/qemu-project/u-boot-sam460ex.git
+	update = none
 [submodule "roms/edk2"]
 	path = roms/edk2
 	url = https://gitlab.com/qemu-project/edk2.git
+	update = none
 [submodule "roms/opensbi"]
 	path = roms/opensbi
 	url = 	https://gitlab.com/qemu-project/opensbi.git
+	update = none
 [submodule "roms/qboot"]
 	path = roms/qboot
 	url = https://gitlab.com/qemu-project/qboot.git
+	update = none
 [submodule "roms/vbootrom"]
 	path = roms/vbootrom
 	url = https://gitlab.com/qemu-project/vbootrom.git
+	update = none
 [submodule "tests/lcitool/libvirt-ci"]
 	path = tests/lcitool/libvirt-ci
 	url = https://gitlab.com/libvirt/libvirt-ci.git
+	update = none
