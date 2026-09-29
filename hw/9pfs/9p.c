@@ -34,6 +34,8 @@
 #include "coth.h"
 #include "trace.h"
 #include "migration/blocker.h"
+#include "migration/qemu-file-types.h"
+#include "migration/vmstate.h"
 #include "qemu/xxhash.h"
 #include <math.h>
 
@@ -4541,6 +4543,206 @@ void v9fs_device_unrealize_common(V9fsState *s)
     g_free(s->ctx.fs_root);
     s->transport = NULL;
 }
+
+/*
+ * The 9p session, carried across a snapshot.
+ *
+ * Everything the guest negotiated with this server lives here and not in the
+ * guest's RAM: the protocol and msize from Tversion, and the fid table the
+ * guest's mounts are built on. Upstream never saves any of it, because a
+ * mounted export blocks migration. tctiSH drops that blocker (see
+ * v9fs_attach()) to snapshot and resume the same VM against the same export,
+ * so a resume in a new process would otherwise start with none of it. The
+ * guest's first request then names a fid the server has never heard of, and
+ * the error reply is built for 9P2000.u -- an Rerror carrying a string --
+ * because proto_version was never set. That does not fit the reply buffer the
+ * 9P2000.L client sized for the request, the encode fails, and virtio_error()
+ * takes the share down for the rest of the session.
+ *
+ * Fids come back the way v9fs_reclaim_fd() leaves them: path and open flags
+ * kept, no host fd or directory stream. get_fid() already reopens a fid in
+ * that state on its next use, so files the guest had open carry on. The open
+ * flags lose O_CREAT, O_EXCL and O_TRUNC, which described the original open
+ * and must not happen again. They are host values, which is fine: a snapshot
+ * is only ever loaded on the host that took it.
+ *
+ * Not carried: xattr fids, which hold a transfer in progress in memory, and
+ * files and directories removed while open, which a reopen by path would not
+ * find, or would find something else created there since. The guest gets an
+ * error using either afterwards, which is what it would get from any server
+ * that restarted.
+ *
+ * A directory listing in progress across a resume can repeat entries on
+ * Darwin, where a readdir offset is a telldir() cookie that only the stream it
+ * came from can seek to. Upstream's fd reclaim has the same limit there.
+ */
+static bool v9fs_session_carries(V9fsState *s, V9fsFidState *fidp)
+{
+    struct stat stbuf;
+
+    switch (fidp->fid_type) {
+    case P9_FID_NONE:
+        return true;
+    case P9_FID_FILE:
+        /*
+         * Reclaimed, so still linked: v9fs_mark_fids_unreclaim() reopens
+         * every fid on a path before it is removed.
+         */
+        if (fidp->fs.fd == -1) {
+            return true;
+        }
+        break;
+    case P9_FID_DIR:
+        if (fidp->fs.dir.stream == NULL) {
+            return true;
+        }
+        break;
+    default:
+        return false;
+    }
+    return s->ops->fstat(&s->ctx, fidp->fid_type, &fidp->fs, &stbuf) == 0 &&
+           stbuf.st_nlink > 0;
+}
+
+static bool v9fs_session_save(QEMUFile *f, void *pv, size_t size,
+                              const VMStateField *field, JSONWriter *vmdesc,
+                              Error **errp)
+{
+    V9fsState *s = pv;
+    g_autoptr(GPtrArray) carried = g_ptr_array_new();
+    GHashTableIter iter;
+    V9fsFidState *fidp;
+    guint i;
+
+    qemu_put_be32(f, s->proto_version);
+    qemu_put_be32(f, s->msize);
+    qemu_put_be32(f, s->root_fid);
+
+    /* Decided once, as a file can be removed between two looks. */
+    g_hash_table_iter_init(&iter, s->fids);
+    while (g_hash_table_iter_next(&iter, NULL, (gpointer *)&fidp)) {
+        if (v9fs_session_carries(s, fidp)) {
+            g_ptr_array_add(carried, fidp);
+        }
+    }
+    qemu_put_be32(f, carried->len);
+
+    for (i = 0; i < carried->len; i++) {
+        fidp = g_ptr_array_index(carried, i);
+        qemu_put_be32(f, fidp->fid);
+        qemu_put_be32(f, fidp->fid_type);
+        qemu_put_be32(f, fidp->open_flags);
+        qemu_put_be32(f, fidp->uid);
+        qemu_put_be32(f, fidp->path.size);
+        qemu_put_buffer(f, (const uint8_t *)fidp->path.data, fidp->path.size);
+    }
+    return true;
+}
+
+static bool v9fs_session_load(QEMUFile *f, void *pv, size_t size,
+                              const VMStateField *field, Error **errp)
+{
+    V9fsState *s = pv;
+    uint32_t proto_version, count, i;
+    int32_t msize, root_fid;
+    V9fsPath root;
+    bool restore;
+
+    proto_version = qemu_get_be32(f);
+    msize = qemu_get_be32(f);
+    root_fid = qemu_get_be32(f);
+    count = qemu_get_be32(f);
+
+    if (proto_version != V9FS_PROTO_2000U &&
+        proto_version != V9FS_PROTO_2000L) {
+        error_setg(errp, "9p session has unknown protocol %u", proto_version);
+        return false;
+    }
+
+    /*
+     * A device that already has fids is running a session of its own -- a
+     * loadvm into the process that is still serving it -- and its fids have
+     * host fds behind them that requests may be using. Leave that session
+     * alone. The stream is still read to its end.
+     */
+    restore = g_hash_table_size(s->fids) == 0;
+    if (restore) {
+        s->proto_version = proto_version;
+        s->msize = msize;
+        s->root_fid = root_fid;
+    }
+
+    for (i = 0; i < count; i++) {
+        int32_t fid = qemu_get_be32(f);
+        int32_t fid_type = qemu_get_be32(f);
+        int32_t open_flags = qemu_get_be32(f);
+        uid_t uid = qemu_get_be32(f);
+        uint32_t path_size = qemu_get_be32(f);
+        V9fsFidState *fidp;
+        char *path;
+
+        if (path_size == 0 || path_size > UINT16_MAX) {
+            error_setg(errp, "9p fid %d has a path of %u bytes", fid,
+                       path_size);
+            return false;
+        }
+        path = g_malloc(path_size);
+        qemu_get_buffer(f, (uint8_t *)path, path_size);
+        if (path[path_size - 1] != '\0' ||
+            (fid_type != P9_FID_NONE && fid_type != P9_FID_FILE &&
+             fid_type != P9_FID_DIR)) {
+            error_setg(errp, "9p fid %d is malformed", fid);
+            g_free(path);
+            return false;
+        }
+        if (!restore) {
+            g_free(path);
+            continue;
+        }
+
+        fidp = alloc_fid(s, fid);
+        if (!fidp) {
+            error_setg(errp, "9p fid %d appears twice", fid);
+            g_free(path);
+            return false;
+        }
+        fidp->fid_type = fid_type;
+        fidp->open_flags = open_flags & ~(O_CREAT | O_EXCL | O_TRUNC);
+        fidp->uid = uid;
+        fidp->path.data = path;
+        fidp->path.size = path_size;
+        if (fid_type == P9_FID_FILE) {
+            fidp->fs.fd = -1;
+        }
+        /* Nothing holds it: alloc_fid() takes a reference for its caller. */
+        fidp->ref = 0;
+    }
+
+    if (!restore) {
+        return true;
+    }
+
+    /*
+     * v9fs_walk() compares against root_st to keep ".." from leaving the
+     * export, so it has to be what v9fs_attach() would have set. Taken afresh
+     * rather than carried, as a device number need not survive a reboot.
+     */
+    v9fs_path_init(&root);
+    if (s->ops->name_to_path(&s->ctx, NULL, "/", &root) < 0 ||
+        s->ops->lstat(&s->ctx, &root, &s->root_st) < 0) {
+        error_setg_errno(errp, errno, "9p export root cannot be read");
+        v9fs_path_free(&root);
+        return false;
+    }
+    v9fs_path_free(&root);
+    return true;
+}
+
+const VMStateInfo vmstate_info_v9fs_session = {
+    .name = "v9fs-session",
+    .load = v9fs_session_load,
+    .save = v9fs_session_save,
+};
 
 typedef struct VirtfsCoResetData {
     V9fsPDU pdu;

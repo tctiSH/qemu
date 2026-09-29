@@ -24,10 +24,14 @@
 #include "coth.h"
 #include "hw/core/qdev-properties.h"
 #include "hw/virtio/virtio-access.h"
+#include "qapi/error.h"
 #include "qemu/iov.h"
+#include "qemu/main-loop.h"
 #include "qemu/module.h"
 #include "system/qtest.h"
 #include "migration/qemu-file-types.h"
+#include "migration/vmstate.h"
+#include "system/runstate.h"
 
 static void coroutine_fn virtio_9p_push_and_notify(V9fsPDU *pdu)
 {
@@ -51,6 +55,11 @@ static void handle_9p_output(VirtIODevice *vdev, VirtQueue *vq)
     V9fsPDU *pdu;
     ssize_t len;
     VirtQueueElement *elem;
+
+    /* Left in the ring until the VM runs again; see virtio_9p_vm_change(). */
+    if (v->stopped) {
+        return;
+    }
 
     while ((pdu = pdu_alloc(s))) {
         P9MsgHeader out;
@@ -111,10 +120,13 @@ static void virtio_9p_get_config(VirtIODevice *vdev, uint8_t *config)
     g_free(cfg);
 }
 
+static void virtio_9p_drop_resubmit(V9fsVirtioState *v);
+
 static void virtio_9p_reset(VirtIODevice *vdev)
 {
     V9fsVirtioState *v = (V9fsVirtioState *)vdev;
 
+    virtio_9p_drop_resubmit(v);
     v9fs_reset(&v->state);
 }
 
@@ -220,6 +232,253 @@ static const V9fsTransport virtio_9p_transport = {
     .response_buffer_size = virtio_9p_response_buffer_size,
 };
 
+/*
+ * The requests that were in flight when the snapshot was taken.
+ *
+ * VMSTATE_VIRTIO_DEVICE carries the queue itself -- indices, features, config
+ * -- but not `elems`, which is this device's own record of the
+ * VirtQueueElements it has popped and not yet pushed back. The queue's indices
+ * say the device has taken those requests, so the guest will never offer them
+ * again: without them it waits for replies the host has forgotten it owes.
+ *
+ * Upstream does not need this because upstream does not get here: a 9p export
+ * installs a migration blocker (see v9fs_attach(), where tctiSH removes it).
+ *
+ * A VirtQueueElement is not a plain struct -- qemu_put_virtqueue_element()
+ * writes the guest addresses and lengths it was built from, and the loader
+ * re-maps them -- so the array has its own VMStateInfo.
+ */
+static bool virtio_9p_elems_save(QEMUFile *f, void *pv, size_t size,
+                                 const VMStateField *field, JSONWriter *vmdesc,
+                                 Error **errp)
+{
+    V9fsVirtioState *v = container_of(pv, V9fsVirtioState, elems);
+    unsigned i;
+
+    for (i = 0; i < MAX_REQ; i++) {
+        if (v->elems[i] == NULL) {
+            qemu_put_be32(f, 0);
+        } else {
+            qemu_put_be32(f, 1);
+            qemu_put_virtqueue_element(VIRTIO_DEVICE(v), f, v->elems[i]);
+        }
+    }
+    return true;
+}
+
+/*
+ * Takes PDU `i` off the free list for a restored request. A PDU's index is its
+ * slot in elems[], so until the restored request has run no new request may be
+ * given the same one.
+ */
+static bool virtio_9p_claim_pdu(V9fsState *s, unsigned i)
+{
+    V9fsPDU *pdu;
+
+    QLIST_FOREACH(pdu, &s->free_list, next) {
+        if (pdu->idx == i) {
+            QLIST_REMOVE(pdu, next);
+            QLIST_INSERT_HEAD(&s->active_list, pdu, next);
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool virtio_9p_elems_load(QEMUFile *f, void *pv, size_t size,
+                                 const VMStateField *field, Error **errp)
+{
+    V9fsVirtioState *v = container_of(pv, V9fsVirtioState, elems);
+    unsigned i;
+
+    for (i = 0; i < MAX_REQ; i++) {
+        VirtQueueElement *elem;
+
+        if (!qemu_get_be32(f)) {
+            continue;
+        }
+        elem = qemu_get_virtqueue_element(VIRTIO_DEVICE(v), f,
+                                          sizeof(VirtQueueElement));
+
+        /*
+         * Still being served: this is a load into the process that saved it,
+         * as `unpark` does, and the request is the same one, outlasting the
+         * stop's drain. It will answer for itself.
+         */
+        if (v->elems[i]) {
+            g_free(elem);
+            continue;
+        }
+        if (!virtio_9p_claim_pdu(&v->state, i)) {
+            error_setg(errp, "virtio-9p request slot %u is in use", i);
+            g_free(elem);
+            return false;
+        }
+        v->elems[i] = elem;
+        v->resubmit[i] = true;
+    }
+    return true;
+}
+
+static const VMStateInfo vmstate_info_virtio_9p_elems = {
+    .name = "virtio-9p-elems",
+    .load = virtio_9p_elems_load,
+    .save = virtio_9p_elems_save,
+};
+
+/*
+ * Once the VM runs again: the restored requests, then whatever the guest queued
+ * while it was stopped.
+ *
+ * Nothing answers restored requests otherwise: the 9p core only ever sees a
+ * request through handle_9p_output(), which pops new ones. They run from
+ * scratch, which is safe because none of them had replied, and the server
+ * state they refer to -- fids, above all -- is restored with them.
+ */
+static void virtio_9p_resubmit(V9fsVirtioState *v, bool flushes)
+{
+    unsigned i;
+
+    for (i = 0; i < MAX_REQ; i++) {
+        V9fsPDU *pdu = &v->state.pdus[i];
+        VirtQueueElement *elem = v->elems[i];
+        P9MsgHeader out;
+
+        if (!v->resubmit[i]) {
+            continue;
+        }
+        if (iov_to_buf(elem->out_sg, elem->out_num, 0, &out, 7) != 7) {
+            v->resubmit[i] = false;
+            virtio_error(VIRTIO_DEVICE(v), "A restored VirtFS request is "
+                         "malformed");
+            virtqueue_detach_element(v->vq, elem, 0);
+            g_free(elem);
+            v->elems[i] = NULL;
+            pdu_free(pdu);
+            continue;
+        }
+        if ((out.id == P9_TFLUSH) != flushes) {
+            continue;
+        }
+        v->resubmit[i] = false;
+        pdu_submit(pdu, &out);
+    }
+}
+
+static void virtio_9p_resume(void *opaque)
+{
+    V9fsVirtioState *v = opaque;
+
+    /* Stopped again before this ran: the next start schedules it again. */
+    if (!runstate_is_running()) {
+        return;
+    }
+
+    /*
+     * A Tflush finds the request it cancels by tag among the active PDUs,
+     * which a restored request only has once submitted. So flushes go last,
+     * and nothing new is taken off the queue until all of them have gone.
+     * Otherwise a flush could answer before the request it cancels is running
+     * again, and that request's reply would then reach a tag the guest has
+     * already reused.
+     */
+    virtio_9p_resubmit(v, false);
+    virtio_9p_resubmit(v, true);
+    v->stopped = false;
+
+    handle_9p_output(VIRTIO_DEVICE(v), v->vq);
+}
+
+/* Whether a request is being served, rather than waiting to be resubmitted. */
+static bool virtio_9p_busy(V9fsVirtioState *v)
+{
+    V9fsPDU *pdu;
+
+    QLIST_FOREACH(pdu, &v->state.active_list, next) {
+        if (!v->resubmit[pdu->idx]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void virtio_9p_drain_wake(void *opaque)
+{
+}
+
+/*
+ * How long a stop waits for the requests being served. Local files answer in
+ * milliseconds, so this is only reached by something like a throttled fsdev,
+ * and then the requests left are saved and run again after a resume.
+ */
+#define VIRTIO_9P_DRAIN_MS 2000
+
+static void virtio_9p_drain(V9fsVirtioState *v)
+{
+    AioContext *ctx = qemu_get_aio_context();
+    int64_t deadline = qemu_clock_get_ms(QEMU_CLOCK_REALTIME) +
+                       VIRTIO_9P_DRAIN_MS;
+    QEMUTimer *wake = aio_timer_new(ctx, QEMU_CLOCK_REALTIME, SCALE_MS,
+                                    virtio_9p_drain_wake, NULL);
+
+    /* The timer only wakes aio_poll(), so a stuck request cannot hold it. */
+    timer_mod(wake, deadline);
+    while (virtio_9p_busy(v) &&
+           qemu_clock_get_ms(QEMU_CLOCK_REALTIME) < deadline) {
+        aio_poll(ctx, true);
+    }
+    timer_free(wake);
+}
+
+/*
+ * Quiesces the device while the VM is stopped, which is when it is saved.
+ *
+ * A request still being served when the save runs can finish during it: its
+ * completion runs from the main AioContext, which the save itself polls while
+ * writing the stream. Its reply would then land in guest RAM that has already
+ * been saved, while the queue state saved after it says it was answered. So a
+ * stop first lets the requests being served finish, and then takes no new ones
+ * off the queue until the VM runs again. Requests the guest queues meanwhile
+ * stay in its ring, which the snapshot captures consistently as guest RAM.
+ */
+static void virtio_9p_vm_change(void *opaque, bool running, RunState state)
+{
+    V9fsVirtioState *v = opaque;
+
+    if (!running) {
+        v->stopped = true;
+        virtio_9p_drain(v);
+        return;
+    }
+
+    /*
+     * Scheduled rather than run here: vm_start() calls this before the vCPUs
+     * resume, and a request can complete, and notify the guest, before
+     * pdu_submit() returns. The device stays stopped until it has run.
+     */
+    qemu_bh_schedule(v->resume_bh);
+}
+
+/*
+ * Forgets the restored requests that have not run yet, for a reset. The queue
+ * they came from is being reset with them, so there is nobody to reply to, and
+ * v9fs_reset() waits for the active list to empty, which their PDUs would keep
+ * it from doing.
+ */
+static void virtio_9p_drop_resubmit(V9fsVirtioState *v)
+{
+    unsigned i;
+
+    for (i = 0; i < MAX_REQ; i++) {
+        if (v->resubmit[i]) {
+            v->resubmit[i] = false;
+            g_free(v->elems[i]);
+            v->elems[i] = NULL;
+            pdu_free(&v->state.pdus[i]);
+        }
+    }
+}
+
 static void virtio_9p_device_realize(DeviceState *dev, Error **errp)
 {
     VirtIODevice *vdev = VIRTIO_DEVICE(dev);
@@ -238,6 +497,9 @@ static void virtio_9p_device_realize(DeviceState *dev, Error **errp)
     v->config_size = sizeof(struct virtio_9p_config) + strlen(s->fsconf.tag);
     virtio_init(vdev, VIRTIO_ID_9P, v->config_size);
     v->vq = virtio_add_queue(vdev, MAX_REQ, handle_9p_output);
+    v->resume_bh = virtio_bh_new_guarded(dev, virtio_9p_resume, v);
+    v->vm_change = qdev_add_vm_change_state_handler(dev, virtio_9p_vm_change,
+                                                    NULL, v);
 }
 
 static void virtio_9p_device_unrealize(DeviceState *dev)
@@ -246,6 +508,9 @@ static void virtio_9p_device_unrealize(DeviceState *dev)
     V9fsVirtioState *v = VIRTIO_9P(dev);
     V9fsState *s = &v->state;
 
+    qemu_del_vm_change_state_handler(v->vm_change);
+    qemu_bh_delete(v->resume_bh);
+    virtio_9p_drop_resubmit(v);
     v9fs_reset(s); /* cancel all in-flight PDUs to prevent UAF */
     virtio_delete_queue(v->vq);
     virtio_cleanup(vdev);
@@ -254,63 +519,53 @@ static void virtio_9p_device_unrealize(DeviceState *dev)
 
 /* virtio-9p device */
 
+/* Nothing to carry until the guest has sent Tversion. */
+static bool virtio_9p_session_needed(void *opaque)
+{
+    V9fsVirtioState *v = opaque;
+
+    return v->state.proto_version != 0;
+}
+
+static const VMStateDescription vmstate_virtio_9p_session = {
+    .name = "virtio-9p-device/session",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = virtio_9p_session_needed,
+    .fields = (const VMStateField[]) {
+        VMSTATE_SINGLE(state, V9fsVirtioState, 1, vmstate_info_v9fs_session,
+                       V9fsState),
+        VMSTATE_END_OF_LIST()
+    },
+};
+
 /*
- * The requests that were in flight when the snapshot was taken.
+ * This device's own state, inside VMSTATE_VIRTIO_DEVICE.
  *
- * VMSTATE_VIRTIO_DEVICE below carries the queue itself -- indices, features,
- * config -- but not `elems`, which is this device's own record of the
- * VirtQueueElements it has popped and not yet pushed back. Without them a
- * resumed guest waits for replies to requests the host has forgotten it owes,
- * and the mount hangs on first use rather than failing visibly.
- *
- * Upstream does not need this because upstream does not get here: a 9p export
- * installs a migration blocker (see v9fs_attach(), where tctiSH removes it).
- *
- * This is deliberately not a VMState subsection. A VirtQueueElement is not a
- * plain struct -- qemu_put_virtqueue_element() writes the guest addresses and
- * lengths it was built from, and the loader re-maps them -- so it has to go
- * through the legacy save/load hooks, which virtio_save()/virtio_load() still
- * call. (dc->vmsd and vdc->load are different fields; only vdc->vmsd would
- * conflict.)
+ * It has to be here rather than in vmstate_virtio_9p: virtio_load() reads the
+ * generic "virtio" subsections at the end of the VMSTATE_VIRTIO_DEVICE field,
+ * and any subsection of "virtio-9p" would pass their name-prefix check and be
+ * refused as unknown.
  */
-static void virtio_9p_save_device(VirtIODevice *vdev, QEMUFile *f)
-{
-    V9fsVirtioState *v = VIRTIO_9P(vdev);
-    unsigned i;
-
-    for (i = 0; i < MAX_REQ; i++) {
-        if (v->elems[i] == NULL) {
-            qemu_put_be32(f, 0);
-        } else {
-            qemu_put_be32(f, 1);
-            qemu_put_virtqueue_element(vdev, f, v->elems[i]);
-        }
-    }
-}
-
-static int virtio_9p_load_device(VirtIODevice *vdev, QEMUFile *f,
-                                 int version_id)
-{
-    V9fsVirtioState *v = VIRTIO_9P(vdev);
-    unsigned i;
-
-    for (i = 0; i < MAX_REQ; i++) {
-        if (qemu_get_be32(f)) {
-            v->elems[i] = qemu_get_virtqueue_element(vdev, f,
-                                                     sizeof(VirtQueueElement));
-        } else {
-            /*
-             * Cleared rather than left alone. The array is zeroed at realize,
-             * but a load is not obliged to be the first thing that happens to
-             * a device, and a stale pointer here would be pushed back to a
-             * queue it never came from.
-             */
-            v->elems[i] = NULL;
-        }
-    }
-
-    return 0;
-}
+static const VMStateDescription vmstate_virtio_9p_device = {
+    .name = "virtio-9p-device",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .fields = (const VMStateField[]) {
+        {
+            .name = "elems",
+            .info = &vmstate_info_virtio_9p_elems,
+            .flags = VMS_SINGLE,
+            .offset = offsetof(V9fsVirtioState, elems),
+            .size = sizeof_field(V9fsVirtioState, elems),
+        },
+        VMSTATE_END_OF_LIST()
+    },
+    .subsections = (const VMStateDescription * const []) {
+        &vmstate_virtio_9p_session,
+        NULL
+    },
+};
 
 static const VMStateDescription vmstate_virtio_9p = {
     .name = "virtio-9p",
@@ -340,8 +595,7 @@ static void virtio_9p_class_init(ObjectClass *klass, const void *data)
     vdc->get_features = virtio_9p_get_features;
     vdc->get_config = virtio_9p_get_config;
     vdc->reset = virtio_9p_reset;
-    vdc->save = virtio_9p_save_device;
-    vdc->load = virtio_9p_load_device;
+    vdc->vmsd = &vmstate_virtio_9p_device;
 }
 
 static const TypeInfo virtio_device_info = {

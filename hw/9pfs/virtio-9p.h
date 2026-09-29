@@ -11,6 +11,12 @@ struct V9fsVirtioState {
     VirtQueue *vq;
     size_t config_size;
     VirtQueueElement *elems[MAX_REQ];
+    /* Requests restored from a snapshot, to be run again when the VM does. */
+    bool resubmit[MAX_REQ];
+    /* Take no new requests: set on stop, cleared by virtio_9p_resume(). */
+    bool stopped;
+    QEMUBH *resume_bh;
+    VMChangeStateEntry *vm_change;
     V9fsState state;
 };
 

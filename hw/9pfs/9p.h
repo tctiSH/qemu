@@ -471,6 +471,9 @@ void pdu_free(V9fsPDU *pdu);
 void pdu_submit(V9fsPDU *pdu, P9MsgHeader *hdr);
 void v9fs_reset(V9fsState *s);
 
+/* A V9fsState's negotiated protocol, msize and fids, for a snapshot. */
+extern const struct VMStateInfo vmstate_info_v9fs_session;
+
 struct V9fsTransport {
     ssize_t     coroutine_fn (*pdu_vmarshal)(V9fsPDU *pdu, size_t offset,
                                              const char *fmt, va_list ap);
