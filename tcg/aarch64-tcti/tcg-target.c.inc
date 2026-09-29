@@ -165,6 +165,13 @@ static const int tcg_target_reg_alloc_order[] = {
     TCG_REG_V28, TCG_REG_V29, TCG_REG_V30, TCG_REG_V31,
 };
 
+/*
+ * All eight of the AArch64 argument registers. The call gadget passes nothing
+ * on the stack -- it calls the helper with whatever sp it has -- so an
+ * argument TCG decided to pass there never reached the helper, and was
+ * written over the host stack besides; see tcg_qemu_tb_exec(). With eight,
+ * no helper needs the stack: none takes more than MAX_CALL_IARGS (7).
+ */
 static const int tcg_target_call_iarg_regs[] = {
     TCG_REG_R0,
     TCG_REG_R1,
@@ -172,7 +179,11 @@ static const int tcg_target_call_iarg_regs[] = {
     TCG_REG_R3,
     TCG_REG_R4,
     TCG_REG_R5,
+    TCG_REG_R6,
+    TCG_REG_R7,
 };
+
+QEMU_BUILD_BUG_ON(ARRAY_SIZE(tcg_target_call_iarg_regs) < MAX_CALL_IARGS);
 
 static TCGReg tcg_target_call_oarg_reg(TCGCallReturnKind kind, int slot)
 {
@@ -1928,7 +1939,12 @@ __thread uintptr_t tcti_call_return_address;
 uintptr_t QEMU_DISABLE_CFI tcg_qemu_tb_exec(CPUArchState *env, const void *v_tb_ptr)
 {
     // Create our per-CPU temporary storage.
-    long tcg_temps[CPU_TEMP_BUF_NLONGS];
+    //
+    // TCG addresses its temporaries at negative offsets from R15, and any
+    // outgoing call arguments at non-negative ones, so R15 sits between the two
+    // areas and both have to be ours: an argument written past the end of the
+    // temporaries used to land on this function's own frame.
+    long tcg_temps[CPU_TEMP_BUF_NLONGS + TCG_STATIC_CALL_ARGS_SIZE / sizeof(long)];
 
     uint64_t return_value = 0;
     uintptr_t sp_value    = (uintptr_t)(tcg_temps + CPU_TEMP_BUF_NLONGS);
