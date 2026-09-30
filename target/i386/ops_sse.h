@@ -21,6 +21,7 @@
 #include "crypto/aes.h"
 #include "crypto/aes-round.h"
 #include "crypto/clmul.h"
+#include "ops_sse_host.h"
 
 #if SHIFT == 0
 #define Reg MMXReg
@@ -463,11 +464,32 @@ void glue(helper_pshufhw, SUFFIX)(Reg *d, Reg *s, int order)
 /* FPU ops */
 /* XXX: not accurate */
 
+/*
+ * HOST_P_<name>/HOST_S_<name>: the host FPU fast path for packed and scalar
+ * forms (ops_sse_host.h); false when softfloat must do it.
+ */
+#define HOST_P_add(w, d, v, s, n) sse_host_ ## w(env, d, v, s, n, SSE_HOST_ADD)
+#define HOST_P_sub(w, d, v, s, n) sse_host_ ## w(env, d, v, s, n, SSE_HOST_SUB)
+#define HOST_P_mul(w, d, v, s, n) sse_host_ ## w(env, d, v, s, n, SSE_HOST_MUL)
+#define HOST_P_div(w, d, v, s, n) sse_host_ ## w(env, d, v, s, n, SSE_HOST_DIV)
+#define HOST_P_min(w, d, v, s, n) sse_host_minmax_ ## w(env, d, v, s, n, false)
+#define HOST_P_max(w, d, v, s, n) sse_host_minmax_ ## w(env, d, v, s, n, true)
+#define HOST_S_add(w, d, v, s) sse_host_ ## w(env, d, v, s, SSE_HOST_ADD)
+#define HOST_S_sub(w, d, v, s) sse_host_ ## w(env, d, v, s, SSE_HOST_SUB)
+#define HOST_S_mul(w, d, v, s) sse_host_ ## w(env, d, v, s, SSE_HOST_MUL)
+#define HOST_S_div(w, d, v, s) sse_host_ ## w(env, d, v, s, SSE_HOST_DIV)
+#define HOST_S_min(w, d, v, s) sse_host_minmax_ ## w(env, d, v, s, false)
+#define HOST_S_max(w, d, v, s) sse_host_minmax_ ## w(env, d, v, s, true)
+
 #define SSE_HELPER_P(name, F)                                           \
     void glue(helper_ ## name ## ps, SUFFIX)(CPUX86State *env,          \
             Reg *d, Reg *v, Reg *s)                                     \
     {                                                                   \
         int i;                                                          \
+        if (HOST_P_ ## name(ps, &d->ZMM_S(0), &v->ZMM_S(0),             \
+                            &s->ZMM_S(0), 2 << SHIFT)) {                \
+            return;                                                     \
+        }                                                               \
         for (i = 0; i < 2 << SHIFT; i++) {                              \
             d->ZMM_S(i) = F(32, v->ZMM_S(i), s->ZMM_S(i));              \
         }                                                               \
@@ -477,6 +499,10 @@ void glue(helper_pshufhw, SUFFIX)(Reg *d, Reg *s, int order)
             Reg *d, Reg *v, Reg *s)                                     \
     {                                                                   \
         int i;                                                          \
+        if (HOST_P_ ## name(pd, &d->ZMM_D(0), &v->ZMM_D(0),             \
+                            &s->ZMM_D(0), 1 << SHIFT)) {                \
+            return;                                                     \
+        }                                                               \
         for (i = 0; i < 1 << SHIFT; i++) {                              \
             d->ZMM_D(i) = F(64, v->ZMM_D(i), s->ZMM_D(i));              \
         }                                                               \
@@ -490,7 +516,9 @@ void glue(helper_pshufhw, SUFFIX)(Reg *d, Reg *s, int order)
     void helper_ ## name ## ss(CPUX86State *env, Reg *d, Reg *v, Reg *s)\
     {                                                                   \
         int i;                                                          \
-        d->ZMM_S(0) = F(32, v->ZMM_S(0), s->ZMM_S(0));                  \
+        if (!HOST_S_ ## name(ss, &d->ZMM_S(0), v->ZMM_S(0), s->ZMM_S(0))) { \
+            d->ZMM_S(0) = F(32, v->ZMM_S(0), s->ZMM_S(0));              \
+        }                                                               \
         for (i = 1; i < 2 << SHIFT; i++) {                              \
             d->ZMM_L(i) = v->ZMM_L(i);                                  \
         }                                                               \
@@ -499,7 +527,9 @@ void glue(helper_pshufhw, SUFFIX)(Reg *d, Reg *s, int order)
     void helper_ ## name ## sd(CPUX86State *env, Reg *d, Reg *v, Reg *s)\
     {                                                                   \
         int i;                                                          \
-        d->ZMM_D(0) = F(64, v->ZMM_D(0), s->ZMM_D(0));                  \
+        if (!HOST_S_ ## name(sd, &d->ZMM_D(0), v->ZMM_D(0), s->ZMM_D(0))) { \
+            d->ZMM_D(0) = F(64, v->ZMM_D(0), s->ZMM_D(0));              \
+        }                                                               \
         for (i = 1; i < 1 << SHIFT; i++) {                              \
             d->ZMM_Q(i) = v->ZMM_Q(i);                                  \
         }                                                               \
@@ -1001,6 +1031,13 @@ void glue(helper_addsubpd, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
                                              Reg *d, Reg *v, Reg *s)    \
     {                                                                   \
         int i;                                                          \
+        if (sse_host_plain_ps(env, &v->ZMM_S(0), &s->ZMM_S(0), 2 << SHIFT)) { \
+            for (i = 0; i < 2 << SHIFT; i++) {                          \
+                d->ZMM_L(i) =                                           \
+                    C(sse_host_rel_s(v->ZMM_S(i), s->ZMM_S(i))) ? -1 : 0; \
+            }                                                           \
+            return;                                                     \
+        }                                                               \
         for (i = 0; i < 2 << SHIFT; i++) {                              \
             d->ZMM_L(i) = C(F(32, v->ZMM_S(i), s->ZMM_S(i))) ? -1 : 0;  \
         }                                                               \
@@ -1010,6 +1047,13 @@ void glue(helper_addsubpd, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
                                              Reg *d, Reg *v, Reg *s)    \
     {                                                                   \
         int i;                                                          \
+        if (sse_host_plain_pd(env, &v->ZMM_D(0), &s->ZMM_D(0), 1 << SHIFT)) { \
+            for (i = 0; i < 1 << SHIFT; i++) {                          \
+                d->ZMM_Q(i) =                                           \
+                    C(sse_host_rel_d(v->ZMM_D(i), s->ZMM_D(i))) ? -1 : 0; \
+            }                                                           \
+            return;                                                     \
+        }                                                               \
         for (i = 0; i < 1 << SHIFT; i++) {                              \
             d->ZMM_Q(i) = C(F(64, v->ZMM_D(i), s->ZMM_D(i))) ? -1 : 0;  \
         }                                                               \
@@ -1021,7 +1065,12 @@ void glue(helper_addsubpd, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
     void helper_ ## name ## ss(CPUX86State *env, Reg *d, Reg *v, Reg *s)    \
     {                                                                       \
         int i;                                                              \
-        d->ZMM_L(0) = C(F(32, v->ZMM_S(0), s->ZMM_S(0))) ? -1 : 0;          \
+        if (sse_host_plain_s(env, v->ZMM_S(0), s->ZMM_S(0))) {              \
+            d->ZMM_L(0) =                                                   \
+                C(sse_host_rel_s(v->ZMM_S(0), s->ZMM_S(0))) ? -1 : 0;       \
+        } else {                                                            \
+            d->ZMM_L(0) = C(F(32, v->ZMM_S(0), s->ZMM_S(0))) ? -1 : 0;      \
+        }                                                                   \
         for (i = 1; i < 2 << SHIFT; i++) {                                  \
             d->ZMM_L(i) = v->ZMM_L(i);                                      \
         }                                                                   \
@@ -1030,7 +1079,12 @@ void glue(helper_addsubpd, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
     void helper_ ## name ## sd(CPUX86State *env, Reg *d, Reg *v, Reg *s)    \
     {                                                                       \
         int i;                                                              \
-        d->ZMM_Q(0) = C(F(64, v->ZMM_D(0), s->ZMM_D(0))) ? -1 : 0;          \
+        if (sse_host_plain_d(env, v->ZMM_D(0), s->ZMM_D(0))) {              \
+            d->ZMM_Q(0) =                                                   \
+                C(sse_host_rel_d(v->ZMM_D(0), s->ZMM_D(0))) ? -1 : 0;       \
+        } else {                                                            \
+            d->ZMM_Q(0) = C(F(64, v->ZMM_D(0), s->ZMM_D(0))) ? -1 : 0;      \
+        }                                                                   \
         for (i = 1; i < 1 << SHIFT; i++) {                                  \
             d->ZMM_Q(i) = v->ZMM_Q(i);                                      \
         }                                                                   \
@@ -1109,7 +1163,11 @@ void helper_ucomiss(CPUX86State *env, Reg *d, Reg *s)
 
     s0 = d->ZMM_S(0);
     s1 = s->ZMM_S(0);
-    ret = float32_compare_quiet(s0, s1, &env->sse_status);
+    if (sse_host_plain_s(env, s0, s1)) {
+        ret = sse_host_rel_s(s0, s1);
+    } else {
+        ret = float32_compare_quiet(s0, s1, &env->sse_status);
+    }
     CC_SRC = comis_eflags[ret + 1];
     CC_OP = CC_OP_EFLAGS;
 }
@@ -1121,7 +1179,11 @@ void helper_comiss(CPUX86State *env, Reg *d, Reg *s)
 
     s0 = d->ZMM_S(0);
     s1 = s->ZMM_S(0);
-    ret = float32_compare(s0, s1, &env->sse_status);
+    if (sse_host_plain_s(env, s0, s1)) {
+        ret = sse_host_rel_s(s0, s1);
+    } else {
+        ret = float32_compare(s0, s1, &env->sse_status);
+    }
     CC_SRC = comis_eflags[ret + 1];
     CC_OP = CC_OP_EFLAGS;
 }
@@ -1133,7 +1195,11 @@ void helper_ucomisd(CPUX86State *env, Reg *d, Reg *s)
 
     d0 = d->ZMM_D(0);
     d1 = s->ZMM_D(0);
-    ret = float64_compare_quiet(d0, d1, &env->sse_status);
+    if (sse_host_plain_d(env, d0, d1)) {
+        ret = sse_host_rel_d(d0, d1);
+    } else {
+        ret = float64_compare_quiet(d0, d1, &env->sse_status);
+    }
     CC_SRC = comis_eflags[ret + 1];
     CC_OP = CC_OP_EFLAGS;
 }
@@ -1145,7 +1211,11 @@ void helper_comisd(CPUX86State *env, Reg *d, Reg *s)
 
     d0 = d->ZMM_D(0);
     d1 = s->ZMM_D(0);
-    ret = float64_compare(d0, d1, &env->sse_status);
+    if (sse_host_plain_d(env, d0, d1)) {
+        ret = sse_host_rel_d(d0, d1);
+    } else {
+        ret = float64_compare(d0, d1, &env->sse_status);
+    }
     CC_SRC = comis_eflags[ret + 1];
     CC_OP = CC_OP_EFLAGS;
 }
@@ -1819,6 +1889,10 @@ void glue(helper_dpps, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s,
     int i;
 
     for (i = 0; i < 2 << SHIFT; i += 4) {
+        if (sse_host_dpps(env, &d->ZMM_S(i), &v->ZMM_S(i), &s->ZMM_S(i),
+                          mask)) {
+            continue;
+        }
         /*
          * We must evaluate (A+B)+(C+D), not ((A+B)+C)+D
          * to correctly round the intermediate results
@@ -2506,29 +2580,39 @@ void helper_vpermd_ymm(Reg *d, Reg *v, Reg *s)
 
 /* FMA3 op helpers */
 #if SHIFT == 1
-#define SSE_HELPER_FMAS(name, elem, F)                                         \
+#define SSE_HELPER_FMAS(name, elem, F, HOST)                                   \
     void name(CPUX86State *env, Reg *d, Reg *a, Reg *b, Reg *c, int flags)     \
     {                                                                          \
+        if (HOST(env, &d->elem(0), a->elem(0), b->elem(0), c->elem(0),      \
+                 flags)) {                                                     \
+            return;                                                            \
+        }                                                                      \
         d->elem(0) = F(a->elem(0), b->elem(0), c->elem(0), flags, &env->sse_status); \
     }
-#define SSE_HELPER_FMAP(name, elem, num, F)                                    \
+#define SSE_HELPER_FMAP(name, elem, num, F, HOST)                              \
     void glue(name, SUFFIX)(CPUX86State *env, Reg *d, Reg *a, Reg *b, Reg *c,  \
                             int flags, int flip)                               \
     {                                                                          \
         int i;                                                                 \
+        if (HOST(env, &d->elem(0), &a->elem(0), &b->elem(0), &c->elem(0),     \
+                 num, flags, flip)) {                                          \
+            return;                                                            \
+        }                                                                      \
         for (i = 0; i < num; i++) {                                            \
             d->elem(i) = F(a->elem(i), b->elem(i), c->elem(i), flags, &env->sse_status); \
             flags ^= flip;                                                     \
         }                                                                      \
     }
 
-SSE_HELPER_FMAS(helper_fma4ss,  ZMM_S, float32_muladd)
-SSE_HELPER_FMAS(helper_fma4sd,  ZMM_D, float64_muladd)
+SSE_HELPER_FMAS(helper_fma4ss,  ZMM_S, float32_muladd, sse_host_fma_ss)
+SSE_HELPER_FMAS(helper_fma4sd,  ZMM_D, float64_muladd, sse_host_fma_sd)
 #endif
 
 #if SHIFT >= 1
-SSE_HELPER_FMAP(helper_fma4ps,  ZMM_S, 2 << SHIFT, float32_muladd)
-SSE_HELPER_FMAP(helper_fma4pd,  ZMM_D, 1 << SHIFT, float64_muladd)
+SSE_HELPER_FMAP(helper_fma4ps,  ZMM_S, 2 << SHIFT, float32_muladd,
+                sse_host_fma_ps)
+SSE_HELPER_FMAP(helper_fma4pd,  ZMM_D, 1 << SHIFT, float64_muladd,
+                sse_host_fma_pd)
 #endif
 
 #if SHIFT == 1
