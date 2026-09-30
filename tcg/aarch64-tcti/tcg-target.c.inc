@@ -677,8 +677,34 @@ static void tcg_out_set_borrow(TCGContext *s)
         .out_rrr = tgen_##name,                                             \
     };
 
-TCTI_BINARY_OP(add,  gadget_add_i32,  gadget_add_i64)
-TCTI_BINARY_OP(and,  gadget_and_i32,  gadget_and_i64)
+/*
+ * The same, where the second operand may also be a constant: the gadget
+ * takes it from the stream, so it costs no movi (and no register).
+ */
+#define TCTI_BINARY_OP_I(name, gadget32, gadget64, gadgeti32, gadgeti64)    \
+    static void tgen_##name(TCGContext *s, TCGType type,                    \
+                            TCGReg a0, TCGReg a1, TCGReg a2)                \
+    {                                                                       \
+        tcg_out_ternary_gadget(s, type == TCG_TYPE_I32 ? gadget32 : gadget64, \
+                               a0, a1, a2);                                 \
+    }                                                                       \
+    static void tgen_##name##i(TCGContext *s, TCGType type,                 \
+                               TCGReg a0, TCGReg a1, tcg_target_long a2)    \
+    {                                                                       \
+        tcg_out_binary_gadget(s, type == TCG_TYPE_I32 ? gadgeti32 : gadgeti64, \
+                              a0, a1);                                      \
+        tcg_out64(s, a2);                                                   \
+    }                                                                       \
+    static const TCGOutOpBinary outop_##name = {                            \
+        .base.static_constraint = C_O1_I2(r, r, ri),                        \
+        .out_rrr = tgen_##name,                                             \
+        .out_rri = tgen_##name##i,                                          \
+    };
+
+TCTI_BINARY_OP_I(add, gadget_add_i32, gadget_add_i64,
+                 gadget_addi_i32, gadget_addi_i64)
+TCTI_BINARY_OP_I(and, gadget_and_i32, gadget_and_i64,
+                 gadget_andi_i32, gadget_andi_i64)
 TCTI_BINARY_OP(andc, gadget_andc_i32, gadget_andc_i64)
 TCTI_BINARY_OP(clz,  gadget_clz_i32,  gadget_clz_i64)
 TCTI_BINARY_OP(ctz,  gadget_ctz_i32,  gadget_ctz_i64)
@@ -688,18 +714,24 @@ TCTI_BINARY_OP(eqv,  gadget_eqv_i32,  gadget_eqv_i64)
 TCTI_BINARY_OP(mul,  gadget_mul_i32,  gadget_mul_i64)
 TCTI_BINARY_OP(nand, gadget_nand_i32, gadget_nand_i64)
 TCTI_BINARY_OP(nor,  gadget_nor_i32,  gadget_nor_i64)
-TCTI_BINARY_OP(or,   gadget_or_i32,   gadget_or_i64)
+TCTI_BINARY_OP_I(or, gadget_or_i32, gadget_or_i64,
+                 gadget_ori_i32, gadget_ori_i64)
 TCTI_BINARY_OP(orc,  gadget_orc_i32,  gadget_orc_i64)
 TCTI_BINARY_OP(rems, gadget_rem_i32,  gadget_rem_i64)
 TCTI_BINARY_OP(remu, gadget_remu_i32, gadget_remu_i64)
 TCTI_BINARY_OP(rotl, gadget_rotl_i32, gadget_rotl_i64)
 TCTI_BINARY_OP(rotr, gadget_rotr_i32, gadget_rotr_i64)
-TCTI_BINARY_OP(sar,  gadget_sar_i32,  gadget_sar_i64)
-TCTI_BINARY_OP(shl,  gadget_shl_i32,  gadget_shl_i64)
-TCTI_BINARY_OP(shr,  gadget_shr_i32,  gadget_shr_i64)
-TCTI_BINARY_OP(xor,  gadget_xor_i32,  gadget_xor_i64)
+TCTI_BINARY_OP_I(sar, gadget_sar_i32, gadget_sar_i64,
+                 gadget_sari_i32, gadget_sari_i64)
+TCTI_BINARY_OP_I(shl, gadget_shl_i32, gadget_shl_i64,
+                 gadget_shli_i32, gadget_shli_i64)
+TCTI_BINARY_OP_I(shr, gadget_shr_i32, gadget_shr_i64,
+                 gadget_shri_i32, gadget_shri_i64)
+TCTI_BINARY_OP_I(xor, gadget_xor_i32, gadget_xor_i64,
+                 gadget_xori_i32, gadget_xori_i64)
 
 #undef TCTI_BINARY_OP
+#undef TCTI_BINARY_OP_I
 
 static void tgen_sub(TCGContext *s, TCGType type,
                      TCGReg a0, TCGReg a1, TCGReg a2)
@@ -905,6 +937,8 @@ static TCTIGadget3 *const tcti_setcond_i32[16] = TCTI_COND_TABLE(gadget_setcond_
 static TCTIGadget3 *const tcti_setcond_i64[16] = TCTI_COND_TABLE(gadget_setcond_i64_);
 static TCTIGadget3 *const tcti_brcond_i32[16] = TCTI_COND_TABLE(gadget_brcond_i32_);
 static TCTIGadget3 *const tcti_brcond_i64[16] = TCTI_COND_TABLE(gadget_brcond_i64_);
+static TCTIGadget2 *const tcti_brcondi_i32[16] = TCTI_COND_TABLE(gadget_brcondi_i32_);
+static TCTIGadget2 *const tcti_brcondi_i64[16] = TCTI_COND_TABLE(gadget_brcondi_i64_);
 static TCTIGadget3 *const tcti_csel[16] = TCTI_COND_TABLE(gadget_csel_);
 static TCTIGadget1 *const tcti_csetm_i32[16] = TCTI_COND_TABLE(gadget_csetm_i32_);
 static TCTIGadget1 *const tcti_csetm_i64[16] = TCTI_COND_TABLE(gadget_csetm_i64_);
@@ -964,9 +998,24 @@ static void tgen_brcond(TCGContext *s, TCGType type, TCGCond cond,
     tcti_out_label(s, l);
 }
 
+/* The same against a constant, which the gadget reads before the target. */
+static void tgen_brcondi(TCGContext *s, TCGType type, TCGCond cond,
+                         TCGReg arg0, tcg_target_long arg1, TCGLabel *l)
+{
+    static uint8_t last_brcond = 0;
+    TCTIGadget2 *gadget = (type == TCG_TYPE_I32 ? tcti_brcondi_i32 : tcti_brcondi_i64)[cond];
+
+    tcg_debug_assert(gadget);
+    tcg_out_gadget(s, (*gadget)[last_brcond][arg0]);
+    last_brcond = (last_brcond + 1) % TCG_TARGET_GP_REGS;
+    tcg_out64(s, arg1);
+    tcti_out_label(s, l);
+}
+
 static const TCGOutOpBrcond outop_brcond = {
-    .base.static_constraint = C_O0_I2(r, r),
+    .base.static_constraint = C_O0_I2(r, ri),
     .out_rr = tgen_brcond,
+    .out_ri = tgen_brcondi,
 };
 
 /*
