@@ -1885,6 +1885,9 @@ static void tcg_target_init(TCGContext *s)
         TCG_REG_R24, TCG_REG_R25, TCG_REG_R26, TCG_REG_R27,
         TCG_REG_R28, TCG_REG_R29, TCG_REG_R30, TCG_REG_R31,
 
+        // R8-R12 are host x19-x23, which C preserves (tcti-gadget-gen.py).
+        TCG_REG_R8,  TCG_REG_R9,  TCG_REG_R10, TCG_REG_R11, TCG_REG_R12,
+
         // Per our calling convention.
         TCG_REG_V8,  TCG_REG_V9,  TCG_REG_V10, TCG_REG_V11,
         TCG_REG_V12, TCG_REG_V13, TCG_REG_V14, TCG_REG_V15,
@@ -1965,11 +1968,23 @@ uintptr_t QEMU_DISABLE_CFI tcg_qemu_tb_exec(CPUArchState *env, const void *v_tb_
         "ldr x25, %[pc_mirror]\n"
         "ldr x28, %[start_tb_ptr]\n"
 
+        // TCG's R8-R12 live in x19-x23, which our caller expects preserved.
+        // Save them here rather than list them as clobbers: with every other
+        // register taken, the compiler has none left for itself. The gadgets
+        // keep sp balanced, and nothing below addresses memory through it.
+        "stp x19, x20, [sp, #-48]!\n"
+        "stp x21, x22, [sp, #16]\n"
+        "str x23,      [sp, #32]\n"
+
         // To start our code, we'll -call- the gadget at the first bytecode pointer.
         // Note that we call/branch-with-link, here; so our TB_EXIT gadget can RET in order
         // to return to this point when things are complete.
         "ldr x27, [x28], #8\n"
         "blr x27\n"
+
+        "ldr x23,      [sp, #32]\n"
+        "ldp x21, x22, [sp, #16]\n"
+        "ldp x19, x20, [sp], #48\n"
 
         // Finally, we'll copy out our final return value.
         "str x0, %[return_value]\n"
