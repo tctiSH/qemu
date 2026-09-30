@@ -614,10 +614,13 @@ static void tcg_out_goto_tb(TCGContext *s, int which)
     set_jmp_reset_offset(s, which);
 }
 
+/*
+ * Continue with the gadget stream at a0 without leaving it: the next TB's,
+ * or tcg_code_gen_epilogue's, which exits to the main loop.
+ */
 static void tcg_out_goto_ptr(TCGContext *s, TCGReg a0)
 {
-    /* Never emitted: tcg_cpu_init_cflags() sets CF_NO_GOTO_PTR for TCTI. */
-    g_assert_not_reached();
+    tcg_out_unary_gadget(s, gadget_goto_ptr, a0);
 }
 
 /* Simple branch. */
@@ -1914,7 +1917,13 @@ static void tcg_target_init(TCGContext *s)
 /* Generate global QEMU prologue and epilogue code. */
 static inline void tcg_target_qemu_prologue(TCGContext *s)
 {
-    // No prologue; as we're interpreted.
+    /*
+     * No prologue, as we're interpreted; but goto_ptr needs an epilogue to
+     * go to when helper_lookup_tb_ptr() finds no TB: a stream that returns
+     * to the main loop with 0, as exit_tb(0) does.
+     */
+    tcg_code_gen_epilogue = tcg_splitwx_to_rx(s->code_ptr);
+    tcg_out_imm64_gadget(s, gadget_exit_tb, 0);
 }
 
 static void tcg_out_tb_start(TCGContext *s)

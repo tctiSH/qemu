@@ -67,14 +67,6 @@ void tcg_cpu_init_cflags(CPUState *cpu, bool parallel)
 
     cflags |= parallel ? CF_PARALLEL : 0;
     cflags |= icount_enabled() ? CF_USE_ICOUNT : 0;
-#if defined(CONFIG_TCG_THREADED_INTERPRETER)
-    /*
-     * TCTI has no goto_ptr: a TB that would chain through a pointer exits to
-     * the main loop instead, which looks up the next TB itself.
-     */
-    cflags |= CF_NO_GOTO_PTR;
-    cpu->cflags_next_tb = CF_NO_GOTO_PTR;
-#endif
     tcg_cflags_set(cpu, cflags);
 }
 

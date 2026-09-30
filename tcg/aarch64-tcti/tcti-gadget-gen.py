@@ -758,6 +758,11 @@ simple("br",
     "ldr x28, [x28]"
 )
 
+# goto_ptr: continue with the gadget stream whose address is in a register --
+# the next TB's, as helper_lookup_tb_ptr() found it, or the epilogue stream
+# that tcg_target_qemu_prologue() emits for when it found none.
+with_d("goto_ptr", "mov x28, Xd")
+
 
 # Exit from a translation buffer execution.
 simple("exit_tb",
