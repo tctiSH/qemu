@@ -314,6 +314,13 @@ def math_dnm(name, mnemonic):
     with_dnm(f'{name}_i32', f"{mnemonic} Wd, Wn, Wm")
     with_dnm(f'{name}_i64', f"{mnemonic} Xd, Xn, Xm")
 
+def math_dni(name, mnemonic):
+    """ A _i32 and _i64 op on Xn and an immediate from the gadget stream,
+    so an op with a constant operand is one dispatch instead of a movi and
+    the op. """
+    with_dn(f'{name}_i32', "ldr x27, [x28], #8", f"{mnemonic} Wd, Wn, w27")
+    with_dn(f'{name}_i64', "ldr x27, [x28], #8", f"{mnemonic} Xd, Xn, x27")
+
 def math_dn(name, mnemonic, source_is_wn=False):
     """ Equivalent to `with_dn`, but creates a _i32 and _i64 variant. For simple math. """
     with_dn(f'{name}_i32', f"{mnemonic} Wd, Wn")
@@ -838,6 +845,22 @@ for condition in ARCH_CONDITION_CODES:
         f"csel x28, x27, x28, {condition}"
     )
 
+    # The same against a constant from the stream, which precedes the
+    # branch target: comparisons with zero are common, and each TB starts
+    # with one. d is unused, as for brcond: it spreads the branch sources.
+    with_dn(f'brcondi_i32_{condition}',
+        "ldr x26, [x28], #8",
+        "ldr x27, [x28], #8",
+        "subs wzr, Wn, w26",
+        f"csel x28, x27, x28, {condition}"
+    )
+    with_dn(f'brcondi_i64_{condition}',
+        "ldr x26, [x28], #8",
+        "ldr x27, [x28], #8",
+        "subs xzr, Xn, x26",
+        f"csel x28, x27, x28, {condition}"
+    )
+
 
 START_COLLECTION("mov")
 
@@ -885,6 +908,7 @@ START_COLLECTION("arithmetic")
 
 # Trivial arithmetic.
 math_dnm("add" , "add" )
+math_dni("addi", "add" )
 math_dnm("sub" , "sub" )
 math_dnm("mul" , "mul" )
 math_dnm("div" , "sdiv")
@@ -911,6 +935,15 @@ math_dnm("shl",  "lsl")
 math_dnm("shr",  "lsr")
 math_dnm("sar",  "asr")
 math_dnm("rotr", "ror")
+
+# The same with an immediate; sub has none, as TCG turns a subtraction of a
+# constant into an addition.
+math_dni("andi", "and")
+math_dni("ori",  "orr")
+math_dni("xori", "eor")
+math_dni("shli", "lsl")
+math_dni("shri", "lsr")
+math_dni("sari", "asr")
 
 # AArch64 lacks a Rotate Left; so we instead rotate right by a negative.
 with_dnm("rotl_i32", "neg w27, Wm", "ror Wd, Wn, w27")
