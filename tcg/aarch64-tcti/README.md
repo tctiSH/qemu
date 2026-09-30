@@ -12,7 +12,11 @@ Since TCG-TCI is optimized for sets of 16 GP registers and aarch64 has 30, we co
 
 | Regs    | Use                   |
 | :------ | :-------------------- |
-| x1-x15  | Guest Registers       |
+| x0-x7   | TCG R0-R7 (call args) |
+| x13     | TCG R13               |
+| x14     | TCG R14 (env)         |
+| x15     | TCG R15 (call stack)  |
+| x19-x23 | TCG R8-R12, preserved across calls |
 | x24     | TCTI temporary        |
 | x25     | saved IP during call  |
 | x26     | TCTI temporary        |

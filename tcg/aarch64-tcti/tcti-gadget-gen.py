@@ -22,6 +22,15 @@ EPILOGUE = (
 TCG_REGISTER_COUNT   = 16
 TCG_REGISTER_NUMBERS = list(range(TCG_REGISTER_COUNT))
 
+# The host register behind each TCG register. R0-R7 must stay x0-x7, the
+# argument registers the call gadget hands to C; R14 (env) and R15 (the call
+# stack) are fixed too. R8-R12 live in x19-x23, which C preserves across a
+# call: TCTI then marks them call-saved, so values TCG keeps there survive
+# helper calls and guest memory accesses (whose slow paths call C) instead
+# of being spilled and reloaded around every one.
+HOST_REGISTER = {n: n for n in TCG_REGISTER_NUMBERS}
+HOST_REGISTER.update({8: 19, 9: 20, 10: 21, 11: 22, 12: 23})
+
 # Helper that provides each of the AArch64 condition codes of interest.
 ARCH_CONDITION_CODES = ["eq", "ne", "lt", "ge", "le", "gt", "lo", "hs", "ls", "hi"]
 
@@ -160,8 +169,9 @@ def with_register_substitutions(name, substitutions, *lines, immediate_range=ran
         """ Helper that transforms Wd => w1, implementing gadget substitutions. """
 
         # Register substitutions...
-        line = line.replace(f"X{letter}", f"x{number}")
-        line = line.replace(f"W{letter}", f"w{number}")
+        host = HOST_REGISTER.get(number, number)
+        line = line.replace(f"X{letter}", f"x{host}")
+        line = line.replace(f"W{letter}", f"w{host}")
 
         # ... vector register substitutions...
         line = line.replace(f"V{letter}", f"v{number + 16}")
