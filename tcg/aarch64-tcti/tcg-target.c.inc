@@ -1239,8 +1239,65 @@ static const TCGOutOpQemuLdSt outop_qemu_ld = {
     .out = tgen_qemu_ld,
 };
 
+/*
+ * The 128-bit gadgets: one per address register, for each fast-path MMU
+ * index and alignment check (none, 16 or 32 bytes), and a slow path.
+ */
+#define TCTI_I128_BY_MMU_IDX(op, a) {                                         \
+    &gadget_qemu_ ## op ## _i128_a ## a ## _idx0,                            \
+    &gadget_qemu_ ## op ## _i128_a ## a ## _idx1,                            \
+    &gadget_qemu_ ## op ## _i128_a ## a ## _idx2,                            \
+    &gadget_qemu_ ## op ## _i128_a ## a ## _idx3,                            \
+    &gadget_qemu_ ## op ## _i128_a ## a ## _idx4,                            \
+    &gadget_qemu_ ## op ## _i128_a ## a ## _idx5,                            \
+}
+
+typedef const void *TCTIGadgetI128[TCG_TARGET_GP_REGS];
+
+static TCTIGadgetI128 *const
+tcti_qemu_i128_fast[2][3][TCTI_TLB_FAST_MMU_INDICES] = {
+    { TCTI_I128_BY_MMU_IDX(st, 0), TCTI_I128_BY_MMU_IDX(st, 16),
+      TCTI_I128_BY_MMU_IDX(st, 32) },
+    { TCTI_I128_BY_MMU_IDX(ld, 0), TCTI_I128_BY_MMU_IDX(ld, 16),
+      TCTI_I128_BY_MMU_IDX(ld, 32) },
+};
+
+static TCTIGadgetI128 *const tcti_qemu_i128_slow[2] = {
+    &gadget_qemu_st_i128_a0_any, &gadget_qemu_ld_i128_a0_any,
+};
+
+static void tcti_out_qemu_ldst_i128(TCGContext *s, bool is_ld, TCGReg addr,
+                                    MemOpIdx oi)
+{
+    MemOp opc = get_memop(oi);
+    unsigned mmu_idx = get_mmuidx(oi);
+    unsigned a_bits = memop_alignment_bits(opc);
+    TCTIGadgetI128 *gadget;
+
+    tcg_debug_assert(!(opc & MO_BSWAP));
+
+    /* An alignment the gadget does not check is left to the slow path. */
+    if (tcti_has_fast_path(s, mmu_idx) && a_bits <= 5) {
+        int check = a_bits == 0 ? 0 : a_bits <= 4 ? 1 : 2;
+        gadget = tcti_qemu_i128_fast[is_ld][check][mmu_idx];
+    } else {
+        gadget = tcti_qemu_i128_slow[is_ld];
+    }
+    tcg_out_gadget(s, (*gadget)[addr]);
+    tcg_out64(s, oi);
+}
+
+static void tgen_qemu_ld2(TCGContext *s, TCGType type, TCGReg datalo,
+                          TCGReg datahi, TCGReg addr, MemOpIdx oi)
+{
+    tcg_debug_assert(type == TCG_TYPE_I128);
+    tcg_debug_assert(datalo == TCG_REG_R0 && datahi == TCG_REG_R1);
+    tcti_out_qemu_ldst_i128(s, true, addr, oi);
+}
+
 static const TCGOutOpQemuLdSt2 outop_qemu_ld2 = {
-    .base.static_constraint = C_NotImplemented,
+    .base.static_constraint = C_O2_I1(a, b, r),
+    .out = tgen_qemu_ld2,
 };
 
 static void tgen_qemu_st(TCGContext *s, TCGType type, TCGReg data,
@@ -1270,8 +1327,17 @@ static const TCGOutOpQemuLdSt outop_qemu_st = {
     .out = tgen_qemu_st,
 };
 
+static void tgen_qemu_st2(TCGContext *s, TCGType type, TCGReg datalo,
+                          TCGReg datahi, TCGReg addr, MemOpIdx oi)
+{
+    tcg_debug_assert(type == TCG_TYPE_I128);
+    tcg_debug_assert(datalo == TCG_REG_R2 && datahi == TCG_REG_R3);
+    tcti_out_qemu_ldst_i128(s, false, addr, oi);
+}
+
 static const TCGOutOpQemuLdSt2 outop_qemu_st2 = {
-    .base.static_constraint = C_NotImplemented,
+    .base.static_constraint = C_O0_I3(c, d, r),
+    .out = tgen_qemu_st2,
 };
 
 /* Test if a constant matches the constraint. */

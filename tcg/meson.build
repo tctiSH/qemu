@@ -34,6 +34,7 @@ if get_option('tcg_threaded_interpreter')
     'qemu_ld_unaligned_unsigned_le', 'qemu_ld_unaligned_signed_le',
     'qemu_ld_slowpath_unsigned_le', 'qemu_ld_slowpath_signed_le',
     'qemu_st_aligned_le', 'qemu_st_unaligned_le', 'qemu_st_slowpath_le',
+    'qemu_ldst_i128',
     'simd_base', 'simd_arithmetic', 'simd_logical', 'simd_immediate',
   ]
   tcti_outputs = ['tcti_gadgets.h']

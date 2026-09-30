@@ -7,6 +7,8 @@
 #ifndef TCG_TARGET_HAS_H
 #define TCG_TARGET_HAS_H
 
+#include "host/cpuinfo.h"
+
 /*
  * Since QEMU 10.1, whether a scalar op is supported is decided by its
  * TCGOutOp in tcg-target.c.inc; what is left here is what tcg.c and
@@ -17,10 +19,9 @@
 // a plain move.
 #define TCG_TARGET_HAS_extr_i64_i32     0
 
-// This operation exists specifically to allow us to provide differing register
-// constraints for 8-bit loads and stores. We don't need to do so, so we'll leave
-// this unimplemented, as we gain nothing by it.
-#define TCG_TARGET_HAS_qemu_ldst_i128   0
+// 128-bit guest loads and stores are one LDP/STP gadget, which is single-copy
+// atomic only with LSE2; without it, TCG splits them or calls a helper.
+#define TCG_TARGET_HAS_qemu_ldst_i128   (cpuinfo & CPUINFO_LSE2)
 
 #define TCG_TARGET_HAS_tst              0
 

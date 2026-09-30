@@ -354,9 +354,10 @@ def ldst_dn(name, *lines):
     with_dn_immediate(f"{name}_neg_imm", *immediate_lines_neg, immediate_range=range(64))
 
 
-def with_single(name, substitution, *lines):
+def with_single(name, substitution, *lines, operands=None):
     """ Generates a collection of gadgets with two subtstitutions."""
-    with_register_substitutions(name, (substitution,), *lines)
+    with_register_substitutions(name, (substitution,), *lines,
+                                operands=operands)
 
     # Fetch the files we'll be using for output.
     c_file, h_file = _get_output_files()
@@ -417,7 +418,7 @@ C_CALL_EPILOGUE = [
 ]
 
 
-def create_tlb_fastpath(is_aligned, is_write, miss_label="0"):
+def create_tlb_fastpath(is_aligned, is_write, miss_label="0", size=8):
     """ Creates a set of instructions that perform a soft-MMU TLB lookup.
 
     This is used for `qemu_ld`/qemu_st` instructions; to emit a prologue that
@@ -466,7 +467,7 @@ def create_tlb_fastpath(is_aligned, is_write, miss_label="0"):
         fast_path.extend([
             # If we're not aligned, add in our alignment value to ensure we don't
             # don't straddle the end of a page.
-            "add x24, Xn, #7",
+            f"add x24, Xn, #{size - 1}",
 
             # Store the page mask part of the address into X24.
             "and x24, x24, #0xfffffffffffff000",
@@ -1066,6 +1067,63 @@ for subtype in ('aligned', 'unaligned', 'slowpath'):
         fastpath_32b=["str Xd, [Xn, x27]"], fastpath_64b=["str Xd, [Xn, x27]"],
         force_slowpath=is_slowpath,
     )
+
+
+# Handlers for QEMU_LD2/ST2 with 128-bit accesses (x86's SSE/AVX loads and
+# stores), as one LDP/STP instead of two 64-bit accesses and the address
+# arithmetic between them. The data registers are fixed -- R0/R1 for loads,
+# R2/R3 for stores -- which keeps the gadget count down (one per address
+# register), and is exactly where helper_ld16_mmu() returns its Int128 and
+# helper_st16_mmu() takes it. The fast path requires LSE2 for LDP/STP to be
+# single-copy atomic; TCG_TARGET_HAS_qemu_ldst_i128 says so. An alignment
+# the gadget does not check (align=0 or a larger one) goes to the slow path,
+# which checks it and raises the fault.
+START_COLLECTION("qemu_ldst_i128", needs_defs=True)
+
+def ldst_i128(is_ld, align, mmu_idx):
+    op = "ld" if is_ld else "st"
+    suffix = "any" if mmu_idx is None else f"idx{mmu_idx}"
+    fast = []
+    if mmu_idx is not None:
+        fast = [
+            *create_tlb_fastpath(is_aligned=False, is_write=not is_ld, size=16),
+            *([f"tst Xn, #{align - 1}", "b.ne 0f"] if align else []),
+            "add x27, x27, Xn",
+            "ldp x0, x1, [x27]" if is_ld else "stp x2, x3, [x27]",
+            "add x28, x28, #8",
+            *EPILOGUE,
+        ]
+    if is_ld:
+        slow = [
+            "mov x27, Xn",
+            *C_CALL_PROLOGUE,
+            "mov   x0, x14",
+            "mov   x1, x27",
+            "ldr   x2, [x28], #8",
+            "mov   x3, x28",
+            "bl _helper_ld16_mmu",
+            *C_CALL_EPILOGUE,
+        ]
+    else:
+        slow = [
+            "mov x26, Xn",
+            *C_CALL_PROLOGUE,
+            "mov   x0, x14",
+            "mov   x1, x26",
+            "ldr   x4, [x28], #8",
+            "mov   x5, x28",
+            "bl _helper_st16_mmu",
+            *C_CALL_EPILOGUE,
+        ]
+    with_single(f"qemu_{op}_i128_a{align}_{suffix}", "n", *fast, "0:", *slow,
+                "add x28, x28, #8",
+                operands=None if mmu_idx is None else tlb_operands(mmu_idx))
+
+for is_ld in (True, False):
+    for align in (0, 16, 32):
+        for mmu_idx in QEMU_TLB_FAST_MMU_INDICES:
+            ldst_i128(is_ld, align, mmu_idx)
+    ldst_i128(is_ld, 0, None)
 
 
 #
