@@ -772,6 +772,16 @@ simple("br",
 with_d("goto_ptr", "mov x28, Xd")
 
 
+# The exit check at the start of every TB: a 32-bit load from env into Wd
+# and a branch if it is negative, as one gadget instead of a load and a
+# brcondi. The stream holds the env offset, then the branch target.
+with_d("tb_exit_check",
+    "ldp x26, x27, [x28], #16",
+    "ldr Wd, [x14, x26]",
+    "tst Wd, Wd",
+    "csel x28, x27, x28, lt"
+)
+
 # Exit from a translation buffer execution.
 simple("exit_tb",
 

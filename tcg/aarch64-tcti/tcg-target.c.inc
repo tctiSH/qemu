@@ -384,6 +384,23 @@ static void tcg_out_movr(TCGContext *s, TCGType ext, TCGReg rd, TCGReg rm)
 }
 
 
+/*
+ * Whether a label is bound in (start, end]: a fusion that rewinds to start
+ * would leave a branch to it pointing into the fused gadget's stream.
+ */
+static bool tcti_label_within(TCGContext *s, const tcg_insn_unit *start,
+                              const tcg_insn_unit *end)
+{
+    TCGLabel *l;
+
+    QSIMPLEQ_FOREACH(l, &s->labels, next) {
+        if (l->has_value && l->u.value_ptr > start && l->u.value_ptr <= end) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool tcg_out_mov(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg)
 {
     TCGReg w_ret = (ret - TCG_REG_V16);
@@ -579,10 +596,28 @@ static void tcg_out_call(TCGContext *s, const tcg_insn_unit *func,
 /**
  * Generates LD instructions.
  */
+/*
+ * The last 32-bit load from env emitted, so tgen_brcondi() can fuse it with
+ * a following "branch if negative" into tb_exit_check: that pair starts
+ * every TB. Per thread, as translation is.
+ */
+static __thread struct {
+    tcg_insn_unit *start, *end;
+    TCGReg reg;
+    intptr_t offset;
+} tcti_last_env_ld32;
+
 static void tcg_out_ld(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg1,
                        intptr_t arg2)
 {
-
+    if (type == TCG_TYPE_I32 && arg1 == TCG_AREG0) {
+        tcti_last_env_ld32.start = s->code_ptr;
+        tcg_out_ldst_gadget(s, gadget_ld32u, ret, arg1, arg2);
+        tcti_last_env_ld32.end = s->code_ptr;
+        tcti_last_env_ld32.reg = ret;
+        tcti_last_env_ld32.offset = arg2;
+        return;
+    }
     if (type == TCG_TYPE_I32) {
         tcg_out_ldst_gadget(s, gadget_ld32u, ret, arg1, arg2);
     } else {
@@ -1006,6 +1041,24 @@ static void tgen_brcondi(TCGContext *s, TCGType type, TCGCond cond,
     TCTIGadget2 *gadget = (type == TCG_TYPE_I32 ? tcti_brcondi_i32 : tcti_brcondi_i64)[cond];
 
     tcg_debug_assert(gadget);
+
+    /*
+     * A load of this register from env just before: the TB-start exit
+     * check. The fused gadget does the load too, so the register holds the
+     * same value either way.
+     */
+    if (type == TCG_TYPE_I32 && cond == TCG_COND_LT && arg1 == 0 &&
+        tcti_last_env_ld32.end == s->code_ptr &&
+        tcti_last_env_ld32.reg == arg0 &&
+        !tcti_label_within(s, tcti_last_env_ld32.start, s->code_ptr)) {
+        s->code_ptr = tcti_last_env_ld32.start;
+        tcti_last_env_ld32.end = NULL;
+        tcg_out_unary_gadget(s, gadget_tb_exit_check, arg0);
+        tcg_out64(s, tcti_last_env_ld32.offset);
+        tcti_out_label(s, l);
+        return;
+    }
+
     tcg_out_gadget(s, (*gadget)[last_brcond][arg0]);
     last_brcond = (last_brcond + 1) % TCG_TARGET_GP_REGS;
     tcg_out64(s, arg1);
@@ -2043,7 +2096,8 @@ static inline void tcg_target_qemu_prologue(TCGContext *s)
 
 static void tcg_out_tb_start(TCGContext *s)
 {
-    /* nothing to do */
+    /* Nothing from a previous (or restarted) translation may be fused. */
+    tcti_last_env_ld32.end = NULL;
 }
 
 /*
