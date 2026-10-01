@@ -1042,6 +1042,15 @@ START_COLLECTION("store")
 with_pair("stp_env", ('d', 'm'), "ldr x27, [x28], #8", "add x27, x14, x27", "stp Xd, Xm, [x27]")
 with_pair("ldp_env", ('d', 'm'), "ldr x27, [x28], #8", "add x27, x14, x27", "ldr Xd, [x27]", "ldr Xm, [x27, #8]")
 
+# A 64-bit env slot updated by an add or and of an immediate, as one gadget
+# for the load, the op and the store: Xn = the slot, Xd = Xn op imm, Xd back
+# to the slot. Above all this is the guest pc, which a TB moves on by a
+# constant before leaving to another page. The stream holds the offset, then
+# the immediate. See tcg_out_st().
+for op in ("add", "and"):
+    with_pair(f"{op}i_env", ('d', 'n'), "ldp x26, x27, [x28], #16", "ldr Xn, [x14, x26]",
+              f"{op} Xd, Xn, x27", "str Xd, [x14, x26]")
+
 # STORE variants.
 ldst_dn("st8",         "strb  Wd, [Xn, x27]")
 ldst_dn("st16",        "strh  Wd, [Xn, x27]")
