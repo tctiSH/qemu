@@ -384,6 +384,9 @@ static void tcg_out_movr(TCGContext *s, TCGType ext, TCGReg rd, TCGReg rm)
 }
 
 
+static void tcti_note_env_arg(TCGContext *s, tcg_insn_unit *start,
+                              TCGReg reg, intptr_t offset);
+
 /*
  * Whether a label is bound in (start, end]: a fusion that rewinds to start
  * would leave a branch to it pointing into the fused gadget's stream.
@@ -416,7 +419,12 @@ static bool tcg_out_mov(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg)
 
         // If this is a GP to GP register mov, issue our standard MOV.
         if (ret < 32 && arg < 32) {
+            tcg_insn_unit *start = s->code_ptr;
+
             tcg_out_movr(s, type, ret, arg);
+            if (type == TCG_TYPE_I64 && arg == TCG_AREG0) {
+                tcti_note_env_arg(s, start, ret, 0);
+            }
             break;
         }
         // If this is a vector register to GP, issue a UMOV.
@@ -586,9 +594,90 @@ static void tcg_out_addi_ptr(TCGContext *s, TCGReg rd, TCGReg rs,
 /**
  * Generate a CALL.
  */
+/*
+ * The gadgets just emitted that set an argument register to env plus a
+ * constant (a mov from env, or an addi to it), for tcg_out_call() to fold
+ * into a call_envN gadget. Each entry is contiguous with the one before;
+ * anything else emitted in between restarts the log. Per thread, as
+ * translation is.
+ */
+#define TCTI_ENV_ARGS 8
+
+static __thread struct {
+    int n;
+    struct {
+        tcg_insn_unit *start, *end;
+        TCGReg reg;
+        intptr_t offset;
+    } e[TCTI_ENV_ARGS];
+} tcti_env_args;
+
+static void tcti_note_env_arg(TCGContext *s, tcg_insn_unit *start,
+                              TCGReg reg, intptr_t offset)
+{
+    int n = tcti_env_args.n;
+
+    if (reg >= TCTI_ENV_ARGS) {
+        tcti_env_args.n = 0;
+        return;
+    }
+    if (n == 0 || tcti_env_args.e[n - 1].end != start || n == TCTI_ENV_ARGS) {
+        n = 0;
+    }
+    tcti_env_args.e[n].start = start;
+    tcti_env_args.e[n].end = s->code_ptr;
+    tcti_env_args.e[n].reg = reg;
+    tcti_env_args.e[n].offset = offset;
+    tcti_env_args.n = n + 1;
+}
+
+static const void *const tcti_call_env[TCTI_ENV_ARGS] = {
+    gadget_call_env0, gadget_call_env1, gadget_call_env2, gadget_call_env3,
+    gadget_call_env4, gadget_call_env5, gadget_call_env6, gadget_call_env7,
+};
+
 static void tcg_out_call(TCGContext *s, const tcg_insn_unit *func,
                          const TCGHelperInfo *info)
 {
+    int n = tcti_env_args.n, first = -1, top = -1;
+    intptr_t offset[TCTI_ENV_ARGS];
+    unsigned seen = 0;
+
+    /*
+     * Walk back over the env-argument gadgets directly before this call,
+     * for the longest run that sets exactly R0..Rtop, each once. The fused
+     * gadget does the same writes, so folding them changes nothing else.
+     */
+    if (n && tcti_env_args.e[n - 1].end == s->code_ptr) {
+        for (int i = n - 1; i >= 0; i--) {
+            unsigned bit = 1u << tcti_env_args.e[i].reg;
+
+            if ((seen & bit) ||
+                (i < n - 1 &&
+                 tcti_env_args.e[i].end != tcti_env_args.e[i + 1].start)) {
+                break;
+            }
+            seen |= bit;
+            offset[tcti_env_args.e[i].reg] = tcti_env_args.e[i].offset;
+            if ((seen & (seen + 1)) == 0) {
+                first = i;
+                top = ctz32(~seen) - 1;
+            }
+        }
+    }
+    tcti_env_args.n = 0;
+
+    if (first >= 0 &&
+        !tcti_label_within(s, tcti_env_args.e[first].start, s->code_ptr)) {
+        s->code_ptr = tcti_env_args.e[first].start;
+        tcg_out_gadget(s, tcti_call_env[top]);
+        tcg_out64(s, (uintptr_t)func);
+        for (int r = 0; r <= top; r++) {
+            tcg_out64(s, offset[r]);
+        }
+        return;
+    }
+
     tcg_out_gadget(s, gadget_call);
     tcg_out64(s, (uintptr_t)func);
 }
@@ -726,9 +815,14 @@ static void tcg_out_set_borrow(TCGContext *s)
     static void tgen_##name##i(TCGContext *s, TCGType type,                 \
                                TCGReg a0, TCGReg a1, tcg_target_long a2)    \
     {                                                                       \
+        tcg_insn_unit *start = s->code_ptr;                                 \
         tcg_out_binary_gadget(s, type == TCG_TYPE_I32 ? gadgeti32 : gadgeti64, \
                               a0, a1);                                      \
         tcg_out64(s, a2);                                                   \
+        if (gadgeti64 == gadget_addi_i64 && type == TCG_TYPE_I64 &&         \
+            a1 == TCG_AREG0) {                                              \
+            tcti_note_env_arg(s, start, a0, a2);                            \
+        }                                                                   \
     }                                                                       \
     static const TCGOutOpBinary outop_##name = {                            \
         .base.static_constraint = C_O1_I2(r, r, ri),                        \
@@ -2097,6 +2191,17 @@ static inline void tcg_target_qemu_prologue(TCGContext *s)
 static void tcg_out_tb_start(TCGContext *s)
 {
     /* Nothing from a previous (or restarted) translation may be fused. */
+    tcti_env_args.n = 0;
+    tcti_last_env_ld32.end = NULL;
+}
+
+/*
+ * Nor across guest instructions: unwinding maps a helper's return address
+ * to the instruction whose code contains it, which a fusion could move.
+ */
+static void tcti_insn_start(TCGContext *s)
+{
+    tcti_env_args.n = 0;
     tcti_last_env_ld32.end = NULL;
 }
 
