@@ -387,6 +387,7 @@ static void tcg_out_movr(TCGContext *s, TCGType ext, TCGReg rd, TCGReg rm)
 
 static void tcti_note_env_arg(TCGContext *s, tcg_insn_unit *start,
                               TCGReg reg, intptr_t offset);
+static void tcti_rewind(TCGContext *s, tcg_insn_unit *to);
 
 /*
  * Whether a label is bound in (start, end]: a fusion that rewinds to start
@@ -721,7 +722,7 @@ static void tcg_out_call(TCGContext *s, const tcg_insn_unit *func,
         bool env = first >= 0 && top == 3;
 
         if (env) {
-            s->code_ptr = tcti_env_args.e[first].start;
+            tcti_rewind(s, tcti_env_args.e[first].start);
         }
         tcg_out_gadget(s, tcti_inline_fp[env][fp->op][tcti_inline_fp_form(fp)]);
         tcg_out64(s, (uintptr_t)func);
@@ -736,7 +737,7 @@ static void tcg_out_call(TCGContext *s, const tcg_insn_unit *func,
     }
 
     if (first >= 0) {
-        s->code_ptr = tcti_env_args.e[first].start;
+        tcti_rewind(s, tcti_env_args.e[first].start);
         tcg_out_gadget(s, tcti_call_env[top]);
         tcg_out64(s, (uintptr_t)func);
         for (int r = 0; r <= top; r++) {
@@ -777,6 +778,52 @@ static __thread struct {
 } tcti_last_env_ldst64;
 
 /*
+ * A 64-bit load from env that an add or and of an immediate directly
+ * followed: if the result is stored straight back to the same slot, the
+ * three become one addi_env or andi_env gadget. Per thread, as translation is.
+ */
+static __thread struct {
+    tcg_insn_unit *start, *end;
+    const void *(*gadgets)[TCG_TARGET_GP_REGS];
+    TCGReg dst, src;
+    intptr_t offset;
+    tcg_target_long imm;
+} tcti_env_rmw;
+
+/* Called after an i64 op dst = src op imm, emitted from start. */
+static void tcti_note_env_rmw(TCGContext *s, tcg_insn_unit *start,
+                              const void *(*gadgets)[TCG_TARGET_GP_REGS],
+                              TCGReg dst, TCGReg src, tcg_target_long imm)
+{
+    typeof(tcti_last_env_ldst64) *ld = &tcti_last_env_ldst64;
+
+    tcti_env_rmw.end = NULL;
+    if (ld->end == start && !ld->is_st && ld->reg == src) {
+        tcti_env_rmw.start = ld->start;
+        tcti_env_rmw.end = s->code_ptr;
+        tcti_env_rmw.gadgets = gadgets;
+        tcti_env_rmw.dst = dst;
+        tcti_env_rmw.src = src;
+        tcti_env_rmw.offset = ld->offset;
+        tcti_env_rmw.imm = imm;
+    }
+}
+
+/*
+ * Every fusion moves code_ptr back to the start of what it replaces. A note
+ * of something emitted before could then match code_ptr by chance, so each
+ * rewind forgets them all; fusing is never needed for correctness.
+ */
+static void tcti_rewind(TCGContext *s, tcg_insn_unit *to)
+{
+    s->code_ptr = to;
+    tcti_env_args.n = 0;
+    tcti_last_env_ld32.end = NULL;
+    tcti_last_env_ldst64.end = NULL;
+    tcti_env_rmw.end = NULL;
+}
+
+/*
  * Emit a 64-bit load or store of reg at env + offset, joining it to the one
  * just before if that was the same kind to the neighbouring slot.
  */
@@ -784,19 +831,33 @@ static void tcti_out_env_ldst64(TCGContext *s, bool is_st, TCGReg reg,
                                 intptr_t offset)
 {
     typeof(tcti_last_env_ldst64) *last = &tcti_last_env_ldst64;
+    typeof(tcti_env_rmw) *rmw = &tcti_env_rmw;
     tcg_insn_unit *start = s->code_ptr;
 
+    if (is_st && rmw->end == s->code_ptr && rmw->dst == reg &&
+        rmw->offset == offset &&
+        !tcti_label_within(s, rmw->start, s->code_ptr)) {
+        TCGReg dst = rmw->dst, src = rmw->src;
+        const void *(*gadgets)[TCG_TARGET_GP_REGS] = rmw->gadgets;
+        tcg_target_long imm = rmw->imm;
+
+        tcti_rewind(s, rmw->start);
+        tcg_out_gadget(s, gadgets[dst][src]);
+        tcg_out64(s, offset);
+        tcg_out64(s, imm);
+        return;
+    }
     if (last->end == s->code_ptr && last->is_st == is_st &&
         (last->offset + 8 == offset || offset + 8 == last->offset) &&
         (is_st || last->reg != reg) &&
         !tcti_label_within(s, last->start, s->code_ptr)) {
         bool up = last->offset < offset;
         TCGReg lo = up ? last->reg : reg, hi = up ? reg : last->reg;
+        intptr_t lo_offset = up ? last->offset : offset;
 
-        s->code_ptr = last->start;
+        tcti_rewind(s, last->start);    /* and a pair takes no third */
         tcg_out_gadget(s, (is_st ? gadget_stp_env : gadget_ldp_env)[lo][hi]);
-        tcg_out64(s, up ? last->offset : offset);
-        last->end = NULL;   /* a pair takes no third */
+        tcg_out64(s, lo_offset);
         return;
     }
     /* tcg_out_ldst_gadget() pastes the gadget's name: one call each. */
@@ -942,6 +1003,11 @@ static void tcg_out_set_borrow(TCGContext *s)
         if (gadgeti64 == gadget_addi_i64 && type == TCG_TYPE_I64 &&         \
             a1 == TCG_AREG0) {                                              \
             tcti_note_env_arg(s, start, a0, a2);                            \
+        }                                                                   \
+        if (type == TCG_TYPE_I64 && (gadgeti64 == gadget_addi_i64 ||        \
+                                     gadgeti64 == gadget_andi_i64)) {       \
+            tcti_note_env_rmw(s, start, gadgeti64 == gadget_addi_i64 ?      \
+                              gadget_addi_env : gadget_andi_env, a0, a1, a2); \
         }                                                                   \
     }                                                                       \
     static const TCGOutOpBinary outop_##name = {                            \
@@ -1265,10 +1331,11 @@ static void tgen_brcondi(TCGContext *s, TCGType type, TCGCond cond,
         tcti_last_env_ld32.end == s->code_ptr &&
         tcti_last_env_ld32.reg == arg0 &&
         !tcti_label_within(s, tcti_last_env_ld32.start, s->code_ptr)) {
-        s->code_ptr = tcti_last_env_ld32.start;
-        tcti_last_env_ld32.end = NULL;
+        intptr_t offset = tcti_last_env_ld32.offset;
+
+        tcti_rewind(s, tcti_last_env_ld32.start);
         tcg_out_unary_gadget(s, gadget_tb_exit_check, arg0);
-        tcg_out64(s, tcti_last_env_ld32.offset);
+        tcg_out64(s, offset);
         tcti_out_label(s, l);
         return;
     }
@@ -2356,6 +2423,7 @@ static void tcg_out_tb_start(TCGContext *s)
     tcti_env_args.n = 0;
     tcti_last_env_ld32.end = NULL;
     tcti_last_env_ldst64.end = NULL;
+    tcti_env_rmw.end = NULL;
 }
 
 /*
@@ -2367,6 +2435,7 @@ static void tcti_insn_start(TCGContext *s)
     tcti_env_args.n = 0;
     tcti_last_env_ld32.end = NULL;
     tcti_last_env_ldst64.end = NULL;
+    tcti_env_rmw.end = NULL;
 }
 
 /*
