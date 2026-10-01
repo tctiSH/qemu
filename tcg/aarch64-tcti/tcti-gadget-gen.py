@@ -803,6 +803,91 @@ for n in range(8):
         "mov x0, x27"
     )
 
+# The inline float fast path (tcg/tcg-inline-fp.h): a registered SSE float
+# helper's operation done here on NEON, under the conditions that make it
+# exactly the helper's, and the call otherwise. The "_env" forms compute the
+# arguments from env plus offsets, as call_envN does; the others find them
+# in x0-x3 already. The stream holds the function, [the four offsets,] the
+# float_status word's offset, then its mask (low half) and wanted value
+# (high half). See tcg_out_call().
+INLINE_FP_OPS = ("add", "sub", "mul", "div", "min", "max")
+INLINE_FP_FORMS = (         # name, double, bytes (0: scalar)
+    ("ps16", False, 16), ("ps32", False, 32), ("pd16", True, 16),
+    ("pd32", True, 32), ("ss", False, 0), ("sd", True, 0),
+)
+
+def inline_fp(op, form, dbl, size, env):
+    t = "2d" if dbl else "4s"
+    p = "d" if dbl else "s"
+    minmax = op in ("min", "max")
+    lines = ["ldr x27, [x28], #8"]
+    if env:
+        for i in range(4):
+            lines += ["ldr x26, [x28], #8", f"add x{i}, x14, x26"]
+    lines += ["ldp x24, x26, [x28], #16"]
+
+    # Rounding to nearest, no flushing, inexact already raised.
+    if not minmax:
+        lines += ["ldr w16, [x14, x24]", "and w16, w16, w26", "lsr x17, x26, #32",
+                  "cmp w16, w17", "b.ne 9f"]
+
+    # The smallest normal and infinity; v18 stays all ones while all is well.
+    if dbl:
+        lines += ["movz x16, #0x0010, lsl #48", "dup v16.2d, x16",
+                  "movz x16, #0x7ff0, lsl #48", "dup v17.2d, x16"]
+    else:
+        lines += ["movz w16, #0x0080, lsl #16", "dup v16.4s, w16",
+                  "movz w16, #0x7f80, lsl #16", "dup v17.4s, w16"]
+    lines += ["movi v18.2d, #0xffffffffffffffff"]
+
+    def normal(x):
+        return [f"facge v19.{t}, v{x}.{t}, v16.{t}", f"facgt v20.{t}, v17.{t}, v{x}.{t}",
+                "and v19.16b, v19.16b, v20.16b", f"fcmeq v20.{t}, v{x}.{t}, #0.0",
+                "orr v19.16b, v19.16b, v20.16b", "and v18.16b, v18.16b, v19.16b"]
+
+    def underflow(r, *nonzero):
+        out = [f"fcmeq v19.{t}, v{r}.{t}, #0.0"]
+        for x in nonzero:
+            out += [f"fcmeq v20.{t}, v{x}.{t}, #0.0", "bic v19.16b, v19.16b, v20.16b"]
+        return out + ["bic v18.16b, v18.16b, v19.16b"]
+
+    for k in range(2 if size == 32 else 1):
+        a, b, r = 3 * k, 3 * k + 1, 3 * k + 2
+        if size == 0:
+            lines += [f"ldr {p}{a}, [x2]", f"ldr {p}{b}, [x3]"]
+        else:
+            lines += [f"ldr q{a}, [x2, #{16 * k}]", f"ldr q{b}, [x3, #{16 * k}]"]
+        if minmax:
+            # x86's min is v < s ? v : s, max v > s ? v : s.
+            x, y = (b, a) if op == "min" else (a, b)
+            lines += [f"fcmgt v{r}.{t}, v{x}.{t}, v{y}.{t}", f"bsl v{r}.16b, v{a}.16b, v{b}.16b"]
+        elif size == 0:
+            lines += [f"f{op} {p}{r}, {p}{a}, {p}{b}"]
+        else:
+            lines += [f"f{op} v{r}.{t}, v{a}.{t}, v{b}.{t}"]
+        # A scalar load or op zeroes the lanes above, which pass.
+        lines += normal(a) + normal(b) + ([] if minmax else normal(r))
+        if op == "mul":
+            lines += underflow(r, a, b)
+        elif op == "div":
+            lines += underflow(r, a)
+
+    lines += ["uminv s19, v18.4s", "fmov w16, s19", "cmn w16, #1", "b.ne 9f"]
+    if size == 0:
+        lines += ["ldr q6, [x2]", f"mov v6.{p}[0], v2.{p}[0]", "str q6, [x1]"]
+    else:
+        lines += [f"str q{3 * k + 2}, [x1, #{16 * k}]" for k in range(2 if size == 32 else 1)]
+    lines += [*EPILOGUE, "9:",
+              "str x28, [x25]", *C_CALL_PROLOGUE, "blr x27", "mov x27, x0",
+              *C_CALL_EPILOGUE, "mov x0, x27"]
+
+    simple(f"inline_fp{'_env' if env else ''}_{op}_{form}", *lines)
+
+for env in (False, True):
+    for op in INLINE_FP_OPS:
+        for form, dbl, size in INLINE_FP_FORMS:
+            inline_fp(op, form, dbl, size, env)
+
 # Branch to a given immediate address.
 simple("br",
     # Use our immediate argument as our new bytecode-pointer location.
