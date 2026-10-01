@@ -101,6 +101,13 @@ TCGOp *tcg_op_insert_after(TCGContext *s, TCGOp *op,
                            TCGOpcode, TCGType, unsigned nargs);
 
 /*
+ * Whether guest loads and stores are to be emitted as ordered accesses,
+ * every load an acquire and every store a release, instead of behind the
+ * barriers tcg_gen_req_mo() would otherwise put before them.
+ */
+bool tcg_ldst_ordered(TCGContext *s);
+
+/*
  * For a binary opcode OP, return true if the second input operand allows IMM.
  */
 bool tcg_op_imm_match(TCGOpcode op, TCGType type, tcg_target_ulong imm);

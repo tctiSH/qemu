@@ -1347,14 +1347,14 @@ QEMU_BUILD_BUG_ON(TCTI_TLB_FAST_MMU_INDICES != 6);
     [MO_UQ] = TCTI_BY_MMU_IDX(gadget_qemu_ld_leq_  ## variant ## _, _ ## type), \
 }
 
-#define TCTI_QEMU_LD_SLOW(type) {                                           \
-    [MO_UB] = &gadget_qemu_ld_ub_slowpath_any_   ## type,                   \
-    [MO_SB] = &gadget_qemu_ld_sb_slowpath_any_   ## type,                   \
-    [MO_UW] = &gadget_qemu_ld_leuw_slowpath_any_ ## type,                   \
-    [MO_SW] = &gadget_qemu_ld_lesw_slowpath_any_ ## type,                   \
-    [MO_UL] = &gadget_qemu_ld_leul_slowpath_any_ ## type,                   \
-    [MO_SL] = &gadget_qemu_ld_lesl_slowpath_any_ ## type,                   \
-    [MO_UQ] = &gadget_qemu_ld_leq_slowpath_any_  ## type,                   \
+#define TCTI_QEMU_LD_SLOW(variant, type) {                                  \
+    [MO_UB] = &gadget_qemu_ld_ub_   ## variant ## _any_ ## type,            \
+    [MO_SB] = &gadget_qemu_ld_sb_   ## variant ## _any_ ## type,            \
+    [MO_UW] = &gadget_qemu_ld_leuw_ ## variant ## _any_ ## type,            \
+    [MO_SW] = &gadget_qemu_ld_lesw_ ## variant ## _any_ ## type,            \
+    [MO_UL] = &gadget_qemu_ld_leul_ ## variant ## _any_ ## type,            \
+    [MO_SL] = &gadget_qemu_ld_lesl_ ## variant ## _any_ ## type,            \
+    [MO_UQ] = &gadget_qemu_ld_leq_  ## variant ## _any_ ## type,            \
 }
 
 #define TCTI_QEMU_ST_BY_SIZE(variant, type) {                               \
@@ -1364,33 +1364,57 @@ QEMU_BUILD_BUG_ON(TCTI_TLB_FAST_MMU_INDICES != 6);
     [MO_64] = TCTI_BY_MMU_IDX(gadget_qemu_st_leq_  ## variant ## _, _ ## type), \
 }
 
-#define TCTI_QEMU_ST_SLOW(type) {                                           \
-    [MO_8]  = &gadget_qemu_st_ub_slowpath_any_   ## type,                   \
-    [MO_16] = &gadget_qemu_st_leuw_slowpath_any_ ## type,                   \
-    [MO_32] = &gadget_qemu_st_leul_slowpath_any_ ## type,                   \
-    [MO_64] = &gadget_qemu_st_leq_slowpath_any_  ## type,                   \
+#define TCTI_QEMU_ST_SLOW(variant, type) {                                  \
+    [MO_8]  = &gadget_qemu_st_ub_   ## variant ## _any_ ## type,            \
+    [MO_16] = &gadget_qemu_st_leuw_ ## variant ## _any_ ## type,            \
+    [MO_32] = &gadget_qemu_st_leul_ ## variant ## _any_ ## type,            \
+    [MO_64] = &gadget_qemu_st_leq_  ## variant ## _any_ ## type,            \
 }
 
-/* Indexed [is_aligned][is_i64][memop & MO_SSIZE][mmu_idx]. */
-static TCTIGadget2 *const tcti_qemu_ld_fast[2][2][MO_SSIZE + 1][TCTI_TLB_FAST_MMU_INDICES] = {
-    { TCTI_QEMU_LD_BY_SIZE(unaligned, i32), TCTI_QEMU_LD_BY_SIZE(unaligned, i64) },
-    { TCTI_QEMU_LD_BY_SIZE(aligned, i32),   TCTI_QEMU_LD_BY_SIZE(aligned, i64) },
+/*
+ * The "_ord" gadgets are the ordered ones, for tcg_ldst_ordered(): LDAPR and
+ * STLR on the fast path, which then also sends an access that crosses a
+ * 16-byte boundary to the slow path, and a barrier around the helper's plain
+ * access on the slow path. They take the place of a barrier gadget before
+ * every access.
+ */
+
+/* Indexed [is_ordered][is_aligned][is_i64][memop & MO_SSIZE][mmu_idx]. */
+static TCTIGadget2 *const
+tcti_qemu_ld_fast[2][2][2][MO_SSIZE + 1][TCTI_TLB_FAST_MMU_INDICES] = {
+    {
+        { TCTI_QEMU_LD_BY_SIZE(unaligned, i32), TCTI_QEMU_LD_BY_SIZE(unaligned, i64) },
+        { TCTI_QEMU_LD_BY_SIZE(aligned, i32),   TCTI_QEMU_LD_BY_SIZE(aligned, i64) },
+    },
+    {
+        { TCTI_QEMU_LD_BY_SIZE(unaligned_ord, i32), TCTI_QEMU_LD_BY_SIZE(unaligned_ord, i64) },
+        { TCTI_QEMU_LD_BY_SIZE(aligned_ord, i32),   TCTI_QEMU_LD_BY_SIZE(aligned_ord, i64) },
+    },
 };
 
-/* Indexed [is_i64][memop & MO_SSIZE]. */
-static TCTIGadget2 *const tcti_qemu_ld_slow[2][MO_SSIZE + 1] = {
-    TCTI_QEMU_LD_SLOW(i32), TCTI_QEMU_LD_SLOW(i64),
+/* Indexed [is_ordered][is_i64][memop & MO_SSIZE]. */
+static TCTIGadget2 *const tcti_qemu_ld_slow[2][2][MO_SSIZE + 1] = {
+    { TCTI_QEMU_LD_SLOW(slowpath, i32),     TCTI_QEMU_LD_SLOW(slowpath, i64) },
+    { TCTI_QEMU_LD_SLOW(slowpath_ord, i32), TCTI_QEMU_LD_SLOW(slowpath_ord, i64) },
 };
 
-/* Indexed [is_aligned][is_i64][memop & MO_SIZE][mmu_idx]. */
-static TCTIGadget2 *const tcti_qemu_st_fast[2][2][MO_64 + 1][TCTI_TLB_FAST_MMU_INDICES] = {
-    { TCTI_QEMU_ST_BY_SIZE(unaligned, i32), TCTI_QEMU_ST_BY_SIZE(unaligned, i64) },
-    { TCTI_QEMU_ST_BY_SIZE(aligned, i32),   TCTI_QEMU_ST_BY_SIZE(aligned, i64) },
+/* Indexed [is_ordered][is_aligned][is_i64][memop & MO_SIZE][mmu_idx]. */
+static TCTIGadget2 *const
+tcti_qemu_st_fast[2][2][2][MO_64 + 1][TCTI_TLB_FAST_MMU_INDICES] = {
+    {
+        { TCTI_QEMU_ST_BY_SIZE(unaligned, i32), TCTI_QEMU_ST_BY_SIZE(unaligned, i64) },
+        { TCTI_QEMU_ST_BY_SIZE(aligned, i32),   TCTI_QEMU_ST_BY_SIZE(aligned, i64) },
+    },
+    {
+        { TCTI_QEMU_ST_BY_SIZE(unaligned_ord, i32), TCTI_QEMU_ST_BY_SIZE(unaligned_ord, i64) },
+        { TCTI_QEMU_ST_BY_SIZE(aligned_ord, i32),   TCTI_QEMU_ST_BY_SIZE(aligned_ord, i64) },
+    },
 };
 
-/* Indexed [is_i64][memop & MO_SIZE]. */
-static TCTIGadget2 *const tcti_qemu_st_slow[2][MO_64 + 1] = {
-    TCTI_QEMU_ST_SLOW(i32), TCTI_QEMU_ST_SLOW(i64),
+/* Indexed [is_ordered][is_i64][memop & MO_SIZE]. */
+static TCTIGadget2 *const tcti_qemu_st_slow[2][2][MO_64 + 1] = {
+    { TCTI_QEMU_ST_SLOW(slowpath, i32),     TCTI_QEMU_ST_SLOW(slowpath, i64) },
+    { TCTI_QEMU_ST_SLOW(slowpath_ord, i32), TCTI_QEMU_ST_SLOW(slowpath_ord, i64) },
 };
 
 /*
@@ -1413,6 +1437,7 @@ static void tgen_qemu_ld(TCGContext *s, TCGType type, TCGReg data,
     MemOp opc = get_memop(oi);
     unsigned mmu_idx = get_mmuidx(oi);
     bool is_i64 = (type == TCG_TYPE_I64);
+    bool ordered = tcg_ldst_ordered(s);
     TCTIGadget2 *gadget;
 
     /* tcg_target_has_memory_bswap() says no, so TCG swaps separately. */
@@ -1420,9 +1445,9 @@ static void tgen_qemu_ld(TCGContext *s, TCGType type, TCGReg data,
 
     if (tcti_has_fast_path(s, mmu_idx)) {
         bool is_aligned = (opc & MO_SIZE) == MO_8;
-        gadget = tcti_qemu_ld_fast[is_aligned][is_i64][opc & MO_SSIZE][mmu_idx];
+        gadget = tcti_qemu_ld_fast[ordered][is_aligned][is_i64][opc & MO_SSIZE][mmu_idx];
     } else {
-        gadget = tcti_qemu_ld_slow[is_i64][opc & MO_SSIZE];
+        gadget = tcti_qemu_ld_slow[ordered][is_i64][opc & MO_SSIZE];
     }
     tcg_debug_assert(gadget);
 
@@ -1440,26 +1465,37 @@ static const TCGOutOpQemuLdSt outop_qemu_ld = {
  * index and alignment check (none, 16 or 32 bytes), and a slow path.
  */
 #define TCTI_I128_BY_MMU_IDX(op, a) {                                         \
-    &gadget_qemu_ ## op ## _i128_a ## a ## _idx0,                            \
-    &gadget_qemu_ ## op ## _i128_a ## a ## _idx1,                            \
-    &gadget_qemu_ ## op ## _i128_a ## a ## _idx2,                            \
-    &gadget_qemu_ ## op ## _i128_a ## a ## _idx3,                            \
-    &gadget_qemu_ ## op ## _i128_a ## a ## _idx4,                            \
-    &gadget_qemu_ ## op ## _i128_a ## a ## _idx5,                            \
+    &gadget_qemu_ ## op ## _a ## a ## _idx0,                                 \
+    &gadget_qemu_ ## op ## _a ## a ## _idx1,                                 \
+    &gadget_qemu_ ## op ## _a ## a ## _idx2,                                 \
+    &gadget_qemu_ ## op ## _a ## a ## _idx3,                                 \
+    &gadget_qemu_ ## op ## _a ## a ## _idx4,                                 \
+    &gadget_qemu_ ## op ## _a ## a ## _idx5,                                 \
 }
 
 typedef const void *TCTIGadgetI128[TCG_TARGET_GP_REGS];
 
+/* Indexed [is_ordered][is_ld][alignment check][mmu_idx]; "_ord" as above. */
 static TCTIGadgetI128 *const
-tcti_qemu_i128_fast[2][3][TCTI_TLB_FAST_MMU_INDICES] = {
-    { TCTI_I128_BY_MMU_IDX(st, 0), TCTI_I128_BY_MMU_IDX(st, 16),
-      TCTI_I128_BY_MMU_IDX(st, 32) },
-    { TCTI_I128_BY_MMU_IDX(ld, 0), TCTI_I128_BY_MMU_IDX(ld, 16),
-      TCTI_I128_BY_MMU_IDX(ld, 32) },
+tcti_qemu_i128_fast[2][2][3][TCTI_TLB_FAST_MMU_INDICES] = {
+    {
+        { TCTI_I128_BY_MMU_IDX(st_i128, 0), TCTI_I128_BY_MMU_IDX(st_i128, 16),
+          TCTI_I128_BY_MMU_IDX(st_i128, 32) },
+        { TCTI_I128_BY_MMU_IDX(ld_i128, 0), TCTI_I128_BY_MMU_IDX(ld_i128, 16),
+          TCTI_I128_BY_MMU_IDX(ld_i128, 32) },
+    },
+    {
+        { TCTI_I128_BY_MMU_IDX(st_i128_ord, 0), TCTI_I128_BY_MMU_IDX(st_i128_ord, 16),
+          TCTI_I128_BY_MMU_IDX(st_i128_ord, 32) },
+        { TCTI_I128_BY_MMU_IDX(ld_i128_ord, 0), TCTI_I128_BY_MMU_IDX(ld_i128_ord, 16),
+          TCTI_I128_BY_MMU_IDX(ld_i128_ord, 32) },
+    },
 };
 
-static TCTIGadgetI128 *const tcti_qemu_i128_slow[2] = {
-    &gadget_qemu_st_i128_a0_any, &gadget_qemu_ld_i128_a0_any,
+/* Indexed [is_ordered][is_ld]. */
+static TCTIGadgetI128 *const tcti_qemu_i128_slow[2][2] = {
+    { &gadget_qemu_st_i128_a0_any,     &gadget_qemu_ld_i128_a0_any },
+    { &gadget_qemu_st_i128_ord_a0_any, &gadget_qemu_ld_i128_ord_a0_any },
 };
 
 static void tcti_out_qemu_ldst_i128(TCGContext *s, bool is_ld, TCGReg addr,
@@ -1468,6 +1504,7 @@ static void tcti_out_qemu_ldst_i128(TCGContext *s, bool is_ld, TCGReg addr,
     MemOp opc = get_memop(oi);
     unsigned mmu_idx = get_mmuidx(oi);
     unsigned a_bits = memop_alignment_bits(opc);
+    bool ordered = tcg_ldst_ordered(s);
     TCTIGadgetI128 *gadget;
 
     tcg_debug_assert(!(opc & MO_BSWAP));
@@ -1475,9 +1512,9 @@ static void tcti_out_qemu_ldst_i128(TCGContext *s, bool is_ld, TCGReg addr,
     /* An alignment the gadget does not check is left to the slow path. */
     if (tcti_has_fast_path(s, mmu_idx) && a_bits <= 5) {
         int check = a_bits == 0 ? 0 : a_bits <= 4 ? 1 : 2;
-        gadget = tcti_qemu_i128_fast[is_ld][check][mmu_idx];
+        gadget = tcti_qemu_i128_fast[ordered][is_ld][check][mmu_idx];
     } else {
-        gadget = tcti_qemu_i128_slow[is_ld];
+        gadget = tcti_qemu_i128_slow[ordered][is_ld];
     }
     tcg_out_gadget(s, (*gadget)[addr]);
     tcg_out64(s, oi);
@@ -1502,15 +1539,16 @@ static void tgen_qemu_st(TCGContext *s, TCGType type, TCGReg data,
     MemOp opc = get_memop(oi);
     unsigned mmu_idx = get_mmuidx(oi);
     bool is_i64 = (type == TCG_TYPE_I64);
+    bool ordered = tcg_ldst_ordered(s);
     TCTIGadget2 *gadget;
 
     tcg_debug_assert(!(opc & MO_BSWAP));
 
     if (tcti_has_fast_path(s, mmu_idx)) {
         bool is_aligned = (opc & MO_SIZE) == MO_8;
-        gadget = tcti_qemu_st_fast[is_aligned][is_i64][opc & MO_SIZE][mmu_idx];
+        gadget = tcti_qemu_st_fast[ordered][is_aligned][is_i64][opc & MO_SIZE][mmu_idx];
     } else {
-        gadget = tcti_qemu_st_slow[is_i64][opc & MO_SIZE];
+        gadget = tcti_qemu_st_slow[ordered][is_i64][opc & MO_SIZE];
     }
     tcg_debug_assert(gadget);
 

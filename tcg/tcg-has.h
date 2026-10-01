@@ -36,6 +36,14 @@
 #else
 #define TCG_TARGET_MAYBE_vec            1
 #endif
+/*
+ * Whether the backend can order guest memory accesses itself, with
+ * acquire/release loads and stores, in place of barriers; see
+ * tcg_ldst_ordered().
+ */
+#ifndef TCG_TARGET_HAS_ordered_ldst
+#define TCG_TARGET_HAS_ordered_ldst     0
+#endif
 #ifndef TCG_TARGET_HAS_v64
 #define TCG_TARGET_HAS_v64              0
 #endif
