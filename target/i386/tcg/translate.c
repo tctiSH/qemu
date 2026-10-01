@@ -24,6 +24,7 @@
 #include "exec/translation-block.h"
 #include "tcg/tcg-op.h"
 #include "tcg/tcg-op-gvec.h"
+#include "tcg/tcg-inline-fp.h"
 #include "exec/translator.h"
 #include "exec/target_page.h"
 #include "fpu/softfloat.h"
@@ -3346,6 +3347,41 @@ static void gen_multi0F(DisasContext *s, X86DecodedInsn *decode)
 
 #include "decode-new.c.inc"
 
+/*
+ * The SSE float helpers a backend may inline (tcg/tcg-inline-fp.h): their
+ * fast path is the one in ops_sse_host.h, narrowed to lanes that are zero
+ * or normal, which the backend can check cheaply.
+ */
+static void x86_register_inline_fp(void)
+{
+    static const struct {
+        const void *helper;
+        TCGInlineFPOp op;
+        MemOp esize;
+        unsigned bytes;
+    } fps[] = {
+#define X86_INLINE_FP(name, OP)                                         \
+        { helper_ ## name ## ps_xmm, OP, MO_32, 16 },                  \
+        { helper_ ## name ## ps_ymm, OP, MO_32, 32 },                  \
+        { helper_ ## name ## pd_xmm, OP, MO_64, 16 },                  \
+        { helper_ ## name ## pd_ymm, OP, MO_64, 32 },                  \
+        { helper_ ## name ## ss, OP, MO_32, 0 },                       \
+        { helper_ ## name ## sd, OP, MO_64, 0 }
+        X86_INLINE_FP(add, TCG_INLINE_FP_ADD),
+        X86_INLINE_FP(sub, TCG_INLINE_FP_SUB),
+        X86_INLINE_FP(mul, TCG_INLINE_FP_MUL),
+        X86_INLINE_FP(div, TCG_INLINE_FP_DIV),
+        X86_INLINE_FP(min, TCG_INLINE_FP_MIN),
+        X86_INLINE_FP(max, TCG_INLINE_FP_MAX),
+#undef X86_INLINE_FP
+    };
+
+    for (int i = 0; i < ARRAY_SIZE(fps); i++) {
+        tcg_register_inline_fp(fps[i].helper, fps[i].op, fps[i].esize,
+                               fps[i].bytes, offsetof(CPUX86State, sse_status));
+    }
+}
+
 void tcg_x86_init(void)
 {
     static const char reg_names[CPU_NB_REGS][4] = {
@@ -3433,6 +3469,8 @@ void tcg_x86_init(void)
                                      offsetof(CPUX86State, bnd_regs[i].ub),
                                      bnd_regu_names[i]);
     }
+
+    x86_register_inline_fp();
 }
 
 static void i386_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cpu)

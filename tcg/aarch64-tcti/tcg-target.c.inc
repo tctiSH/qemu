@@ -37,6 +37,7 @@
 #define TCG_TARGET_CALL_RET_I128        TCG_CALL_RET_NORMAL
 
 #include "tcg/tcg-ldst.h"
+#include "tcg/tcg-inline-fp.h"
 #include "tcti-gadget-defs.h"
 
 // Grab our gadget headers.
@@ -636,9 +637,48 @@ static const void *const tcti_call_env[TCTI_ENV_ARGS] = {
     gadget_call_env4, gadget_call_env5, gadget_call_env6, gadget_call_env7,
 };
 
+/*
+ * The inline float gadgets (tcg/tcg-inline-fp.h), indexed [env][op][form]:
+ * "_env" computes the arguments from env and stream offsets.
+ */
+#define TCTI_INLINE_FP_FORMS(prefix, op) {                                  \
+    gadget_ ## prefix ## _ ## op ## _ps16, gadget_ ## prefix ## _ ## op ## _ps32, \
+    gadget_ ## prefix ## _ ## op ## _pd16, gadget_ ## prefix ## _ ## op ## _pd32, \
+    gadget_ ## prefix ## _ ## op ## _ss, gadget_ ## prefix ## _ ## op ## _sd, \
+}
+#define TCTI_INLINE_FP_OPS(prefix) {                                        \
+    [TCG_INLINE_FP_ADD] = TCTI_INLINE_FP_FORMS(prefix, add),                \
+    [TCG_INLINE_FP_SUB] = TCTI_INLINE_FP_FORMS(prefix, sub),                \
+    [TCG_INLINE_FP_MUL] = TCTI_INLINE_FP_FORMS(prefix, mul),                \
+    [TCG_INLINE_FP_DIV] = TCTI_INLINE_FP_FORMS(prefix, div),                \
+    [TCG_INLINE_FP_MIN] = TCTI_INLINE_FP_FORMS(prefix, min),                \
+    [TCG_INLINE_FP_MAX] = TCTI_INLINE_FP_FORMS(prefix, max),                \
+}
+
+static const void *const tcti_inline_fp[2][TCG_INLINE_FP_MAX + 1][6] = {
+    TCTI_INLINE_FP_OPS(inline_fp), TCTI_INLINE_FP_OPS(inline_fp_env),
+};
+
+/* The form's index in tcti_inline_fp: ps16, ps32, pd16, pd32, ss, sd. */
+static int tcti_inline_fp_form(const TCGInlineFP *fp)
+{
+    bool dbl = fp->esize == MO_64;
+
+    switch (fp->bytes) {
+    case 16:
+        return dbl ? 2 : 0;
+    case 32:
+        return dbl ? 3 : 1;
+    default:
+        return dbl ? 5 : 4;
+    }
+}
+
 static void tcg_out_call(TCGContext *s, const tcg_insn_unit *func,
                          const TCGHelperInfo *info)
 {
+    const TCGInlineFP *fp = tcg_inline_fp(func);
+
     int n = tcti_env_args.n, first = -1, top = -1;
     intptr_t offset[TCTI_ENV_ARGS];
     unsigned seen = 0;
@@ -668,7 +708,34 @@ static void tcg_out_call(TCGContext *s, const tcg_insn_unit *func,
     tcti_env_args.n = 0;
 
     if (first >= 0 &&
-        !tcti_label_within(s, tcti_env_args.e[first].start, s->code_ptr)) {
+        tcti_label_within(s, tcti_env_args.e[first].start, s->code_ptr)) {
+        first = -1;
+    }
+
+    /*
+     * A registered float helper: its gadget does the operation itself when
+     * it can. With all four arguments env plus constants, it computes them
+     * too, in place of the gadgets that did.
+     */
+    if (fp) {
+        bool env = first >= 0 && top == 3;
+
+        if (env) {
+            s->code_ptr = tcti_env_args.e[first].start;
+        }
+        tcg_out_gadget(s, tcti_inline_fp[env][fp->op][tcti_inline_fp_form(fp)]);
+        tcg_out64(s, (uintptr_t)func);
+        if (env) {
+            for (int r = 0; r <= top; r++) {
+                tcg_out64(s, offset[r]);
+            }
+        }
+        tcg_out64(s, fp->status_ofs);
+        tcg_out64(s, fp->status_mask | (uint64_t)fp->status_want << 32);
+        return;
+    }
+
+    if (first >= 0) {
         s->code_ptr = tcti_env_args.e[first].start;
         tcg_out_gadget(s, tcti_call_env[top]);
         tcg_out64(s, (uintptr_t)func);

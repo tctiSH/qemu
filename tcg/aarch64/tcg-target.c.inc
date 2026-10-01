@@ -11,6 +11,7 @@
  */
 
 #include "qemu/bitops.h"
+#include "tcg/tcg-inline-fp.h"
 
 /* Used for function call generation. */
 #define TCG_REG_CALL_STACK              TCG_REG_SP
@@ -1407,9 +1408,211 @@ static void tcg_out_call_int(TCGContext *s, const tcg_insn_unit *target)
     }
 }
 
+/*
+ * The inline float fast path (tcg/tcg-inline-fp.h). The NEON instructions
+ * are encoded here with the register fields zero; each emitter adds them.
+ * Setting bit 22 turns the single-precision forms into double ones.
+ */
+enum {
+    INLFP_FADD_V  = 0x4e20d400,
+    INLFP_FSUB_V  = 0x4ea0d400,
+    INLFP_FMUL_V  = 0x6e20dc00,
+    INLFP_FDIV_V  = 0x6e20fc00,
+    INLFP_FADD_S  = 0x1e202800,
+    INLFP_FSUB_S  = 0x1e203800,
+    INLFP_FMUL_S  = 0x1e200800,
+    INLFP_FDIV_S  = 0x1e201800,
+    INLFP_FACGE   = 0x6e20ec00,     /* d = |n| >= |m| */
+    INLFP_FACGT   = 0x6ea0ec00,     /* d = |n| > |m| */
+    INLFP_FCMGT   = 0x6ea0e400,     /* d = n > m */
+    INLFP_FCMEQZ  = 0x4ea0d800,     /* d = n == 0 */
+    INLFP_DOUBLE  = 1 << 22,
+
+    INLFP_AND     = 0x4e201c00,
+    INLFP_ORR     = 0x4ea01c00,
+    INLFP_BIC     = 0x4e601c00,
+    INLFP_BSL     = 0x6e601c00,     /* d = d ? n : m, bitwise */
+    INLFP_UMINV   = 0x6eb1a800,     /* d.s = min of n's 32-bit lanes */
+    INLFP_FMOV_WS = 0x1e260000,
+    INLFP_DUP_4S  = 0x4e040c00,
+    INLFP_DUP_2D  = 0x4e080c00,
+    INLFP_INS_S0  = 0x6e040400,     /* d.s[0] = n.s[0] */
+    INLFP_INS_D0  = 0x6e080400,
+    INLFP_ONES    = 0x6f07e7e0,     /* movi d.2d, #-1 */
+    INLFP_LDR_Q   = 0x3dc00000,     /* imm12 scaled by 16 at bit 10 */
+    INLFP_STR_Q   = 0x3d800000,
+    INLFP_LDR_S   = 0xbd400000,
+    INLFP_LDR_D   = 0xfd400000,
+};
+
+/* The vector registers used, all call-clobbered, so free at a call. */
+enum {
+    INLFP_MIN = 16,     /* the smallest normal, in every lane */
+    INLFP_INF = 17,     /* infinity */
+    INLFP_ACC = 18,     /* all ones in a lane while it is fine */
+    INLFP_T0 = 19,
+    INLFP_T1 = 20,
+    INLFP_MERGE = 6,    /* a scalar op's destination, v's lanes around it */
+};
+
+static void inlfp3(TCGContext *s, uint32_t insn, int d, int n, int m)
+{
+    tcg_out32(s, insn | m << 16 | n << 5 | d);
+}
+
+static void inlfp2(TCGContext *s, uint32_t insn, int d, int n)
+{
+    tcg_out32(s, insn | n << 5 | d);
+}
+
+/* acc &= "every lane of x is zero or a normal finite number". */
+static void inlfp_check_normal(TCGContext *s, uint32_t dbl, int x)
+{
+    inlfp3(s, INLFP_FACGE | dbl, INLFP_T0, x, INLFP_MIN);
+    inlfp3(s, INLFP_FACGT | dbl, INLFP_T1, INLFP_INF, x);
+    inlfp3(s, INLFP_AND, INLFP_T0, INLFP_T0, INLFP_T1);
+    inlfp2(s, INLFP_FCMEQZ | dbl, INLFP_T1, x);
+    inlfp3(s, INLFP_ORR, INLFP_T0, INLFP_T0, INLFP_T1);
+    inlfp3(s, INLFP_AND, INLFP_ACC, INLFP_ACC, INLFP_T0);
+}
+
+/* acc &= ~"r is zero where a is not (nor b, if given)": an underflow. */
+static void inlfp_check_underflow(TCGContext *s, uint32_t dbl, int r, int a, int b)
+{
+    inlfp2(s, INLFP_FCMEQZ | dbl, INLFP_T0, r);
+    inlfp2(s, INLFP_FCMEQZ | dbl, INLFP_T1, a);
+    inlfp3(s, INLFP_BIC, INLFP_T0, INLFP_T0, INLFP_T1);
+    if (b >= 0) {
+        inlfp2(s, INLFP_FCMEQZ | dbl, INLFP_T1, b);
+        inlfp3(s, INLFP_BIC, INLFP_T0, INLFP_T0, INLFP_T1);
+    }
+    inlfp3(s, INLFP_BIC, INLFP_ACC, INLFP_ACC, INLFP_T0);
+}
+
+/*
+ * A registered float helper (env in x0, then d, v, s in x1-x3): the
+ * operation on NEON, under the conditions in tcg/tcg-inline-fp.h, and the
+ * call itself whenever they fail.
+ */
+static void tcg_out_inline_fp(TCGContext *s, const TCGInlineFP *fp,
+                              const tcg_insn_unit *target)
+{
+    static const uint32_t vector_op[] = {
+        [TCG_INLINE_FP_ADD] = INLFP_FADD_V, [TCG_INLINE_FP_SUB] = INLFP_FSUB_V,
+        [TCG_INLINE_FP_MUL] = INLFP_FMUL_V, [TCG_INLINE_FP_DIV] = INLFP_FDIV_V,
+    };
+    static const uint32_t scalar_op[] = {
+        [TCG_INLINE_FP_ADD] = INLFP_FADD_S, [TCG_INLINE_FP_SUB] = INLFP_FSUB_S,
+        [TCG_INLINE_FP_MUL] = INLFP_FMUL_S, [TCG_INLINE_FP_DIV] = INLFP_FDIV_S,
+    };
+    uint32_t dbl = fp->esize == MO_64 ? INLFP_DOUBLE : 0;
+    bool minmax = fp->op == TCG_INLINE_FP_MIN || fp->op == TCG_INLINE_FP_MAX;
+    bool scalar = fp->bytes == 0;
+    int chunks = fp->bytes == 32 ? 2 : 1;
+    tcg_insn_unit *to_slow[2], *to_done;
+    int n_slow = 0;
+
+    /* Rounding to nearest, no flushing, inexact already raised. */
+    if (!minmax) {
+        tcg_out_ld(s, TCG_TYPE_I32, TCG_REG_TMP1, TCG_AREG0, fp->status_ofs);
+        tcg_out_movi(s, TCG_TYPE_I32, TCG_REG_TMP0, fp->status_mask);
+        tcg_out_insn(s, logic_shift, AND, TCG_TYPE_I32, TCG_REG_TMP1,
+                     TCG_REG_TMP1, TCG_REG_TMP0);
+        tcg_out_cmp(s, TCG_TYPE_I32, TCG_COND_NE, TCG_REG_TMP1,
+                    fp->status_want, true);
+        to_slow[n_slow++] = s->code_ptr;
+        tcg_out_insn(s, bcond_imm, B_C, TCG_COND_NE, 0);
+    }
+
+    /* The smallest normal and infinity, for inlfp_check_normal(). */
+    if (dbl) {
+        tcg_out_movi(s, TCG_TYPE_I64, TCG_REG_TMP0, 0x0010000000000000ull);
+        inlfp2(s, INLFP_DUP_2D, INLFP_MIN, TCG_REG_TMP0);
+        tcg_out_movi(s, TCG_TYPE_I64, TCG_REG_TMP0, 0x7ff0000000000000ull);
+        inlfp2(s, INLFP_DUP_2D, INLFP_INF, TCG_REG_TMP0);
+    } else {
+        tcg_out_movi(s, TCG_TYPE_I32, TCG_REG_TMP0, 0x00800000);
+        inlfp2(s, INLFP_DUP_4S, INLFP_MIN, TCG_REG_TMP0);
+        tcg_out_movi(s, TCG_TYPE_I32, TCG_REG_TMP0, 0x7f800000);
+        inlfp2(s, INLFP_DUP_4S, INLFP_INF, TCG_REG_TMP0);
+    }
+    tcg_out32(s, INLFP_ONES | INLFP_ACC);
+
+    /* v0, v1 -> v2, and for a 256-bit op v3, v4 -> v5. */
+    for (int k = 0; k < chunks; k++) {
+        int a = 3 * k, b = a + 1, r = a + 2;
+
+        if (scalar) {
+            uint32_t ldr = dbl ? INLFP_LDR_D : INLFP_LDR_S;
+            inlfp2(s, ldr, a, TCG_REG_X2);
+            inlfp2(s, ldr, b, TCG_REG_X3);
+        } else {
+            inlfp2(s, INLFP_LDR_Q | k << 10, a, TCG_REG_X2);
+            inlfp2(s, INLFP_LDR_Q | k << 10, b, TCG_REG_X3);
+        }
+
+        if (minmax) {
+            /* x86's min is v < s ? v : s, max v > s ? v : s. */
+            if (fp->op == TCG_INLINE_FP_MIN) {
+                inlfp3(s, INLFP_FCMGT | dbl, r, b, a);
+            } else {
+                inlfp3(s, INLFP_FCMGT | dbl, r, a, b);
+            }
+            inlfp3(s, INLFP_BSL, r, a, b);
+        } else {
+            inlfp3(s, (scalar ? scalar_op : vector_op)[fp->op] | dbl, r, a, b);
+        }
+
+        /* A scalar load or op zeroes the lanes above, which pass. */
+        inlfp_check_normal(s, dbl, a);
+        inlfp_check_normal(s, dbl, b);
+        if (!minmax) {
+            inlfp_check_normal(s, dbl, r);
+        }
+        if (fp->op == TCG_INLINE_FP_MUL) {
+            inlfp_check_underflow(s, dbl, r, a, b);
+        } else if (fp->op == TCG_INLINE_FP_DIV) {
+            inlfp_check_underflow(s, dbl, r, a, -1);
+        }
+    }
+
+    /* Any lane of acc not all ones: take the helper. */
+    inlfp2(s, INLFP_UMINV, INLFP_T0, INLFP_ACC);
+    inlfp2(s, INLFP_FMOV_WS, TCG_REG_TMP0, INLFP_T0);
+    tcg_out_insn(s, addsub_imm, ADDSI, TCG_TYPE_I32, TCG_REG_XZR, TCG_REG_TMP0, 1);
+    to_slow[n_slow++] = s->code_ptr;
+    tcg_out_insn(s, bcond_imm, B_C, TCG_COND_NE, 0);
+
+    if (scalar) {
+        inlfp2(s, INLFP_LDR_Q, INLFP_MERGE, TCG_REG_X2);
+        inlfp2(s, dbl ? INLFP_INS_D0 : INLFP_INS_S0, INLFP_MERGE, 2);
+        inlfp2(s, INLFP_STR_Q, INLFP_MERGE, TCG_REG_X1);
+    } else {
+        for (int k = 0; k < chunks; k++) {
+            inlfp2(s, INLFP_STR_Q | k << 10, 3 * k + 2, TCG_REG_X1);
+        }
+    }
+    to_done = s->code_ptr;
+    tcg_out_insn(s, branch, B, 0);
+
+    for (int i = 0; i < n_slow; i++) {
+        if (!reloc_pc19(to_slow[i], tcg_splitwx_to_rx(s->code_ptr))) {
+            g_assert_not_reached();   /* a few dozen instructions back */
+        }
+    }
+    tcg_out_call_int(s, target);
+    reloc_pc26(to_done, tcg_splitwx_to_rx(s->code_ptr));
+}
+
 static void tcg_out_call(TCGContext *s, const tcg_insn_unit *target,
                          const TCGHelperInfo *info)
 {
+    const TCGInlineFP *fp = tcg_inline_fp(target);
+
+    if (fp) {
+        tcg_out_inline_fp(s, fp, target);
+        return;
+    }
     tcg_out_call_int(s, target);
 }
 
