@@ -6687,6 +6687,9 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
             break;
         case INDEX_op_insn_start:
             assert_carry_dead(s);
+#ifdef CONFIG_TCG_THREADED_INTERPRETER
+            tcti_insn_start(s);
+#endif
             if (num_insns >= 0) {
                 size_t off = tcg_current_code_size(s);
                 s->gen_insn_end_off[num_insns] = off;

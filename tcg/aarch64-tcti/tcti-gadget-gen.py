@@ -760,6 +760,23 @@ simple("call",
     "mov x0, x27"
 )
 
+# A call whose first N+1 arguments are env plus constants -- the pointer
+# arguments of the SSE helpers above all -- computing them itself instead of
+# after a mov and an addi gadget each: the stream holds the function, then
+# the offsets for x0..xN. See tcg_out_call().
+for n in range(8):
+    simple(f"call_env{n}",
+        "ldr x27, [x28], #8",
+        *[line for i in range(n + 1)
+              for line in ("ldr x26, [x28], #8", f"add x{i}, x14, x26")],
+        "str x28, [x25]",
+        *C_CALL_PROLOGUE,
+        "blr x27",
+        "mov x27, x0",
+        *C_CALL_EPILOGUE,
+        "mov x0, x27"
+    )
+
 # Branch to a given immediate address.
 simple("br",
     # Use our immediate argument as our new bytecode-pointer location.
