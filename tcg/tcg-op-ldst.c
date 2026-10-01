@@ -114,8 +114,26 @@ static void gen_st_i64(TCGv_i64 v, TCGTemp *addr, MemOpIdx oi)
     gen_ldst1(INDEX_op_qemu_st, TCG_TYPE_I64, tcgv_i64_temp(v), addr, oi);
 }
 
+/*
+ * Acquire loads and release stores keep every pair of accesses in order
+ * except a store followed by a load, so they can stand in for the barriers
+ * whenever the guest does not require that order too -- as for x86's TSO.
+ * They are stronger than a guest asking for less, which is still correct.
+ * The decision is per context, so that the backend reaches the same one
+ * for each access, and for its slow paths.
+ */
+bool tcg_ldst_ordered(TCGContext *s)
+{
+    TCGBar mo = s->guest_mo & ~TCG_TARGET_DEFAULT_MO;
+
+    return TCG_TARGET_HAS_ordered_ldst && mo && !(mo & TCG_MO_ST_LD);
+}
+
 static void tcg_gen_req_mo(TCGBar type)
 {
+    if (tcg_ldst_ordered(tcg_ctx)) {
+        return;
+    }
     type &= tcg_ctx->guest_mo;
     type &= ~TCG_TARGET_DEFAULT_MO;
     if (type) {

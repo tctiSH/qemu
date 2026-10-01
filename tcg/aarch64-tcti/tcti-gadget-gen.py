@@ -495,8 +495,26 @@ def tlb_operands(mmu_idx):
     return f'[tlb_ofs] "i" (TCTI_TLB_FAST_OFS({mmu_idx}))'
 
 
-def ld_thunk(name, fastpath_32b, fastpath_64b, slowpath_helper, immediate=None, is_aligned=False, force_slowpath=False):
-    """ Creates a thunk into our C runtime for a QEMU LD operation. """
+def granule_check(size):
+    """ For an ordered access of size bytes, not known to be aligned: branches
+    to the slow path if it crosses a 16-byte boundary, where an LDAPR or STLR
+    faults even with LSE2. That is, if (addr & 15) > 16 - size. """
+    if size == 1:
+        return []
+    return [
+        "and x26, Xn, #15",
+        f"cmp x26, #{16 - size}",
+        "b.hi 0f",
+    ]
+
+
+def ld_thunk(name, fastpath_32b, fastpath_64b, slowpath_helper, immediate=None, is_aligned=False, force_slowpath=False, ordered=None):
+    """ Creates a thunk into our C runtime for a QEMU LD operation.
+
+    ordered, if given, is the access size in bytes: the fast path is then
+    the given LDAPR sequence (on x27, the host address), after a check that
+    the access does not cross a 16-byte boundary, and the slow path orders
+    the helper's plain load after it, as an LDAPR would be. """
 
     # A slow-path gadget serves every MMU index, so there is just the one;
     # otherwise there is one per index with a fast path.
@@ -517,6 +535,8 @@ def ld_thunk(name, fastpath_32b, fastpath_64b, slowpath_helper, immediate=None, 
                     # Create a fastpath that jumps to miss_lable on a TLB miss,
                     # or sets x27 to the TLB addend on a TLB hit.
                     *create_tlb_fastpath(is_aligned=is_aligned, is_write=False),
+                    # LDAPR is FEAT_LRCPC (ARMv8.3), past what we may be built for.
+                    *(granule_check(ordered) + ["add x27, x27, Xn", ".arch_extension rcpc"] if ordered else []),
 
                     # On a hit, we can just perform an appropriate load...
                     *fastpath,
@@ -561,6 +581,7 @@ def ld_thunk(name, fastpath_32b, fastpath_64b, slowpath_helper, immediate=None, 
 
                     # Restore our registers after our C call.
                     *C_CALL_EPILOGUE,
+                    *(["dmb ishld"] if ordered else []),
 
                     # Finally, call our postscript...
                     *postscript,
@@ -571,8 +592,11 @@ def ld_thunk(name, fastpath_32b, fastpath_64b, slowpath_helper, immediate=None, 
             )
 
 
-def st_thunk(name, fastpath_32b, fastpath_64b, slowpath_helper, immediate=None, is_aligned=False, force_slowpath=False):
-    """ Creates a thunk into our C runtime for a QEMU ST operation. """
+def st_thunk(name, fastpath_32b, fastpath_64b, slowpath_helper, immediate=None, is_aligned=False, force_slowpath=False, ordered=None):
+    """ Creates a thunk into our C runtime for a QEMU ST operation.
+
+    ordered is as for ld_thunk, with STLR; the slow path orders the helper's
+    plain store after earlier stores, as an STLR would be. """
 
     # As for ld_thunk.
     indices = [None] if force_slowpath else QEMU_TLB_FAST_MMU_INDICES
@@ -593,6 +617,7 @@ def st_thunk(name, fastpath_32b, fastpath_64b, slowpath_helper, immediate=None, 
                     # Create a fastpath that jumps to miss_lable on a TLB miss,
                     # or sets x27 to the TLB addend on a TLB hit.
                     *create_tlb_fastpath(is_aligned=is_aligned, is_write=True),
+                    *(granule_check(ordered) + ["add x27, x27, Xn"] if ordered else []),
 
                     # On a hit, we can just perform an appropriate load...
                     *fastpath,
@@ -634,6 +659,7 @@ def st_thunk(name, fastpath_32b, fastpath_64b, slowpath_helper, immediate=None, 
                     "mov   x2, x27",
                     f"mov  x3, #{immediate}" if (immediate is not None) else "ldr   x3, [x28], #8", 
                     "mov   x4, x28",
+                    *(["dmb ishst"] if ordered else []),
 
                     # Perform our actual core code.
                     f"bl _{slowpath_helper}",
@@ -1064,69 +1090,68 @@ with_dn("bswap32",    "rev Wd, Wn")
 with_dn("bswap64",    "rev Xd, Xn")
 
 
-# Handlers for QEMU_LD, which handles guest <- host loads.
-for subtype in ('aligned', 'unaligned', 'slowpath'):
-    is_aligned  = (subtype == 'aligned')
-    is_slowpath = (subtype == 'slowpath')
+# Handlers for QEMU_LD, which handles guest <- host loads. Each comes plain,
+# and ordered ("_ord": LDAPR, for guests such as x86 whose memory order TCG
+# would otherwise keep with a barrier gadget before every access; see
+# tcg_ldst_ordered()). LDAPR has no register offset, so the ordered gadgets
+# add the TLB addend to the address first, and zero-extends, so the signed
+# ones extend afterwards.
+LD_OPS = (
+    # name, helper, size, plain 32-bit, plain 64-bit, ordered 32-bit, ordered 64-bit
+    ("ub",   "helper_ldub_mmu", 1, ["ldrb Wd, [Xn, x27]"],  ["ldrb Wd, [Xn, x27]"],
+                                   ["ldaprb Wd, [x27]"],    ["ldaprb Wd, [x27]"]),
+    ("leuw", "helper_lduw_mmu", 2, ["ldrh Wd, [Xn, x27]"],  ["ldrh Wd, [Xn, x27]"],
+                                   ["ldaprh Wd, [x27]"],    ["ldaprh Wd, [x27]"]),
+    ("leul", "helper_ldul_mmu", 4, ["ldr Wd, [Xn, x27]"],   ["ldr Wd, [Xn, x27]"],
+                                   ["ldapr Wd, [x27]"],     ["ldapr Wd, [x27]"]),
+    ("leq",  "helper_ldq_mmu",  8, ["ldr Xd, [Xn, x27]"],   ["ldr Xd, [Xn, x27]"],
+                                   ["ldapr Xd, [x27]"],     ["ldapr Xd, [x27]"]),
+    ("sb",   "helper_ldsb_mmu", 1, ["ldrsb Wd, [Xn, x27]"], ["ldrsb Xd, [Xn, x27]"],
+                                   ["ldaprb Wd, [x27]", "sxtb Wd, Wd"], ["ldaprb Wd, [x27]", "sxtb Xd, Wd"]),
+    ("lesw", "helper_ldsw_mmu", 2, ["ldrsh Wd, [Xn, x27]"], ["ldrsh Xd, [Xn, x27]"],
+                                   ["ldaprh Wd, [x27]", "sxth Wd, Wd"], ["ldaprh Wd, [x27]", "sxth Xd, Wd"]),
+    ("lesl", "helper_ldsl_mmu", 4, ["ldrsw Xd, [Xn, x27]"], ["ldrsw Xd, [Xn, x27]"],
+                                   ["ldapr Wd, [x27]", "sxtw Xd, Wd"], ["ldapr Wd, [x27]", "sxtw Xd, Wd"]),
+)
 
-    START_COLLECTION(f"qemu_ld_{subtype}_unsigned_le", needs_defs=not is_slowpath)
+for ordered in (False, True):
+    for subtype in ('aligned', 'unaligned', 'slowpath'):
+        is_aligned  = (subtype == 'aligned')
+        is_slowpath = (subtype == 'slowpath')
+        variant = subtype + ("_ord" if ordered else "")
 
-    ld_thunk(f"qemu_ld_ub_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_ldub_mmu",
-        fastpath_32b=["ldrb Wd, [Xn, x27]"], fastpath_64b=["ldrb Wd, [Xn, x27]"],
-        force_slowpath=is_slowpath,
-    )
-    ld_thunk(f"qemu_ld_leuw_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_lduw_mmu",
-        fastpath_32b=["ldrh Wd, [Xn, x27]"], fastpath_64b=["ldrh Wd, [Xn, x27]"],
-        force_slowpath=is_slowpath,
-    )
-    ld_thunk(f"qemu_ld_leul_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_ldul_mmu",
-        fastpath_32b=["ldr Wd, [Xn, x27]"], fastpath_64b=["ldr Wd, [Xn, x27]"],
-        force_slowpath=is_slowpath,
-    )
-    ld_thunk(f"qemu_ld_leq_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_ldq_mmu",
-        fastpath_32b=["ldr Xd, [Xn, x27]"], fastpath_64b=["ldr Xd, [Xn, x27]"],
-        force_slowpath=is_slowpath,
-    )
-
-    START_COLLECTION(f"qemu_ld_{subtype}_signed_le", needs_defs=not is_slowpath)
-
-    ld_thunk(f"qemu_ld_sb_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_ldsb_mmu",
-        fastpath_32b=["ldrsb Wd, [Xn, x27]"], fastpath_64b=["ldrsb Xd, [Xn, x27]"],
-        force_slowpath=is_slowpath,
-    )
-    ld_thunk(f"qemu_ld_lesw_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_ldsw_mmu",
-        fastpath_32b=["ldrsh Wd, [Xn, x27]"], fastpath_64b=["ldrsh Xd, [Xn, x27]"],
-        force_slowpath=is_slowpath,
-    )
-    ld_thunk(f"qemu_ld_lesl_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_ldsl_mmu",
-        fastpath_32b=["ldrsw Xd, [Xn, x27]"], fastpath_64b=["ldrsw Xd, [Xn, x27]"],
-        force_slowpath=is_slowpath,
-    )
+        for signedness, ops in (("unsigned", LD_OPS[:4]), ("signed", LD_OPS[4:])):
+            START_COLLECTION(f"qemu_ld_{variant}_{signedness}_le", needs_defs=not is_slowpath)
+            for op, helper, size, plain32, plain64, ord32, ord64 in ops:
+                ld_thunk(f"qemu_ld_{op}_{variant}", is_aligned=is_aligned, slowpath_helper=helper,
+                    fastpath_32b=ord32 if ordered else plain32,
+                    fastpath_64b=ord64 if ordered else plain64,
+                    force_slowpath=is_slowpath, ordered=size if ordered else None,
+                )
 
 
-# Handlers for QEMU_ST, which handles guest -> host stores.
-for subtype in ('aligned', 'unaligned', 'slowpath'):
-    is_aligned  = (subtype == 'aligned')
-    is_slowpath = (subtype == 'slowpath')
+# Handlers for QEMU_ST, which handles guest -> host stores; plain and ordered
+# (STLR) as for the loads.
+ST_OPS = (
+    ("ub",   "helper_stb_mmu", 1, "strb Wd, [Xn, x27]", "stlrb Wd, [x27]", "stlrb Wd, [x27]"),
+    ("leuw", "helper_stw_mmu", 2, "strh Wd, [Xn, x27]", "stlrh Wd, [x27]", "stlrh Wd, [x27]"),
+    ("leul", "helper_stl_mmu", 4, "str Wd, [Xn, x27]",  "stlr Wd, [x27]",  "stlr Wd, [x27]"),
+    ("leq",  "helper_stq_mmu", 8, "str Xd, [Xn, x27]",  "stlr Xd, [x27]",  "stlr Xd, [x27]"),
+)
 
-    START_COLLECTION(f"qemu_st_{subtype}_le", needs_defs=not is_slowpath)
+for ordered in (False, True):
+    for subtype in ('aligned', 'unaligned', 'slowpath'):
+        is_aligned  = (subtype == 'aligned')
+        is_slowpath = (subtype == 'slowpath')
+        variant = subtype + ("_ord" if ordered else "")
 
-    st_thunk(f"qemu_st_ub_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_stb_mmu",
-        fastpath_32b=["strb Wd, [Xn, x27]"], fastpath_64b=["strb Wd, [Xn, x27]"],
-        force_slowpath=is_slowpath,
-    )
-    st_thunk(f"qemu_st_leuw_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_stw_mmu",
-        fastpath_32b=["strh Wd, [Xn, x27]"], fastpath_64b=["strh Wd, [Xn, x27]"],
-        force_slowpath=is_slowpath,
-    )
-    st_thunk(f"qemu_st_leul_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_stl_mmu",
-        fastpath_32b=["str Wd, [Xn, x27]"], fastpath_64b=["str Wd, [Xn, x27]"],
-        force_slowpath=is_slowpath,
-    )
-    st_thunk(f"qemu_st_leq_{subtype}", is_aligned=is_aligned, slowpath_helper="helper_stq_mmu",
-        fastpath_32b=["str Xd, [Xn, x27]"], fastpath_64b=["str Xd, [Xn, x27]"],
-        force_slowpath=is_slowpath,
-    )
+        START_COLLECTION(f"qemu_st_{variant}_le", needs_defs=not is_slowpath)
+        for op, helper, size, plain, ord32, ord64 in ST_OPS:
+            st_thunk(f"qemu_st_{op}_{variant}", is_aligned=is_aligned, slowpath_helper=helper,
+                fastpath_32b=[ord32] if ordered else [plain],
+                fastpath_64b=[ord64] if ordered else [plain],
+                force_slowpath=is_slowpath, ordered=size if ordered else None,
+            )
 
 
 # Handlers for QEMU_LD2/ST2 with 128-bit accesses (x86's SSE/AVX loads and
@@ -1138,18 +1163,26 @@ for subtype in ('aligned', 'unaligned', 'slowpath'):
 # single-copy atomic; TCG_TARGET_HAS_qemu_ldst_i128 says so. An alignment
 # the gadget does not check (align=0 or a larger one) goes to the slow path,
 # which checks it and raises the fault.
+#
+# The ordered ("_ord") gadgets are for tcg_ldst_ordered(). Without FEAT_LRCPC3
+# there is no ordered LDP/STP, so a barrier after the load, or before the
+# store, gives the order an LDAPR or STLR would.
 START_COLLECTION("qemu_ldst_i128", needs_defs=True)
 
-def ldst_i128(is_ld, align, mmu_idx):
+def ldst_i128(is_ld, align, mmu_idx, ordered):
     op = "ld" if is_ld else "st"
     suffix = "any" if mmu_idx is None else f"idx{mmu_idx}"
+    ld_barrier = ["dmb ishld"] if ordered and is_ld else []
+    st_barrier = ["dmb ishst"] if ordered and not is_ld else []
     fast = []
     if mmu_idx is not None:
         fast = [
             *create_tlb_fastpath(is_aligned=False, is_write=not is_ld, size=16),
             *([f"tst Xn, #{align - 1}", "b.ne 0f"] if align else []),
             "add x27, x27, Xn",
+            *st_barrier,
             "ldp x0, x1, [x27]" if is_ld else "stp x2, x3, [x27]",
+            *ld_barrier,
             "add x28, x28, #8",
             *EPILOGUE,
         ]
@@ -1163,6 +1196,7 @@ def ldst_i128(is_ld, align, mmu_idx):
             "mov   x3, x28",
             "bl _helper_ld16_mmu",
             *C_CALL_EPILOGUE,
+            *ld_barrier,
         ]
     else:
         slow = [
@@ -1172,18 +1206,21 @@ def ldst_i128(is_ld, align, mmu_idx):
             "mov   x1, x26",
             "ldr   x4, [x28], #8",
             "mov   x5, x28",
+            *st_barrier,
             "bl _helper_st16_mmu",
             *C_CALL_EPILOGUE,
         ]
-    with_single(f"qemu_{op}_i128_a{align}_{suffix}", "n", *fast, "0:", *slow,
+    variant = "i128_ord" if ordered else "i128"
+    with_single(f"qemu_{op}_{variant}_a{align}_{suffix}", "n", *fast, "0:", *slow,
                 "add x28, x28, #8",
                 operands=None if mmu_idx is None else tlb_operands(mmu_idx))
 
-for is_ld in (True, False):
-    for align in (0, 16, 32):
-        for mmu_idx in QEMU_TLB_FAST_MMU_INDICES:
-            ldst_i128(is_ld, align, mmu_idx)
-    ldst_i128(is_ld, 0, None)
+for ordered in (False, True):
+    for is_ld in (True, False):
+        for align in (0, 16, 32):
+            for mmu_idx in QEMU_TLB_FAST_MMU_INDICES:
+                ldst_i128(is_ld, align, mmu_idx, ordered)
+        ldst_i128(is_ld, 0, None, ordered)
 
 
 #

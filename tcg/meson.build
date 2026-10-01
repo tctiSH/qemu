@@ -34,6 +34,10 @@ if get_option('tcg_threaded_interpreter')
     'qemu_ld_unaligned_unsigned_le', 'qemu_ld_unaligned_signed_le',
     'qemu_ld_slowpath_unsigned_le', 'qemu_ld_slowpath_signed_le',
     'qemu_st_aligned_le', 'qemu_st_unaligned_le', 'qemu_st_slowpath_le',
+    'qemu_ld_aligned_ord_unsigned_le', 'qemu_ld_aligned_ord_signed_le',
+    'qemu_ld_unaligned_ord_unsigned_le', 'qemu_ld_unaligned_ord_signed_le',
+    'qemu_ld_slowpath_ord_unsigned_le', 'qemu_ld_slowpath_ord_signed_le',
+    'qemu_st_aligned_ord_le', 'qemu_st_unaligned_ord_le', 'qemu_st_slowpath_ord_le',
     'qemu_ldst_i128',
     'simd_base', 'simd_arithmetic', 'simd_logical', 'simd_immediate',
   ]

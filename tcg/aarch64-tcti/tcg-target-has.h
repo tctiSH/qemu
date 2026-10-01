@@ -23,6 +23,13 @@
 // atomic only with LSE2; without it, TCG splits them or calls a helper.
 #define TCG_TARGET_HAS_qemu_ldst_i128   (cpuinfo & CPUINFO_LSE2)
 
+// Guest loads and stores that need ordering (x86's TSO) are LDAPR/STLR
+// gadgets instead of a barrier gadget and a plain one. An LDAPR or STLR that
+// is misaligned faults if it crosses a 16-byte boundary even with LSE2, so
+// those go to the slow path; within one it takes LSE2.
+#define TCG_TARGET_HAS_ordered_ldst \
+    ((cpuinfo & (CPUINFO_LSE2 | CPUINFO_LRCPC)) == (CPUINFO_LSE2 | CPUINFO_LRCPC))
+
 #define TCG_TARGET_HAS_tst              0
 
 /*
