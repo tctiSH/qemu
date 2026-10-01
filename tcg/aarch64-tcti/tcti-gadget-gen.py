@@ -948,6 +948,15 @@ ldst_dn("ld32s_i64", "ldrsw Xd, [Xn, x27]")
 
 START_COLLECTION("store")
 
+# Two 64-bit env slots side by side, as one gadget: the guest registers sit
+# next to each other in env, so a TB's syncs and reloads of them come in
+# runs, and so do the halves of a 128-bit value moved to or from an XMM
+# register. The stream holds the offset of the lower slot, Xd's; Xm's is 8
+# above it. See tcg_out_ld() and tcg_out_st(). The loads are two LDRs, as
+# an LDP of one register to both is unpredictable.
+with_pair("stp_env", ('d', 'm'), "ldr x27, [x28], #8", "add x27, x14, x27", "stp Xd, Xm, [x27]")
+with_pair("ldp_env", ('d', 'm'), "ldr x27, [x28], #8", "add x27, x14, x27", "ldr Xd, [x27]", "ldr Xm, [x27, #8]")
+
 # STORE variants.
 ldst_dn("st8",         "strb  Wd, [Xn, x27]")
 ldst_dn("st16",        "strh  Wd, [Xn, x27]")

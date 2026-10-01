@@ -696,9 +696,62 @@ static __thread struct {
     intptr_t offset;
 } tcti_last_env_ld32;
 
+/*
+ * The last 64-bit load or store between a register and env emitted, so that
+ * the next one, to the slot beside it, can join it in an ldp_env or stp_env
+ * gadget: guest registers are adjacent in env, and are synced and reloaded
+ * in runs. Per thread, as translation is.
+ */
+static __thread struct {
+    tcg_insn_unit *start, *end;
+    TCGReg reg;
+    intptr_t offset;
+    bool is_st;
+} tcti_last_env_ldst64;
+
+/*
+ * Emit a 64-bit load or store of reg at env + offset, joining it to the one
+ * just before if that was the same kind to the neighbouring slot.
+ */
+static void tcti_out_env_ldst64(TCGContext *s, bool is_st, TCGReg reg,
+                                intptr_t offset)
+{
+    typeof(tcti_last_env_ldst64) *last = &tcti_last_env_ldst64;
+    tcg_insn_unit *start = s->code_ptr;
+
+    if (last->end == s->code_ptr && last->is_st == is_st &&
+        (last->offset + 8 == offset || offset + 8 == last->offset) &&
+        (is_st || last->reg != reg) &&
+        !tcti_label_within(s, last->start, s->code_ptr)) {
+        bool up = last->offset < offset;
+        TCGReg lo = up ? last->reg : reg, hi = up ? reg : last->reg;
+
+        s->code_ptr = last->start;
+        tcg_out_gadget(s, (is_st ? gadget_stp_env : gadget_ldp_env)[lo][hi]);
+        tcg_out64(s, up ? last->offset : offset);
+        last->end = NULL;   /* a pair takes no third */
+        return;
+    }
+    /* tcg_out_ldst_gadget() pastes the gadget's name: one call each. */
+    if (is_st) {
+        tcg_out_ldst_gadget(s, gadget_st_i64, reg, TCG_AREG0, offset);
+    } else {
+        tcg_out_ldst_gadget(s, gadget_ld_i64, reg, TCG_AREG0, offset);
+    }
+    last->start = start;
+    last->end = s->code_ptr;
+    last->reg = reg;
+    last->offset = offset;
+    last->is_st = is_st;
+}
+
 static void tcg_out_ld(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg1,
                        intptr_t arg2)
 {
+    if (type == TCG_TYPE_I64 && arg1 == TCG_AREG0) {
+        tcti_out_env_ldst64(s, false, ret, arg2);
+        return;
+    }
     if (type == TCG_TYPE_I32 && arg1 == TCG_AREG0) {
         tcti_last_env_ld32.start = s->code_ptr;
         tcg_out_ldst_gadget(s, gadget_ld32u, ret, arg1, arg2);
@@ -1293,6 +1346,10 @@ static const TCGOutOpStore outop_st16 = {
 static void tcg_out_st(TCGContext *s, TCGType type, TCGReg arg, TCGReg arg1,
                        intptr_t arg2)
 {
+    if (type == TCG_TYPE_I64 && arg1 == TCG_AREG0) {
+        tcti_out_env_ldst64(s, true, arg, arg2);
+        return;
+    }
     if (type == TCG_TYPE_I32) {
         tcg_out_ldst_gadget(s, gadget_st_i32, arg, arg1, arg2);
     } else {
@@ -2231,6 +2288,7 @@ static void tcg_out_tb_start(TCGContext *s)
     /* Nothing from a previous (or restarted) translation may be fused. */
     tcti_env_args.n = 0;
     tcti_last_env_ld32.end = NULL;
+    tcti_last_env_ldst64.end = NULL;
 }
 
 /*
@@ -2241,6 +2299,7 @@ static void tcti_insn_start(TCGContext *s)
 {
     tcti_env_args.n = 0;
     tcti_last_env_ld32.end = NULL;
+    tcti_last_env_ldst64.end = NULL;
 }
 
 /*
