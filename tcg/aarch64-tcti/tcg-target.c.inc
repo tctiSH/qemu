@@ -462,7 +462,33 @@ static bool tcg_out_mov(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg)
 
 
 
+/*
+ * The last 32-bit constant put in a register, so that a store of it to env
+ * straight after can join it in an sti32_env gadget. Per thread, as
+ * translation is.
+ */
+static __thread struct {
+    tcg_insn_unit *start, *end;
+    TCGReg reg;
+    uint32_t value;
+} tcti_last_movi32;
+
+static void tcg_out_movi_i32_gadget(TCGContext *s, TCGReg t0,
+                                    tcg_target_long arg);
+
 static void tcg_out_movi_i32(TCGContext *s, TCGReg t0, tcg_target_long arg)
+{
+    tcg_insn_unit *start = s->code_ptr;
+
+    tcg_out_movi_i32_gadget(s, t0, arg);
+    tcti_last_movi32.start = start;
+    tcti_last_movi32.end = s->code_ptr;
+    tcti_last_movi32.reg = t0;
+    tcti_last_movi32.value = arg;
+}
+
+static void tcg_out_movi_i32_gadget(TCGContext *s, TCGReg t0,
+                                    tcg_target_long arg)
 {
     bool is_negative = (arg < 0);
 
@@ -821,6 +847,7 @@ static void tcti_rewind(TCGContext *s, tcg_insn_unit *to)
     tcti_last_env_ld32.end = NULL;
     tcti_last_env_ldst64.end = NULL;
     tcti_env_rmw.end = NULL;
+    tcti_last_movi32.end = NULL;
 }
 
 /*
@@ -1484,6 +1511,17 @@ static void tcg_out_st(TCGContext *s, TCGType type, TCGReg arg, TCGReg arg1,
         tcti_out_env_ldst64(s, true, arg, arg2);
         return;
     }
+    if (type == TCG_TYPE_I32 && arg1 == TCG_AREG0 &&
+        tcti_last_movi32.end == s->code_ptr && tcti_last_movi32.reg == arg &&
+        arg2 == (int32_t)arg2 &&
+        !tcti_label_within(s, tcti_last_movi32.start, s->code_ptr)) {
+        uint32_t value = tcti_last_movi32.value;
+
+        tcti_rewind(s, tcti_last_movi32.start);
+        tcg_out_unary_gadget(s, gadget_movi_st32_env, arg);
+        tcg_out64(s, value | (uint64_t)arg2 << 32);
+        return;
+    }
     if (type == TCG_TYPE_I32) {
         tcg_out_ldst_gadget(s, gadget_st_i32, arg, arg1, arg2);
     } else {
@@ -1496,10 +1534,26 @@ static const TCGOutOpStore outop_st = {
     .out_r = tcg_out_st,
 };
 
+/* Constants stored to env, as x86's cc_op is when a TB leaves. */
 static inline bool tcg_out_sti(TCGContext *s, TCGType type, TCGArg val,
                                TCGReg base, intptr_t ofs)
 {
-    return false;
+    if (base != TCG_AREG0 || ofs != (int32_t)ofs) {
+        return false;
+    }
+    switch (type) {
+    case TCG_TYPE_I32:
+        tcg_out_gadget(s, gadget_sti32_env);
+        tcg_out64(s, (uint32_t)val | (uint64_t)ofs << 32);
+        return true;
+    case TCG_TYPE_I64:
+        tcg_out_gadget(s, gadget_sti64_env);
+        tcg_out64(s, ofs);
+        tcg_out64(s, val);
+        return true;
+    default:
+        return false;
+    }
 }
 
 /*
@@ -2424,6 +2478,7 @@ static void tcg_out_tb_start(TCGContext *s)
     tcti_last_env_ld32.end = NULL;
     tcti_last_env_ldst64.end = NULL;
     tcti_env_rmw.end = NULL;
+    tcti_last_movi32.end = NULL;
 }
 
 /*
@@ -2436,6 +2491,7 @@ static void tcti_insn_start(TCGContext *s)
     tcti_last_env_ld32.end = NULL;
     tcti_last_env_ldst64.end = NULL;
     tcti_env_rmw.end = NULL;
+    tcti_last_movi32.end = NULL;
 }
 
 /*
