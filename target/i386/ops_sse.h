@@ -46,6 +46,8 @@
 #endif
 
 #define LANE_WIDTH (SHIFT ? 16 : 8)
+/* The 128-bit lanes of an XMM or YMM register, for the host fast paths. */
+#define HOST_LANES (SHIFT == 2 ? 2 : 1)
 #define PACK_WIDTH (LANE_WIDTH / 2)
 
 #if SHIFT == 0
@@ -602,6 +604,10 @@ void helper_sqrtsd(CPUX86State *env, Reg *d, Reg *v, Reg *s)
 void glue(helper_cvtps2pd, SUFFIX)(CPUX86State *env, Reg *d, Reg *s)
 {
     int i;
+
+    if (sse_host_cvtps2pd(env, &d->ZMM_D(0), &s->ZMM_S(0), 1 << SHIFT)) {
+        return;
+    }
     for (i = 1 << SHIFT; --i >= 0; ) {
         d->ZMM_D(i) = float32_to_float64(s->ZMM_S(i), &env->sse_status);
     }
@@ -610,10 +616,13 @@ void glue(helper_cvtps2pd, SUFFIX)(CPUX86State *env, Reg *d, Reg *s)
 void glue(helper_cvtpd2ps, SUFFIX)(CPUX86State *env, Reg *d, Reg *s)
 {
     int i;
-    for (i = 0; i < 1 << SHIFT; i++) {
-         d->ZMM_S(i) = float64_to_float32(s->ZMM_D(i), &env->sse_status);
+
+    if (!sse_host_cvtpd2ps(env, &d->ZMM_S(0), &s->ZMM_D(0), 1 << SHIFT)) {
+        for (i = 0; i < 1 << SHIFT; i++) {
+            d->ZMM_S(i) = float64_to_float32(s->ZMM_D(i), &env->sse_status);
+        }
     }
-    for (i >>= 1; i < 1 << SHIFT; i++) {
+    for (i = (1 << SHIFT) >> 1; i < 1 << SHIFT; i++) {
          d->Q(i) = 0;
     }
 }
@@ -650,8 +659,15 @@ void glue(helper_cvtps2ph, SUFFIX)(CPUX86State *env, Reg *d, Reg *s, int mode)
 #if SHIFT == 1
 void helper_cvtss2sd(CPUX86State *env, Reg *d, Reg *v, Reg *s)
 {
+    uint32_t in[2] = { s->ZMM_S(0), s->ZMM_S(0) };
+    uint64_t out[2];
     int i;
-    d->ZMM_D(0) = float32_to_float64(s->ZMM_S(0), &env->sse_status);
+
+    if (sse_host_cvtps2pd(env, out, in, 2)) {
+        d->ZMM_D(0) = out[0];
+    } else {
+        d->ZMM_D(0) = float32_to_float64(s->ZMM_S(0), &env->sse_status);
+    }
     for (i = 1; i < 1 << SHIFT; i++) {
         d->ZMM_Q(i) = v->ZMM_Q(i);
     }
@@ -659,8 +675,15 @@ void helper_cvtss2sd(CPUX86State *env, Reg *d, Reg *v, Reg *s)
 
 void helper_cvtsd2ss(CPUX86State *env, Reg *d, Reg *v, Reg *s)
 {
+    uint64_t in[2] = { s->ZMM_D(0), s->ZMM_D(0) };
+    uint32_t out[2];
     int i;
-    d->ZMM_S(0) = float64_to_float32(s->ZMM_D(0), &env->sse_status);
+
+    if (sse_host_cvtpd2ps(env, out, in, 2)) {
+        d->ZMM_S(0) = out[0];
+    } else {
+        d->ZMM_S(0) = float64_to_float32(s->ZMM_D(0), &env->sse_status);
+    }
     for (i = 1; i < 2 << SHIFT; i++) {
         d->ZMM_L(i) = v->ZMM_L(i);
     }
@@ -671,6 +694,11 @@ void helper_cvtsd2ss(CPUX86State *env, Reg *d, Reg *v, Reg *s)
 void glue(helper_cvtdq2ps, SUFFIX)(CPUX86State *env, Reg *d, Reg *s)
 {
     int i;
+
+    if (sse_host_cvtdq2ps(env, &d->ZMM_S(0), (int32_t *)&s->ZMM_L(0),
+                          2 << SHIFT)) {
+        return;
+    }
     for (i = 0; i < 2 << SHIFT; i++) {
         d->ZMM_S(i) = int32_to_float32(s->ZMM_L(i), &env->sse_status);
     }
@@ -679,6 +707,10 @@ void glue(helper_cvtdq2ps, SUFFIX)(CPUX86State *env, Reg *d, Reg *s)
 void glue(helper_cvtdq2pd, SUFFIX)(CPUX86State *env, Reg *d, Reg *s)
 {
     int i;
+
+    if (sse_host_cvtdq2pd(&d->ZMM_D(0), (int32_t *)&s->ZMM_L(0), 1 << SHIFT)) {
+        return;
+    }
     for (i = 1 << SHIFT; --i >= 0; ) {
         int32_t l = s->ZMM_L(i);
         d->ZMM_D(i) = int32_to_float64(l, &env->sse_status);
@@ -698,8 +730,18 @@ void helper_cvtpi2pd(CPUX86State *env, ZMMReg *d, MMXReg *s)
     d->ZMM_D(1) = int32_to_float64(s->MMX_L(1), &env->sse_status);
 }
 
+/*
+ * The host converts in one rounding, as softfloat does, once
+ * sse_host_i2f_ok() says the mode and the flags allow.
+ */
 void helper_cvtsi2ss(CPUX86State *env, ZMMReg *d, uint32_t val)
 {
+    if (sse_host_i2f_ok(env, (int32_t)val, 24)) {
+        float f = (int32_t)val;
+
+        memcpy(&d->ZMM_S(0), &f, 4);
+        return;
+    }
     d->ZMM_S(0) = int32_to_float32(val, &env->sse_status);
 }
 
@@ -711,11 +753,23 @@ void helper_cvtsi2sd(CPUX86State *env, ZMMReg *d, uint32_t val)
 #ifdef TARGET_X86_64
 void helper_cvtsq2ss(CPUX86State *env, ZMMReg *d, uint64_t val)
 {
+    if (sse_host_i2f_ok(env, val, 24)) {
+        float f = (int64_t)val;
+
+        memcpy(&d->ZMM_S(0), &f, 4);
+        return;
+    }
     d->ZMM_S(0) = int64_to_float32(val, &env->sse_status);
 }
 
 void helper_cvtsq2sd(CPUX86State *env, ZMMReg *d, uint64_t val)
 {
+    if (sse_host_i2f_ok(env, val, 53)) {
+        double f = (int64_t)val;
+
+        memcpy(&d->ZMM_D(0), &f, 8);
+        return;
+    }
     d->ZMM_D(0) = int64_to_float64(val, &env->sse_status);
 }
 #endif
@@ -760,6 +814,11 @@ WRAP_FLOATCONV(int64_t, float64_to_int64_round_to_zero, float64, INT64_MIN)
 void glue(helper_cvtps2dq, SUFFIX)(CPUX86State *env, ZMMReg *d, ZMMReg *s)
 {
     int i;
+
+    if (sse_host_cvtps2dq(env, (int32_t *)&d->ZMM_L(0), &s->ZMM_S(0),
+                          2 << SHIFT, false)) {
+        return;
+    }
     for (i = 0; i < 2 << SHIFT; i++) {
         d->ZMM_L(i) = x86_float32_to_int32(s->ZMM_S(i), &env->sse_status);
     }
@@ -768,10 +827,14 @@ void glue(helper_cvtps2dq, SUFFIX)(CPUX86State *env, ZMMReg *d, ZMMReg *s)
 void glue(helper_cvtpd2dq, SUFFIX)(CPUX86State *env, ZMMReg *d, ZMMReg *s)
 {
     int i;
-    for (i = 0; i < 1 << SHIFT; i++) {
-        d->ZMM_L(i) = x86_float64_to_int32(s->ZMM_D(i), &env->sse_status);
+
+    if (!sse_host_cvtpd2dq(env, (int32_t *)&d->ZMM_L(0), &s->ZMM_D(0),
+                           1 << SHIFT, false)) {
+        for (i = 0; i < 1 << SHIFT; i++) {
+            d->ZMM_L(i) = x86_float64_to_int32(s->ZMM_D(i), &env->sse_status);
+        }
     }
-    for (i >>= 1; i < 1 << SHIFT; i++) {
+    for (i = (1 << SHIFT) >> 1; i < 1 << SHIFT; i++) {
          d->Q(i) = 0;
     }
 }
@@ -791,22 +854,42 @@ void helper_cvtpd2pi(CPUX86State *env, MMXReg *d, ZMMReg *s)
 
 int32_t helper_cvtss2si(CPUX86State *env, ZMMReg *s)
 {
+    int64_t r;
+
+    if (sse_host_ss2si(env, &r, s->ZMM_S(0), false, false)) {
+        return r;
+    }
     return x86_float32_to_int32(s->ZMM_S(0), &env->sse_status);
 }
 
 int32_t helper_cvtsd2si(CPUX86State *env, ZMMReg *s)
 {
+    int64_t r;
+
+    if (sse_host_sd2si(env, &r, s->ZMM_D(0), false, false)) {
+        return r;
+    }
     return x86_float64_to_int32(s->ZMM_D(0), &env->sse_status);
 }
 
 #ifdef TARGET_X86_64
 int64_t helper_cvtss2sq(CPUX86State *env, ZMMReg *s)
 {
+    int64_t r;
+
+    if (sse_host_ss2si(env, &r, s->ZMM_S(0), true, false)) {
+        return r;
+    }
     return x86_float32_to_int64(s->ZMM_S(0), &env->sse_status);
 }
 
 int64_t helper_cvtsd2sq(CPUX86State *env, ZMMReg *s)
 {
+    int64_t r;
+
+    if (sse_host_sd2si(env, &r, s->ZMM_D(0), true, false)) {
+        return r;
+    }
     return x86_float64_to_int64(s->ZMM_D(0), &env->sse_status);
 }
 #endif
@@ -816,6 +899,11 @@ int64_t helper_cvtsd2sq(CPUX86State *env, ZMMReg *s)
 void glue(helper_cvttps2dq, SUFFIX)(CPUX86State *env, ZMMReg *d, ZMMReg *s)
 {
     int i;
+
+    if (sse_host_cvtps2dq(env, (int32_t *)&d->ZMM_L(0), &s->ZMM_S(0),
+                          2 << SHIFT, true)) {
+        return;
+    }
     for (i = 0; i < 2 << SHIFT; i++) {
         d->ZMM_L(i) = x86_float32_to_int32_round_to_zero(s->ZMM_S(i),
                                                          &env->sse_status);
@@ -825,11 +913,15 @@ void glue(helper_cvttps2dq, SUFFIX)(CPUX86State *env, ZMMReg *d, ZMMReg *s)
 void glue(helper_cvttpd2dq, SUFFIX)(CPUX86State *env, ZMMReg *d, ZMMReg *s)
 {
     int i;
-    for (i = 0; i < 1 << SHIFT; i++) {
-        d->ZMM_L(i) = x86_float64_to_int32_round_to_zero(s->ZMM_D(i),
-                                                         &env->sse_status);
+
+    if (!sse_host_cvtpd2dq(env, (int32_t *)&d->ZMM_L(0), &s->ZMM_D(0),
+                           1 << SHIFT, true)) {
+        for (i = 0; i < 1 << SHIFT; i++) {
+            d->ZMM_L(i) = x86_float64_to_int32_round_to_zero(s->ZMM_D(i),
+                                                             &env->sse_status);
+        }
     }
-    for (i >>= 1; i < 1 << SHIFT; i++) {
+    for (i = (1 << SHIFT) >> 1; i < 1 << SHIFT; i++) {
          d->Q(i) = 0;
     }
 }
@@ -849,22 +941,42 @@ void helper_cvttpd2pi(CPUX86State *env, MMXReg *d, ZMMReg *s)
 
 int32_t helper_cvttss2si(CPUX86State *env, ZMMReg *s)
 {
+    int64_t r;
+
+    if (sse_host_ss2si(env, &r, s->ZMM_S(0), false, true)) {
+        return r;
+    }
     return x86_float32_to_int32_round_to_zero(s->ZMM_S(0), &env->sse_status);
 }
 
 int32_t helper_cvttsd2si(CPUX86State *env, ZMMReg *s)
 {
+    int64_t r;
+
+    if (sse_host_sd2si(env, &r, s->ZMM_D(0), false, true)) {
+        return r;
+    }
     return x86_float64_to_int32_round_to_zero(s->ZMM_D(0), &env->sse_status);
 }
 
 #ifdef TARGET_X86_64
 int64_t helper_cvttss2sq(CPUX86State *env, ZMMReg *s)
 {
+    int64_t r;
+
+    if (sse_host_ss2si(env, &r, s->ZMM_S(0), true, true)) {
+        return r;
+    }
     return x86_float32_to_int64_round_to_zero(s->ZMM_S(0), &env->sse_status);
 }
 
 int64_t helper_cvttsd2sq(CPUX86State *env, ZMMReg *s)
 {
+    int64_t r;
+
+    if (sse_host_sd2si(env, &r, s->ZMM_D(0), true, true)) {
+        return r;
+    }
     return x86_float64_to_int64_round_to_zero(s->ZMM_D(0), &env->sse_status);
 }
 #endif
@@ -1247,12 +1359,15 @@ uint32_t glue(helper_movmskpd, SUFFIX)(CPUX86State *env, Reg *s)
 
 #endif
 
-#define PACK_HELPER_B(name, F) \
+#define PACK_HELPER_B(name, F, HOST) \
 void glue(helper_pack ## name, SUFFIX)(CPUX86State *env,      \
         Reg *d, Reg *v, Reg *s)                               \
 {                                                             \
     uint8_t r[PACK_WIDTH * 2];                                \
     int j, k;                                                 \
+    if (SHIFT >= 1 && sse_host_pack(d, v, s, HOST_LANES, HOST)) { \
+        return;                                               \
+    }                                                         \
     for (j = 0; j < 4 << SHIFT; j += PACK_WIDTH) {            \
         for (k = 0; k < PACK_WIDTH; k++) {                    \
             r[k] = F((int16_t)v->W(j + k));                   \
@@ -1266,13 +1381,18 @@ void glue(helper_pack ## name, SUFFIX)(CPUX86State *env,      \
     }                                                         \
 }
 
-PACK_HELPER_B(sswb, satsb)
-PACK_HELPER_B(uswb, satub)
+PACK_HELPER_B(sswb, satsb, SSE_HOST_PACKSSWB)
+PACK_HELPER_B(uswb, satub, SSE_HOST_PACKUSWB)
 
 void glue(helper_packssdw, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
 {
     uint16_t r[PACK_WIDTH];
     int j, k;
+
+    if (SHIFT >= 1 &&
+        sse_host_pack(d, v, s, HOST_LANES, SSE_HOST_PACKSSDW)) {
+        return;
+    }
 
     for (j = 0; j < 2 << SHIFT; j += PACK_WIDTH / 2) {
         for (k = 0; k < PACK_WIDTH / 2; k++) {
@@ -1294,6 +1414,10 @@ void glue(helper_packssdw, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
     {                                                                   \
         uint8_t r[PACK_WIDTH * 2];                                      \
         int j, i;                                                       \
+        if (SHIFT >= 1 &&                                               \
+            sse_host_unpck(d, v, s, HOST_LANES, 1, base)) {            \
+            return;                                                     \
+        }                                                               \
                                                                         \
         for (j = 0; j < 8 << SHIFT; ) {                                 \
             int k = j + base * PACK_WIDTH;                              \
@@ -1312,6 +1436,10 @@ void glue(helper_packssdw, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
     {                                                                   \
         uint16_t r[PACK_WIDTH];                                         \
         int j, i;                                                       \
+        if (SHIFT >= 1 &&                                               \
+            sse_host_unpck(d, v, s, HOST_LANES, 2, base)) {            \
+            return;                                                     \
+        }                                                               \
                                                                         \
         for (j = 0; j < 4 << SHIFT; ) {                                 \
             int k = j + base * PACK_WIDTH / 2;                          \
@@ -1330,6 +1458,10 @@ void glue(helper_packssdw, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
     {                                                                   \
         uint32_t r[PACK_WIDTH / 2];                                     \
         int j, i;                                                       \
+        if (SHIFT >= 1 &&                                               \
+            sse_host_unpck(d, v, s, HOST_LANES, 4, base)) {            \
+            return;                                                     \
+        }                                                               \
                                                                         \
         for (j = 0; j < 2 << SHIFT; ) {                                 \
             int k = j + base * PACK_WIDTH / 4;                          \
@@ -1349,6 +1481,9 @@ void glue(helper_packssdw, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
              {                                                          \
                  uint64_t r[2];                                         \
                  int i;                                                 \
+                 if (sse_host_unpck(d, v, s, HOST_LANES, 8, base)) {    \
+                     return;                                            \
+                 }                                                      \
                                                                         \
                  for (i = 0; i < 1 << SHIFT; i += 2) {                  \
                      r[0] = v->Q(base + i);                             \
@@ -1532,6 +1667,9 @@ void glue(helper_pshufb, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
 #else
     uint8_t r[8 << SHIFT];
 
+    if (sse_host_pshufb(d, v, s, HOST_LANES)) {
+        return;
+    }
     for (i = 0; i < 8 << SHIFT; i++) {
         int j = i & ~0xf;
         r[i] = (s->B(i) & 0x80) ? 0 : v->B(j | (s->B(i) & 0xf));
@@ -1619,6 +1757,11 @@ void glue(helper_palignr, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s,
         }
     } else {
         int shift = imm * 8;
+#if SHIFT >= 1
+        if (sse_host_palignr(d, v, s, HOST_LANES, imm)) {
+            return;
+        }
+#endif
 #define SHR(v, i) (i < 64 && i > -64 ? i > 0 ? v >> (i) : (v << -(i)) : 0)
 #if SHIFT == 0
         d->Q(0) = SHR(s->Q(0), shift - 0) |
@@ -1650,6 +1793,10 @@ void glue(helper_palignr, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s,
                             Reg *m)                                     \
     {                                                                   \
         int i;                                                          \
+        if (sse_host_blendv(d, v, s, m, HOST_LANES,                     \
+                            (int)sizeof(d->elem(0)))) {                 \
+            return;                                                     \
+        }                                                               \
         for (i = 0; i < num; i++) {                                     \
             d->elem(i) = F(v->elem(i), s->elem(i), m->elem(i));         \
         }                                                               \
@@ -1700,19 +1847,32 @@ void glue(helper_ptest, SUFFIX)(CPUX86State *env, Reg *d, Reg *s)
         }                                                       \
     }
 
+/* pmovzx and pmovsx: `from` and `to` are the element sizes in bytes. */
+#define SSE_HELPER_PMOVX(name, elem, num, F, from, to, sign)    \
+    void glue(name, SUFFIX)(CPUX86State *env, Reg *d, Reg *s)   \
+    {                                                           \
+        int n = num;                                            \
+        if (sse_host_pmovx(d, s, 16 * HOST_LANES, from, to, sign)) { \
+            return;                                             \
+        }                                                       \
+        for (int i = n; --i >= 0; ) {                           \
+            d->elem(i) = F(i);                                  \
+        }                                                       \
+    }
+
 #if SHIFT > 0
-SSE_HELPER_F(helper_pmovsxbw, W, 4 << SHIFT, (int8_t) s->B)
-SSE_HELPER_F(helper_pmovsxbd, L, 2 << SHIFT, (int8_t) s->B)
-SSE_HELPER_F(helper_pmovsxbq, Q, 1 << SHIFT, (int8_t) s->B)
-SSE_HELPER_F(helper_pmovsxwd, L, 2 << SHIFT, (int16_t) s->W)
-SSE_HELPER_F(helper_pmovsxwq, Q, 1 << SHIFT, (int16_t) s->W)
-SSE_HELPER_F(helper_pmovsxdq, Q, 1 << SHIFT, (int32_t) s->L)
-SSE_HELPER_F(helper_pmovzxbw, W, 4 << SHIFT, s->B)
-SSE_HELPER_F(helper_pmovzxbd, L, 2 << SHIFT, s->B)
-SSE_HELPER_F(helper_pmovzxbq, Q, 1 << SHIFT, s->B)
-SSE_HELPER_F(helper_pmovzxwd, L, 2 << SHIFT, s->W)
-SSE_HELPER_F(helper_pmovzxwq, Q, 1 << SHIFT, s->W)
-SSE_HELPER_F(helper_pmovzxdq, Q, 1 << SHIFT, s->L)
+SSE_HELPER_PMOVX(helper_pmovsxbw, W, 4 << SHIFT, (int8_t) s->B, 1, 2, true)
+SSE_HELPER_PMOVX(helper_pmovsxbd, L, 2 << SHIFT, (int8_t) s->B, 1, 4, true)
+SSE_HELPER_PMOVX(helper_pmovsxbq, Q, 1 << SHIFT, (int8_t) s->B, 1, 8, true)
+SSE_HELPER_PMOVX(helper_pmovsxwd, L, 2 << SHIFT, (int16_t) s->W, 2, 4, true)
+SSE_HELPER_PMOVX(helper_pmovsxwq, Q, 1 << SHIFT, (int16_t) s->W, 2, 8, true)
+SSE_HELPER_PMOVX(helper_pmovsxdq, Q, 1 << SHIFT, (int32_t) s->L, 4, 8, true)
+SSE_HELPER_PMOVX(helper_pmovzxbw, W, 4 << SHIFT, s->B, 1, 2, false)
+SSE_HELPER_PMOVX(helper_pmovzxbd, L, 2 << SHIFT, s->B, 1, 4, false)
+SSE_HELPER_PMOVX(helper_pmovzxbq, Q, 1 << SHIFT, s->B, 1, 8, false)
+SSE_HELPER_PMOVX(helper_pmovzxwd, L, 2 << SHIFT, s->W, 2, 4, false)
+SSE_HELPER_PMOVX(helper_pmovzxwq, Q, 1 << SHIFT, s->W, 2, 8, false)
+SSE_HELPER_PMOVX(helper_pmovzxdq, Q, 1 << SHIFT, s->L, 4, 8, false)
 SSE_HELPER_F(helper_pmovsldup, L, 2 << SHIFT, FMOVSLDUP)
 SSE_HELPER_F(helper_pmovshdup, L, 2 << SHIFT, FMOVSHDUP)
 SSE_HELPER_F(helper_pmovdldup, Q, 1 << SHIFT, FMOVDLDUP)
@@ -1731,6 +1891,10 @@ void glue(helper_packusdw, SUFFIX)(CPUX86State *env, Reg *d, Reg *v, Reg *s)
 {
     uint16_t r[8];
     int i, j, k;
+
+    if (sse_host_pack(d, v, s, HOST_LANES, SSE_HOST_PACKUSDW)) {
+        return;
+    }
 
     for (i = 0, j = 0; i <= 2 << SHIFT; i += 8, j += 4) {
         r[0] = satuw(v->L(j));
@@ -2746,6 +2910,7 @@ void helper_sha256msg2(Reg *d, Reg *a, Reg *b)
 #undef SSE_HELPER_S
 
 #undef LANE_WIDTH
+#undef HOST_LANES
 #undef SHIFT
 #undef XMM_ONLY
 #undef Reg

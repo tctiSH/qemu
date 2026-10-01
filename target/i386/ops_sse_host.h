@@ -46,6 +46,8 @@
 #define TARGET_I386_OPS_SSE_HOST_H
 
 enum { SSE_HOST_ADD, SSE_HOST_SUB, SSE_HOST_MUL, SSE_HOST_DIV };
+enum { SSE_HOST_PACKSSWB, SSE_HOST_PACKUSWB, SSE_HOST_PACKSSDW,
+       SSE_HOST_PACKUSDW };
 
 #if defined(__aarch64__) && !HOST_BIG_ENDIAN
 #include <arm_neon.h>
@@ -692,6 +694,480 @@ static inline bool sse_host_dpps(CPUX86State *env, float32 *d,
     return true;
 }
 
+/*
+ * Conversions. Nearly all can be inexact, so the fast paths run only once PE
+ * is set (see the top), and bail on any lane where the architectures could
+ * differ: a NaN; a value outside the integer's range (x86 returns the
+ * "integer indefinite", the most negative integer, and raises IE, where
+ * AArch64 saturates); a denormal input while DE is clear or DAZ is set (DE,
+ * and the zero a flushed input becomes); and for float64 to float32, an
+ * overflow or a tiny result while OE or UE is clear, as for arithmetic.
+ * Those that round need MXCSR at round-to-nearest; the truncating ones and
+ * the exact ones (widening, int32 to float64) work in any mode.
+ */
+static inline bool sse_host_cvt_ok(CPUX86State *env, bool rounds)
+{
+    return (sse_host_flags(env) & float_flag_inexact) &&
+           (!rounds || sse_host_mode_ok(env));
+}
+
+/* Whether a denormal input needs no fallback: DE set, DAZ clear. */
+static inline bool sse_host_den_ok(CPUX86State *env)
+{
+    return (sse_host_flags(env) & float_flag_input_denormal_used) &&
+           !env->sse_status.flush_inputs_to_zero;
+}
+
+/* cvtps2dq, cvttps2dq: 4 or 8 float32 to int32. */
+static inline bool sse_host_cvtps2dq(CPUX86State *env, int32_t *d,
+                                     const float32 *s, int lanes, bool trunc)
+{
+    bool den = !sse_host_den_ok(env);
+    uint32x4_t bad = vdupq_n_u32(0);
+    int32x4_t r[2];
+
+    if (!sse_host_cvt_ok(env, !trunc)) {
+        return false;
+    }
+    for (int i = 0; i < lanes / 4; i++) {
+        float32x4_t x = vld1q_f32((const float *)s + 4 * i);
+        /* -2^31 <= x < 2^31, false for a NaN */
+        uint32x4_t in = vandq_u32(vcgeq_f32(x, vdupq_n_f32(-2147483648.0f)),
+                                  vcltq_f32(x, vdupq_n_f32(2147483648.0f)));
+
+        bad = vorrq_u32(bad, vmvnq_u32(in));
+        if (den) {
+            bad = vorrq_u32(bad, sse_host_denormal_s(x));
+        }
+        r[i] = trunc ? vcvtq_s32_f32(x) : vcvtnq_s32_f32(x);
+    }
+    if (sse_host_any(bad)) {
+        return false;
+    }
+    for (int i = 0; i < lanes / 4; i++) {
+        vst1q_s32(d + 4 * i, r[i]);
+    }
+    return true;
+}
+
+/* cvtpd2dq, cvttpd2dq: 2 or 4 float64 to int32 (the upper half is the caller's). */
+static inline bool sse_host_cvtpd2dq(CPUX86State *env, int32_t *d,
+                                     const float64 *s, int lanes, bool trunc)
+{
+    bool den = !sse_host_den_ok(env);
+    uint32x4_t bad = vdupq_n_u32(0);
+    int32x2_t r[2];
+
+    if (!sse_host_cvt_ok(env, !trunc)) {
+        return false;
+    }
+    for (int i = 0; i < lanes / 2; i++) {
+        float64x2_t x = vld1q_f64((const double *)s + 2 * i);
+        /* within range for either rounding; false for a NaN */
+        uint64x2_t in = vandq_u64(vcgeq_f64(x, vdupq_n_f64(-2147483648.0)),
+                                  vcleq_f64(x, vdupq_n_f64(2147483647.0)));
+
+        bad = vorrq_u32(bad, vmvnq_u32(vreinterpretq_u32_u64(in)));
+        if (den) {
+            bad = vorrq_u32(bad, sse_host_denormal_d(x));
+        }
+        r[i] = vmovn_s64(trunc ? vcvtq_s64_f64(x) : vcvtnq_s64_f64(x));
+    }
+    if (sse_host_any(bad)) {
+        return false;
+    }
+    for (int i = 0; i < lanes / 2; i++) {
+        vst1_s32(d + 2 * i, r[i]);
+    }
+    return true;
+}
+
+static inline bool sse_host_denormal_bits_s(float32 x)
+{
+    return !(x & 0x7f800000) && (x & 0x007fffff);
+}
+
+static inline bool sse_host_denormal_bits_d(float64 x)
+{
+    return !(x & 0x7ff0000000000000ull) && (x & 0x000fffffffffffffull);
+}
+
+/*
+ * The scalar float to int32/int64 forms, on the value widened (exactly) to
+ * double; `den` says whether the original was denormal.
+ */
+static inline bool sse_host_f2i(CPUX86State *env, int64_t *r, double x,
+                                bool den, bool is64, bool trunc)
+{
+    bool in = is64 ? x >= -9223372036854775808.0 && x < 9223372036854775808.0
+                   : x >= -2147483648.0 && x <= 2147483647.0;
+
+    if (!sse_host_cvt_ok(env, !trunc) || !in ||
+        (den && !sse_host_den_ok(env))) {
+        return false;
+    }
+    *r = trunc ? (int64_t)x : vcvtnd_s64_f64(x);
+    return true;
+}
+
+static inline bool sse_host_ss2si(CPUX86State *env, int64_t *r, float32 a,
+                                  bool is64, bool trunc)
+{
+    float x;
+
+    memcpy(&x, &a, 4);
+    return sse_host_f2i(env, r, x, sse_host_denormal_bits_s(a), is64, trunc);
+}
+
+static inline bool sse_host_sd2si(CPUX86State *env, int64_t *r, float64 a,
+                                  bool is64, bool trunc)
+{
+    double x;
+
+    memcpy(&x, &a, 8);
+    return sse_host_f2i(env, r, x, sse_host_denormal_bits_d(a), is64, trunc);
+}
+
+/* cvtdq2ps: 4 or 8 int32 to float32; exact up to 2^24. */
+static inline bool sse_host_cvtdq2ps(CPUX86State *env, float32 *d,
+                                     const int32_t *s, int lanes)
+{
+    uint32x4_t big = vdupq_n_u32(0);
+    float32x4_t r[2];
+
+    if (!sse_host_mode_ok(env)) {
+        return false;
+    }
+    for (int i = 0; i < lanes / 4; i++) {
+        int32x4_t x = vld1q_s32(s + 4 * i);
+
+        big = vorrq_u32(big, vcgtq_u32(vreinterpretq_u32_s32(vabsq_s32(x)),
+                                       vdupq_n_u32(1 << 24)));
+        r[i] = vcvtq_f32_s32(x);
+    }
+    if (sse_host_any(big) && !(sse_host_flags(env) & float_flag_inexact)) {
+        return false;
+    }
+    for (int i = 0; i < lanes / 4; i++) {
+        vst1q_f32((float *)d + 4 * i, r[i]);
+    }
+    return true;
+}
+
+/* cvtdq2pd: 2 or 4 int32 to float64, always exact. */
+static inline bool sse_host_cvtdq2pd(float64 *d, const int32_t *s, int lanes)
+{
+    float64x2_t r[2];
+
+    for (int i = 0; i < lanes / 2; i++) {
+        r[i] = vcvtq_f64_s64(vmovl_s32(vld1_s32(s + 2 * i)));
+    }
+    for (int i = 0; i < lanes / 2; i++) {
+        vst1q_f64((double *)d + 2 * i, r[i]);
+    }
+    return true;
+}
+
+/* cvtsi2ss, cvtsq2ss, cvtsq2sd: exact if the integer fits the significand. */
+static inline bool sse_host_i2f_ok(CPUX86State *env, int64_t v, int bits)
+{
+    uint64_t m = v < 0 ? -(uint64_t)v : v;
+
+    return sse_host_mode_ok(env) &&
+           (m <= (1ull << bits) || (sse_host_flags(env) & float_flag_inexact));
+}
+
+/* cvtps2pd: 2 or 4 float32 to float64; exact, so any mode. */
+static inline bool sse_host_cvtps2pd(CPUX86State *env, float64 *d,
+                                     const float32 *s, int lanes)
+{
+    bool den = !sse_host_den_ok(env);
+    uint32x4_t bad = vdupq_n_u32(0);
+    float64x2_t r[2];
+
+    for (int i = 0; i < lanes / 2; i++) {
+        float32x2_t x = vld1_f32((const float *)s + 2 * i);
+        float32x4_t xq = vcombine_f32(x, x);
+
+        bad = vorrq_u32(bad, sse_host_nan_s(xq));
+        if (den) {
+            bad = vorrq_u32(bad, sse_host_denormal_s(xq));
+        }
+        r[i] = vcvt_f64_f32(x);
+    }
+    if (sse_host_any(bad)) {
+        return false;
+    }
+    for (int i = 0; i < lanes / 2; i++) {
+        vst1q_f64((double *)d + 2 * i, r[i]);
+    }
+    return true;
+}
+
+/* cvtpd2ps: 2 or 4 float64 to float32 (the upper half is the caller's). */
+static inline bool sse_host_cvtpd2ps(CPUX86State *env, float32 *d,
+                                     const float64 *s, int lanes)
+{
+    int flags = sse_host_flags(env);
+    bool den = !sse_host_den_ok(env);
+    uint32x4_t bad = vdupq_n_u32(0);
+    float32x2_t r[2];
+
+    if (!sse_host_cvt_ok(env, true)) {
+        return false;
+    }
+    for (int i = 0; i < lanes / 2; i++) {
+        float64x2_t x = vld1q_f64((const double *)s + 2 * i);
+        float32x2_t y = vcvt_f32_f64(x);
+        float32x4_t yq = vcombine_f32(y, y);
+        /* the float64 checks give two 64-bit lanes; line them up with y's */
+        uint32x4_t nz = vreinterpretq_u32_u64(vtstq_u64(
+            vreinterpretq_u64_f64(x), vdupq_n_u64(0x7fffffffffffffffull)));
+        uint32x4_t fin = sse_host_finite_d(x);
+
+        nz = vcombine_u32(vmovn_u64(vreinterpretq_u64_u32(nz)),
+                          vmovn_u64(vreinterpretq_u64_u32(nz)));
+        fin = vcombine_u32(vmovn_u64(vreinterpretq_u64_u32(fin)),
+                           vmovn_u64(vreinterpretq_u64_u32(fin)));
+        bad = vorrq_u32(bad, sse_host_nan_s(yq));
+        if (den) {
+            bad = vorrq_u32(bad, sse_host_denormal_d(x));
+        }
+        if (!(flags & float_flag_overflow)) {
+            bad = vorrq_u32(bad, vbicq_u32(fin, sse_host_finite_s(yq)));
+        }
+        if (!(flags & float_flag_underflow)) {
+            bad = vorrq_u32(bad, vandq_u32(nz, sse_host_tiny_s(yq)));
+        }
+        r[i] = y;
+    }
+    if (sse_host_any(bad)) {
+        return false;
+    }
+    for (int i = 0; i < lanes / 2; i++) {
+        vst1_f32((float *)d + 2 * i, r[i]);
+    }
+    return true;
+}
+
+/*
+ * Integer shuffles, packs and blends: pure data movement, exact by
+ * construction, and independent of MXCSR. Each works on the register's
+ * 128-bit lanes (one for SSE, two for AVX2, which permutes within lanes),
+ * loading every input before storing, as the destination may alias one.
+ */
+static inline uint8x16_t sse_host_ld8(const void *p, int lane)
+{
+    return vld1q_u8((const uint8_t *)p + 16 * lane);
+}
+
+static inline void sse_host_st8(void *p, int lane, uint8x16_t x)
+{
+    vst1q_u8((uint8_t *)p + 16 * lane, x);
+}
+
+/* pshufb: a byte index with bit 7 set gives 0, which TBL does for >= 16. */
+static inline bool sse_host_pshufb(void *d, const void *v, const void *s,
+                                   int lanes)
+{
+    uint8x16_t r[2];
+
+    for (int i = 0; i < lanes; i++) {
+        r[i] = vqtbl1q_u8(sse_host_ld8(v, i),
+                          vandq_u8(sse_host_ld8(s, i), vdupq_n_u8(0x8f)));
+    }
+    for (int i = 0; i < lanes; i++) {
+        sse_host_st8(d, i, r[i]);
+    }
+    return true;
+}
+
+/*
+ * pblendvb, blendvps, blendvpd: s where the mask element's top bit is set,
+ * else v. `size` is the element size in bytes.
+ */
+static inline bool sse_host_blendv(void *d, const void *v, const void *s,
+                                   const void *m, int lanes, int size)
+{
+    uint8x16_t r[2];
+
+    for (int i = 0; i < lanes; i++) {
+        uint8x16_t mm = sse_host_ld8(m, i);
+        uint8x16_t sel;
+
+        switch (size) {
+        case 1:
+            sel = vreinterpretq_u8_s8(vshrq_n_s8(vreinterpretq_s8_u8(mm), 7));
+            break;
+        case 4:
+            sel = vreinterpretq_u8_s32(
+                vshrq_n_s32(vreinterpretq_s32_u8(mm), 31));
+            break;
+        default:
+            sel = vreinterpretq_u8_s64(
+                vshrq_n_s64(vreinterpretq_s64_u8(mm), 63));
+            break;
+        }
+        r[i] = vbslq_u8(sel, sse_host_ld8(s, i), sse_host_ld8(v, i));
+    }
+    for (int i = 0; i < lanes; i++) {
+        sse_host_st8(d, i, r[i]);
+    }
+    return true;
+}
+
+/* The packs: v's elements narrowed, then s's, per lane, saturating. */
+
+static inline bool sse_host_pack(void *d, const void *v, const void *s,
+                                 int lanes, int op)
+{
+    uint8x16_t r[2];
+
+    for (int i = 0; i < lanes; i++) {
+        uint8x16_t a = sse_host_ld8(v, i), b = sse_host_ld8(s, i);
+
+        switch (op) {
+        case SSE_HOST_PACKSSWB:
+            r[i] = vreinterpretq_u8_s8(vcombine_s8(
+                vqmovn_s16(vreinterpretq_s16_u8(a)),
+                vqmovn_s16(vreinterpretq_s16_u8(b))));
+            break;
+        case SSE_HOST_PACKUSWB:
+            r[i] = vcombine_u8(vqmovun_s16(vreinterpretq_s16_u8(a)),
+                               vqmovun_s16(vreinterpretq_s16_u8(b)));
+            break;
+        case SSE_HOST_PACKSSDW:
+            r[i] = vreinterpretq_u8_s16(vcombine_s16(
+                vqmovn_s32(vreinterpretq_s32_u8(a)),
+                vqmovn_s32(vreinterpretq_s32_u8(b))));
+            break;
+        default:
+            r[i] = vreinterpretq_u8_u16(vcombine_u16(
+                vqmovun_s32(vreinterpretq_s32_u8(a)),
+                vqmovun_s32(vreinterpretq_s32_u8(b))));
+            break;
+        }
+    }
+    for (int i = 0; i < lanes; i++) {
+        sse_host_st8(d, i, r[i]);
+    }
+    return true;
+}
+
+/*
+ * punpckl* and punpckh*: the low or high halves of v and s, interleaved
+ * v first; `size` is the element size in bytes.
+ */
+static inline bool sse_host_unpck(void *d, const void *v, const void *s,
+                                  int lanes, int size, bool high)
+{
+    uint8x16_t r[2];
+
+    for (int i = 0; i < lanes; i++) {
+        uint8x16_t a = sse_host_ld8(v, i), b = sse_host_ld8(s, i);
+
+        switch (size) {
+        case 1:
+            r[i] = high ? vzip2q_u8(a, b) : vzip1q_u8(a, b);
+            break;
+        case 2:
+            r[i] = vreinterpretq_u8_u16(
+                high ? vzip2q_u16(vreinterpretq_u16_u8(a),
+                                  vreinterpretq_u16_u8(b))
+                     : vzip1q_u16(vreinterpretq_u16_u8(a),
+                                  vreinterpretq_u16_u8(b)));
+            break;
+        case 4:
+            r[i] = vreinterpretq_u8_u32(
+                high ? vzip2q_u32(vreinterpretq_u32_u8(a),
+                                  vreinterpretq_u32_u8(b))
+                     : vzip1q_u32(vreinterpretq_u32_u8(a),
+                                  vreinterpretq_u32_u8(b)));
+            break;
+        default:
+            r[i] = vreinterpretq_u8_u64(
+                high ? vzip2q_u64(vreinterpretq_u64_u8(a),
+                                  vreinterpretq_u64_u8(b))
+                     : vzip1q_u64(vreinterpretq_u64_u8(a),
+                                  vreinterpretq_u64_u8(b)));
+            break;
+        }
+    }
+    for (int i = 0; i < lanes; i++) {
+        sse_host_st8(d, i, r[i]);
+    }
+    return true;
+}
+
+/*
+ * palignr: per lane, the 32 bytes s:v (s low) shifted right by imm bytes.
+ * The shift is not a constant, so a two-register TBL does it: indices of
+ * 32 and above give 0, as the shift brings in. imm >= 32 is the caller's.
+ */
+static inline bool sse_host_palignr(void *d, const void *v, const void *s,
+                                    int lanes, uint32_t imm)
+{
+    static const uint8_t iota[16] = { 0, 1, 2, 3, 4, 5, 6, 7,
+                                      8, 9, 10, 11, 12, 13, 14, 15 };
+    uint8x16_t idx = vaddq_u8(vld1q_u8(iota), vdupq_n_u8(imm));
+    uint8x16_t r[2];
+
+    for (int i = 0; i < lanes; i++) {
+        uint8x16x2_t t = { { sse_host_ld8(s, i), sse_host_ld8(v, i) } };
+
+        r[i] = vqtbl2q_u8(t, idx);
+    }
+    for (int i = 0; i < lanes; i++) {
+        sse_host_st8(d, i, r[i]);
+    }
+    return true;
+}
+
+/*
+ * pmovzx* and pmovsx*: the low elements of s widened from `from` to `to`
+ * bytes, filling the destination (128 or 256 bits, not per lane).
+ */
+static inline bool sse_host_pmovx(void *d, const void *s, int bytes,
+                                  int from, int to, bool sign)
+{
+    uint8_t in[32] = { 0 };   /* room for the second half's 16-byte load */
+    uint8x16_t r[2];
+    int n = bytes / to;   /* elements out */
+
+    memcpy(in, s, n * from);
+    for (int half = 0; half < bytes / 16; half++) {
+        /* the source bytes this half of the result widens */
+        uint8x16_t x = vld1q_u8(in + half * (16 / to) * from);
+
+        for (int w = from; w < to; w *= 2) {
+            switch (w) {
+            case 1:
+                x = sign ? vreinterpretq_u8_s16(vmovl_s8(vget_low_s8(
+                               vreinterpretq_s8_u8(x))))
+                         : vreinterpretq_u8_u16(vmovl_u8(vget_low_u8(x)));
+                break;
+            case 2:
+                x = sign ? vreinterpretq_u8_s32(vmovl_s16(vget_low_s16(
+                               vreinterpretq_s16_u8(x))))
+                         : vreinterpretq_u8_u32(vmovl_u16(vget_low_u16(
+                               vreinterpretq_u16_u8(x))));
+                break;
+            default:
+                x = sign ? vreinterpretq_u8_s64(vmovl_s32(vget_low_s32(
+                               vreinterpretq_s32_u8(x))))
+                         : vreinterpretq_u8_u64(vmovl_u32(vget_low_u32(
+                               vreinterpretq_u32_u8(x))));
+                break;
+            }
+        }
+        r[half] = x;
+    }
+    for (int half = 0; half < bytes / 16; half++) {
+        sse_host_st8(d, half, r[half]);
+    }
+    return true;
+}
+
 #else
 
 #define sse_host_ps(...) false
@@ -713,6 +1189,21 @@ static inline bool sse_host_dpps(CPUX86State *env, float32 *d,
 #define sse_host_fma_ss(...) false
 #define sse_host_fma_sd(...) false
 #define sse_host_dpps(...) false
+#define sse_host_cvtps2dq(...) false
+#define sse_host_cvtpd2dq(...) false
+#define sse_host_ss2si(...) false
+#define sse_host_sd2si(...) false
+#define sse_host_cvtdq2ps(...) false
+#define sse_host_cvtdq2pd(...) false
+#define sse_host_i2f_ok(...) false
+#define sse_host_cvtps2pd(...) false
+#define sse_host_cvtpd2ps(...) false
+#define sse_host_pshufb(...) false
+#define sse_host_blendv(...) false
+#define sse_host_pack(...) false
+#define sse_host_unpck(...) false
+#define sse_host_palignr(...) false
+#define sse_host_pmovx(...) false
 
 #endif /* __aarch64__ */
 
