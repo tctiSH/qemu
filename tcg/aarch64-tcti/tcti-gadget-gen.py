@@ -1051,6 +1051,17 @@ for op in ("add", "and"):
     with_pair(f"{op}i_env", ('d', 'n'), "ldp x26, x27, [x28], #16", "ldr Xn, [x14, x26]",
               f"{op} Xd, Xn, x27", "str Xd, [x14, x26]")
 
+# A constant stored to an env slot: above all x86's cc_op, set as a TB
+# leaves. sti32_env's one stream word holds the constant in its low half and
+# the (signed) offset in its high half; sti64_env's stream holds the offset,
+# then the constant. See tcg_out_sti(). movi_st32_env is the same for a
+# constant that also stays in Xd, joining the movi and the store; see
+# tcg_out_st().
+simple("sti32_env", "ldr x27, [x28], #8", "asr x26, x27, #32", "str w27, [x14, x26]")
+simple("sti64_env", "ldp x26, x27, [x28], #16", "str x27, [x14, x26]")
+with_d("movi_st32_env", "ldr x27, [x28], #8", "asr x26, x27, #32", "mov Wd, w27",
+       "str Wd, [x14, x26]")
+
 # STORE variants.
 ldst_dn("st8",         "strb  Wd, [Xn, x27]")
 ldst_dn("st16",        "strh  Wd, [Xn, x27]")
