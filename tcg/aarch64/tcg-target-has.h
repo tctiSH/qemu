@@ -11,6 +11,7 @@
 
 #define have_lse    (cpuinfo & CPUINFO_LSE)
 #define have_lse2   (cpuinfo & CPUINFO_LSE2)
+#define have_cssc   (cpuinfo & CPUINFO_CSSC)
 
 /* optional instructions */
 #define TCG_TARGET_HAS_extr_i64_i32     0

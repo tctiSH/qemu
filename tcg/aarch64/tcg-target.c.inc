@@ -523,6 +523,8 @@ typedef enum {
     /* Data-processing (1 source) instructions.  */
     Irr_sf_CLZ         = 0x5ac01000,
     Irr_sf_RBIT        = 0x5ac00000,
+    Irr_sf_CTZ         = 0x5ac01800, /* FEAT_CSSC */
+    Irr_sf_CNT         = 0x5ac01c00, /* FEAT_CSSC */
     Irr_sf_REV         = 0x5ac00000, /* + size << 10 */
 
     /* Data-processing (2 source) instructions.  */
@@ -641,6 +643,11 @@ typedef enum {
     Iqrr_e_NOT        = 0x2e205800,
     Iqrr_e_ABS        = 0x0e20b800,
     Iqrr_e_NEG        = 0x2e20b800,
+    Iqrr_e_CNT        = 0x0e205800,
+    Iqrr_e_ADDV       = 0x0e31b800,
+
+    /* FMOV from a general register, 32 bits (S) or with sf and ftype 64 (D). */
+    Ifmov_gv          = 0x1e270000,
 
     /* System instructions.  */
     NOP               = 0xd503201f,
@@ -2390,24 +2397,28 @@ static const TCGOutOpBinary outop_andc = {
     .out_rrr = tgen_andc,
 };
 
-static void tgen_clz(TCGContext *s, TCGType type,
-                     TCGReg a0, TCGReg a1, TCGReg a2)
+/*
+ * a0 = a1 ? count(a1) : a2, where the count is CLZ, or with FEAT_CSSC may be
+ * CTZ. Both give the width for zero.
+ */
+static void tgen_count(TCGContext *s, TCGType type, AArch64Insn insn,
+                       TCGReg a0, TCGReg a1, TCGReg a2)
 {
     tcg_out_cmp(s, type, TCG_COND_NE, a1, 0, true);
-    tcg_out_insn(s, rr_sf, CLZ, type, TCG_REG_TMP0, a1);
+    tcg_out_insn_rr_sf(s, insn, type, TCG_REG_TMP0, a1);
     tcg_out_insn(s, csel, CSEL, type, a0, TCG_REG_TMP0, a2, TCG_COND_NE);
 }
 
-static void tgen_clzi(TCGContext *s, TCGType type,
-                      TCGReg a0, TCGReg a1, tcg_target_long a2)
+static void tgen_counti(TCGContext *s, TCGType type, AArch64Insn insn,
+                        TCGReg a0, TCGReg a1, tcg_target_long a2)
 {
     if (a2 == (type == TCG_TYPE_I32 ? 32 : 64)) {
-        tcg_out_insn(s, rr_sf, CLZ, type, a0, a1);
+        tcg_out_insn_rr_sf(s, insn, type, a0, a1);
         return;
     }
 
     tcg_out_cmp(s, type, TCG_COND_NE, a1, 0, true);
-    tcg_out_insn(s, rr_sf, CLZ, type, a0, a1);
+    tcg_out_insn_rr_sf(s, insn, type, a0, a1);
 
     switch (a2) {
     case -1:
@@ -2423,19 +2434,54 @@ static void tgen_clzi(TCGContext *s, TCGType type,
     }
 }
 
+static void tgen_clz(TCGContext *s, TCGType type,
+                     TCGReg a0, TCGReg a1, TCGReg a2)
+{
+    tgen_count(s, type, Irr_sf_CLZ, a0, a1, a2);
+}
+
+static void tgen_clzi(TCGContext *s, TCGType type,
+                      TCGReg a0, TCGReg a1, tcg_target_long a2)
+{
+    tgen_counti(s, type, Irr_sf_CLZ, a0, a1, a2);
+}
+
 static const TCGOutOpBinary outop_clz = {
     .base.static_constraint = C_O1_I2(r, r, rAL),
     .out_rrr = tgen_clz,
     .out_rri = tgen_clzi,
 };
 
+static void tgen_ctpop(TCGContext *s, TCGType type, TCGReg a0, TCGReg a1)
+{
+    if (have_cssc) {
+        tcg_out_insn(s, rr_sf, CNT, type, a0, a1);
+        return;
+    }
+    /*
+     * FMOV zeroes the rest of the vector, so count the bytes of all 8 and
+     * add them: the sum fits the low byte, which UMOV extends.
+     */
+    tcg_out32(s, Ifmov_gv | (type == TCG_TYPE_I64 ? 0x80400000 : 0)
+              | a1 << 5 | (TCG_VEC_TMP0 & 0x1f));
+    tcg_out_insn(s, qrr_e, CNT, 0, 0, TCG_VEC_TMP0, TCG_VEC_TMP0);
+    tcg_out_insn(s, qrr_e, ADDV, 0, 0, TCG_VEC_TMP0, TCG_VEC_TMP0);
+    tcg_out_insn(s, simd_copy, UMOV, 0, a0, TCG_VEC_TMP0, 1, 0);
+}
+
 static const TCGOutOpUnary outop_ctpop = {
-    .base.static_constraint = C_NotImplemented,
+    .base.static_constraint = C_O1_I1(r, r),
+    .out_rr = tgen_ctpop,
 };
 
+/* ctz is one CTZ with FEAT_CSSC, else the clz of the bits reversed. */
 static void tgen_ctz(TCGContext *s, TCGType type,
                      TCGReg a0, TCGReg a1, TCGReg a2)
 {
+    if (have_cssc) {
+        tgen_count(s, type, Irr_sf_CTZ, a0, a1, a2);
+        return;
+    }
     tcg_out_insn(s, rr_sf, RBIT, type, TCG_REG_TMP0, a1);
     tgen_clz(s, type, a0, TCG_REG_TMP0, a2);
 }
@@ -2443,6 +2489,10 @@ static void tgen_ctz(TCGContext *s, TCGType type,
 static void tgen_ctzi(TCGContext *s, TCGType type,
                       TCGReg a0, TCGReg a1, tcg_target_long a2)
 {
+    if (have_cssc) {
+        tgen_counti(s, type, Irr_sf_CTZ, a0, a1, a2);
+        return;
+    }
     tcg_out_insn(s, rr_sf, RBIT, type, TCG_REG_TMP0, a1);
     tgen_clzi(s, type, a0, TCG_REG_TMP0, a2);
 }
