@@ -821,7 +821,11 @@ static __thread struct {
     tcg_target_long imm;
 } tcti_env_rmw;
 
-/* Called after an i64 op dst = src op imm, emitted from start. */
+/*
+ * Called after an i64 op dst = src op imm, emitted from start. The load just
+ * before it, if any, joins it at once, as an ld_addi_env or ld_andi_env; a
+ * store back to the same slot can then join both (tcti_out_env_ldst64()).
+ */
 static void tcti_note_env_rmw(TCGContext *s, tcg_insn_unit *start,
                               const void *(*gadgets)[TCG_TARGET_GP_REGS],
                               TCGReg dst, TCGReg src, tcg_target_long imm)
@@ -830,12 +834,25 @@ static void tcti_note_env_rmw(TCGContext *s, tcg_insn_unit *start,
 
     tcti_env_rmw.end = NULL;
     if (ld->end == start && !ld->is_st && ld->reg == src) {
-        tcti_env_rmw.start = ld->start;
+        tcg_insn_unit *ld_start = ld->start;
+        intptr_t offset = ld->offset;
+        const void *(*ld_op)[TCG_TARGET_GP_REGS] = gadget_ld_andi_env;
+
+        if (gadgets == gadget_addi_env) {
+            ld_op = gadget_ld_addi_env;
+        }
+        if (!tcti_label_within(s, ld_start, start)) {
+            tcti_rewind(s, ld_start);
+            tcg_out_gadget(s, ld_op[dst][src]);
+            tcg_out64(s, offset);
+            tcg_out64(s, imm);
+        }
+        tcti_env_rmw.start = ld_start;
         tcti_env_rmw.end = s->code_ptr;
         tcti_env_rmw.gadgets = gadgets;
         tcti_env_rmw.dst = dst;
         tcti_env_rmw.src = src;
-        tcti_env_rmw.offset = ld->offset;
+        tcti_env_rmw.offset = offset;
         tcti_env_rmw.imm = imm;
     }
 }
