@@ -130,6 +130,9 @@ static inline uintptr_t tlb_index(CPUState *cpu, uintptr_t mmu_idx,
 {
     uintptr_t size_mask = cpu_tlb_fast(cpu, mmu_idx)->mask >> CPU_TLB_ENTRY_BITS;
 
+#ifdef CPU_TLB_INDEX_FOLD
+    addr ^= addr >> CPU_TLB_INDEX_FOLD;
+#endif
     return (addr >> TARGET_PAGE_BITS) & size_mask;
 }
 
