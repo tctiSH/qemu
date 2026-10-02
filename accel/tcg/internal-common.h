@@ -134,6 +134,7 @@ void page_table_config_init(void);
 #endif
 
 #ifndef CONFIG_USER_ONLY
+bool cpu_io_allowed(CPUState *cpu, uintptr_t retaddr);
 G_NORETURN void cpu_io_recompile(CPUState *cpu, uintptr_t retaddr);
 #endif /* CONFIG_USER_ONLY */
 

@@ -573,6 +573,30 @@ void tb_check_watchpoint(CPUState *cpu, uintptr_t retaddr)
  *
  * Called by softmmu_template.h, with iothread mutex not held.
  */
+/*
+ * Whether the access at retaddr may do I/O: only the last insn of a TB may,
+ * so that I/O which changes the memory map is not followed by insns of the
+ * same TB. Under icount the TB tracks this in can_do_io, which icount needs
+ * anyway; otherwise it is found here from the TB's search data, rather than
+ * with two stores in every TB. The tail of a TB after its last insn counts as
+ * that insn, and an access not made from a TB may always do I/O, as when
+ * can_do_io is set on leaving a TB.
+ */
+bool cpu_io_allowed(CPUState *cpu, uintptr_t retaddr)
+{
+    TranslationBlock *tb;
+    uint64_t data[INSN_START_WORDS];
+
+    if (icount_enabled()) {
+        return cpu->neg.can_do_io;
+    }
+    if (!retaddr) {
+        return true;
+    }
+    tb = tcg_tb_lookup(retaddr);
+    return !tb || cpu_unwind_data_from_tb(tb, retaddr, data) <= 1;
+}
+
 void cpu_io_recompile(CPUState *cpu, uintptr_t retaddr)
 {
     TranslationBlock *tb;
