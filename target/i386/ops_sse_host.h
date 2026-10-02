@@ -8,10 +8,12 @@
  *
  *  - MXCSR rounding other than round-to-nearest, or DAZ/FTZ set: the host
  *    runs with FPCR at its defaults (nearest, no flush), as hardfloat assumes.
- *  - A NaN result: the choice of NaN (operand order, SNaN vs QNaN priority)
- *    and the default NaN's sign differ. Every NaN input to add, sub, mul, div
- *    or FMA gives a NaN result, so this covers NaN inputs too, and every
- *    invalid operation.
+ *  - A NaN result from an FMA: the choice of NaN (operand order, SNaN vs
+ *    QNaN priority) and the default NaN's sign differ. Every NaN input gives
+ *    a NaN result, so this covers NaN inputs too, and every invalid
+ *    operation. For add, sub, mul and div, NaN lanes are instead given the
+ *    NaN softfloat would give x86 (sse_host_x86_nan_s()), and invalid is
+ *    raised where the host raises it.
  *
  * The exception flags are sticky, and in practice MXCSR.PE is set as soon as
  * a program has done any inexact arithmetic. With PE set nobody can tell
@@ -169,14 +171,20 @@ static inline uint32x4_t sse_host_nonzero_d(float64x2_t x)
                   vdupq_n_u64(0x7fffffffffffffffull)));
 }
 
+/*
+ * On the bits rather than as x != x: the compiler may turn floating-point
+ * NaN tests into signaling compares, which raise invalid for a QNaN and so
+ * would corrupt the FPSR read-back.
+ */
 static inline uint32x4_t sse_host_nan_s(float32x4_t x)
 {
-    return vmvnq_u32(vceqq_f32(x, x));
+    return vcgtq_u32(sse_host_mag_s(x), vdupq_n_u32(0x7f800000));
 }
 
 static inline uint32x4_t sse_host_nan_d(float64x2_t x)
 {
-    return vmvnq_u32(vreinterpretq_u32_u64(vceqq_f64(x, x)));
+    return vreinterpretq_u32_u64(vcgtq_u64(sse_host_mag_d(x),
+                                           vdupq_n_u64(0x7ff0000000000000ull)));
 }
 
 static inline bool sse_host_any(uint32x4_t m)
@@ -185,12 +193,88 @@ static inline bool sse_host_any(uint32x4_t m)
 }
 
 /*
+ * The NaN that softfloat gives x86 for r = a op b, in each lane where the
+ * host's r is a NaN, and the other lanes as they are. softfloat uses the x87
+ * rules for SSE too (see cpu_init_fp_statuses()): with one NaN input, that
+ * one; with an SNaN and a QNaN, the QNaN; with two of a kind, the larger
+ * significand, then the positive one; quietened. Without a NaN input it is
+ * the default NaN, which on x86 is negative. *inv gets the lanes that raise
+ * invalid, as they do on the host: an SNaN input, or no NaN input at all.
+ */
+static inline uint32x4_t sse_host_neg_s(uint32x4_t u)
+{
+    return vreinterpretq_u32_s32(vshrq_n_s32(vreinterpretq_s32_u32(u), 31));
+}
+
+static inline uint64x2_t sse_host_neg_d(uint64x2_t u)
+{
+    return vreinterpretq_u64_s64(vshrq_n_s64(vreinterpretq_s64_u64(u), 63));
+}
+
+static inline uint64x2_t sse_host_not_d(uint64x2_t u)
+{
+    return vreinterpretq_u64_u32(vmvnq_u32(vreinterpretq_u32_u64(u)));
+}
+
+static inline float32x4_t sse_host_x86_nan_s(float32x4_t a, float32x4_t b,
+                                             float32x4_t r, uint32x4_t *inv)
+{
+    uint32x4_t ua = vreinterpretq_u32_f32(a), ub = vreinterpretq_u32_f32(b);
+    uint32x4_t q = vdupq_n_u32(0x00400000), frac = vdupq_n_u32(0x007fffff);
+    uint32x4_t an = sse_host_nan_s(a), bn = sse_host_nan_s(b);
+    uint32x4_t as = vbicq_u32(an, vtstq_u32(ua, q));
+    uint32x4_t bs = vbicq_u32(bn, vtstq_u32(ub, q));
+    uint32x4_t fa = vandq_u32(ua, frac), fb = vandq_u32(ub, frac);
+    uint32x4_t a_pos_b_neg = vbicq_u32(sse_host_neg_s(ub), sse_host_neg_s(ua));
+    /* Two NaNs of a kind: a if its significand is larger, or tie and a > 0. */
+    uint32x4_t same = vorrq_u32(vcgtq_u32(fa, fb),
+                                vandq_u32(vceqq_u32(fa, fb), a_pos_b_neg));
+    /* Two NaNs of different kinds: a if it is the quiet one. */
+    uint32x4_t both = vbslq_u32(veorq_u32(as, bs), vmvnq_u32(as), same);
+    uint32x4_t pick_a = vandq_u32(an, vorrq_u32(vmvnq_u32(bn), both));
+    uint32x4_t in = vorrq_u32(an, bn);
+    uint32x4_t x = vorrq_u32(vbslq_u32(pick_a, ua, ub), q);
+    uint32x4_t rn = sse_host_nan_s(r);
+
+    x = vbslq_u32(in, x, vdupq_n_u32(0xffc00000));
+    *inv = vorrq_u32(*inv, vandq_u32(rn, vorrq_u32(vorrq_u32(as, bs),
+                                                   vmvnq_u32(in))));
+    return vreinterpretq_f32_u32(vbslq_u32(rn, x, vreinterpretq_u32_f32(r)));
+}
+
+static inline float64x2_t sse_host_x86_nan_d(float64x2_t a, float64x2_t b,
+                                             float64x2_t r, uint32x4_t *inv)
+{
+    uint64x2_t ua = vreinterpretq_u64_f64(a), ub = vreinterpretq_u64_f64(b);
+    uint64x2_t q = vdupq_n_u64(0x0008000000000000ull);
+    uint64x2_t frac = vdupq_n_u64(0x000fffffffffffffull);
+    uint64x2_t an = vreinterpretq_u64_u32(sse_host_nan_d(a));
+    uint64x2_t bn = vreinterpretq_u64_u32(sse_host_nan_d(b));
+    uint64x2_t as = vbicq_u64(an, vtstq_u64(ua, q));
+    uint64x2_t bs = vbicq_u64(bn, vtstq_u64(ub, q));
+    uint64x2_t fa = vandq_u64(ua, frac), fb = vandq_u64(ub, frac);
+    uint64x2_t a_pos_b_neg = vbicq_u64(sse_host_neg_d(ub), sse_host_neg_d(ua));
+    uint64x2_t same = vorrq_u64(vcgtq_u64(fa, fb),
+                                vandq_u64(vceqq_u64(fa, fb), a_pos_b_neg));
+    uint64x2_t both = vbslq_u64(veorq_u64(as, bs), sse_host_not_d(as), same);
+    uint64x2_t pick_a = vandq_u64(an, vorrq_u64(sse_host_not_d(bn), both));
+    uint64x2_t in = vorrq_u64(an, bn);
+    uint64x2_t x = vorrq_u64(vbslq_u64(pick_a, ua, ub), q);
+    uint64x2_t rn = vreinterpretq_u64_u32(sse_host_nan_d(r));
+
+    x = vbslq_u64(in, x, vdupq_n_u64(0xfff8000000000000ull));
+    *inv = vorrq_u32(*inv, vreinterpretq_u32_u64(vandq_u64(
+               rn, vorrq_u64(vorrq_u64(as, bs), sse_host_not_d(in)))));
+    return vreinterpretq_f64_u64(vbslq_u64(rn, x, vreinterpretq_u64_f64(r)));
+}
+
+/*
  * The lanes of a result r = a op b (or of an FMA, with c) that the sticky
  * flags in `flags` cannot vouch for; see the comment at the top.
  */
 #define SSE_HOST_CHECK(w, flags, op, r, a, b, c, fma)                       \
     ({                                                                      \
-        uint32x4_t bad_ = sse_host_nan_##w(r);                              \
+        uint32x4_t bad_ = (fma) ? sse_host_nan_##w(r) : vdupq_n_u32(0);     \
         if (!((flags) & float_flag_input_denormal_used)) {                  \
             bad_ = vorrq_u32(bad_, vorrq_u32(sse_host_denormal_##w(a),      \
                                              sse_host_denormal_##w(b)));    \
@@ -256,7 +340,7 @@ static inline bool sse_host_p##w(CPUX86State *env, void *d, const void *a,  \
 {                                                                           \
     int flags = sse_host_flags(env);                                        \
     int n = lanes / PER;                                                    \
-    uint32x4_t bad = vdupq_n_u32(0);                                        \
+    uint32x4_t bad = vdupq_n_u32(0), inv = vdupq_n_u32(0);                  \
     VT r[2];                                                                \
     uint64_t fpsr;                                                          \
                                                                             \
@@ -271,6 +355,9 @@ static inline bool sse_host_p##w(CPUX86State *env, void *d, const void *a,  \
         r[i] = sse_host_op_##w(x, y, op);                                   \
         bad = vorrq_u32(bad, SSE_HOST_CHECK(w, flags, op, r[i], x, y,       \
                                             x, false));                     \
+        if (sse_host_any(sse_host_nan_##w(r[i]))) {                         \
+            r[i] = sse_host_x86_nan_##w(x, y, r[i], &inv);                  \
+        }                                                                   \
     }                                                                       \
     if (n == 1) {                                                           \
         r[1] = r[0];                                                        \
@@ -282,6 +369,8 @@ static inline bool sse_host_p##w(CPUX86State *env, void *d, const void *a,  \
         }                                                                   \
     } else if (sse_host_any(bad)) {                                         \
         return false;                                                       \
+    } else if (!(flags & float_flag_invalid) && sse_host_any(inv)) {        \
+        float_raise(float_flag_invalid, &env->sse_status);                  \
     }                                                                       \
     for (int i = 0; i < n; i++) {                                           \
         ST((T *)d + PER * i, r[i]);                                         \
@@ -303,6 +392,7 @@ static inline bool sse_host_ss(CPUX86State *env, float32 *d, float32 a,
     float32x4_t x = vreinterpretq_f32_u32(vdupq_n_u32(a));
     float32x4_t y = vreinterpretq_f32_u32(vdupq_n_u32(b));
     float32x4_t r;
+    uint32x4_t inv = vdupq_n_u32(0);
     uint64_t fpsr;
     bool bad;
 
@@ -314,6 +404,9 @@ static inline bool sse_host_ss(CPUX86State *env, float32 *d, float32 a,
     }
     r = sse_host_op_s(x, y, op);
     bad = sse_host_any(SSE_HOST_CHECK(s, flags, op, r, x, y, x, false));
+    if (sse_host_any(sse_host_nan_s(r))) {
+        r = sse_host_x86_nan_s(x, y, r, &inv);
+    }
     if (!(flags & float_flag_inexact)) {
         SSE_HOST_READ(fpsr, "w"(r));
         if (!sse_host_finish(env, fpsr, bad)) {
@@ -321,6 +414,8 @@ static inline bool sse_host_ss(CPUX86State *env, float32 *d, float32 a,
         }
     } else if (bad) {
         return false;
+    } else if (!(flags & float_flag_invalid) && sse_host_any(inv)) {
+        float_raise(float_flag_invalid, &env->sse_status);
     }
     *d = vgetq_lane_u32(vreinterpretq_u32_f32(r), 0);
     return true;
@@ -333,6 +428,7 @@ static inline bool sse_host_sd(CPUX86State *env, float64 *d, float64 a,
     float64x2_t x = vreinterpretq_f64_u64(vdupq_n_u64(a));
     float64x2_t y = vreinterpretq_f64_u64(vdupq_n_u64(b));
     float64x2_t r;
+    uint32x4_t inv = vdupq_n_u32(0);
     uint64_t fpsr;
     bool bad;
 
@@ -344,6 +440,9 @@ static inline bool sse_host_sd(CPUX86State *env, float64 *d, float64 a,
     }
     r = sse_host_op_d(x, y, op);
     bad = sse_host_any(SSE_HOST_CHECK(d, flags, op, r, x, y, x, false));
+    if (sse_host_any(sse_host_nan_d(r))) {
+        r = sse_host_x86_nan_d(x, y, r, &inv);
+    }
     if (!(flags & float_flag_inexact)) {
         SSE_HOST_READ(fpsr, "w"(r));
         if (!sse_host_finish(env, fpsr, bad)) {
@@ -351,6 +450,8 @@ static inline bool sse_host_sd(CPUX86State *env, float64 *d, float64 a,
         }
     } else if (bad) {
         return false;
+    } else if (!(flags & float_flag_invalid) && sse_host_any(inv)) {
+        float_raise(float_flag_invalid, &env->sse_status);
     }
     *d = vgetq_lane_u64(vreinterpretq_u64_f64(r), 0);
     return true;
