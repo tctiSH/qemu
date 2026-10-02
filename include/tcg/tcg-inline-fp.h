@@ -24,6 +24,16 @@
  *
  * min and max round nothing and raise nothing under the lane condition, so
  * they need no status check.
+ *
+ * TCG_INLINE_FP_FMA is the exception to the signature: helper(env, d, a, b,
+ * c, flags) for a scalar, and helper(env, d, a, b, c, flags, flip) for a
+ * packed one, computing d = a * b + c with one rounding, with softfloat's
+ * float_muladd_* flags, flip toggling them from lane to lane. A scalar one
+ * writes only lane 0 of d. A backend may do it itself only where flip is
+ * 0 and flags has no bits but TCG_INLINE_FP_NEG_C and _NEG_PRODUCT (which
+ * are softfloat's), and under the conditions above with c among the inputs,
+ * and with "no lane's result is zero unless a's or b's is": cancellation
+ * can leave a tiny nonzero sum that rounds to zero, an underflow.
  */
 
 #ifndef TCG_INLINE_FP_H
@@ -38,7 +48,14 @@ typedef enum TCGInlineFPOp {
     TCG_INLINE_FP_DIV,
     TCG_INLINE_FP_MIN,
     TCG_INLINE_FP_MAX,
+    TCG_INLINE_FP_FMA,
 } TCGInlineFPOp;
+
+/* The FMA flags a backend may handle itself: c, or a * b, negated. */
+enum {
+    TCG_INLINE_FP_NEG_C = 1,
+    TCG_INLINE_FP_NEG_PRODUCT = 2,
+};
 
 typedef struct TCGInlineFP {
     TCGInlineFPOp op;
