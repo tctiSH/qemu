@@ -965,6 +965,15 @@ if have_tcg
       error('Unsupported CPU @0@ for TCTI, try --enable-tcg-interpreter'.format(cpu))
     endif
     tcg_arch = '@0@-tcti'.format(cpu)
+    # The gadgets fill tens of megabytes, but a thousand of them make 99%
+    # of dispatches: link those first, in order of use, to spare the
+    # instruction cache and TLB. A name the gadgets no longer have is
+    # skipped. Regenerated from a dispatch profile; see the file's history.
+    if host_os in ['darwin', 'ios']
+      emulator_link_args += ['-Wl,-order_file,' +
+                             (meson.current_source_dir() / 'tcg' / tcg_arch /
+                              'gadget-order.txt')]
+    endif
   endif
   add_project_arguments('-iquote', meson.current_source_dir() / 'tcg' / tcg_arch,
                         language: all_languages)
