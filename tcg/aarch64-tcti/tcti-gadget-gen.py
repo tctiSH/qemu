@@ -897,6 +897,19 @@ simple("br",
     "ldr x28, [x28]"
 )
 
+# A goto_tb right after an addi_env, as nearly every TB leaves: the guest pc
+# moved on by a constant, then the branch to the next TB, in one gadget.
+# Every register is dead at a goto_tb, so it needs no register variants. The
+# stream holds addi_env's offset and immediate, then br's target, which
+# tb_target_set_jmp_target() patches. See tcg_out_goto_tb().
+simple("addi_env_br",
+    "ldp x26, x27, [x28], #16",
+    "ldr x24, [x14, x26]",
+    "add x24, x24, x27",
+    "str x24, [x14, x26]",
+    "ldr x28, [x28]"
+)
+
 # goto_ptr: continue with the gadget stream whose address is in a register --
 # the next TB's, as helper_lookup_tb_ptr() found it, or the epilogue stream
 # that tcg_target_qemu_prologue() emits for when it found none.

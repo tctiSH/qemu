@@ -1,5 +1,6 @@
 _gadget_exit_tb
 _gadget_br
+_gadget_addi_env_br
 _gadget_addi_env_arg8_arg8
 _gadget_st8_neg_imm_arg8_arg14_arg16
 _gadget_addi_i64_arg8_arg8
