@@ -265,13 +265,15 @@ static inline TranslationBlock *tb_lookup(CPUState *cpu, TCGTBCPUState s)
     hash = tb_jmp_cache_hash_func(s.pc);
     jc = cpu->tb_jmp_cache;
 
-    tb = qatomic_read(&jc->array[hash].tb);
-    if (likely(tb &&
-               jc->array[hash].pc == s.pc &&
-               tb->cs_base == s.cs_base &&
-               tb->flags == s.flags &&
-               tb_cflags(tb) == s.cflags)) {
-        goto hit;
+    for (int way = 0; way < 2; way++) {
+        tb = qatomic_read(&jc->array[hash ^ way].tb);
+        if (likely(tb &&
+                   jc->array[hash ^ way].pc == s.pc &&
+                   tb->cs_base == s.cs_base &&
+                   tb->flags == s.flags &&
+                   tb_cflags(tb) == s.cflags)) {
+            goto hit;
+        }
     }
 
     tb = tb_htable_lookup(cpu, s);
@@ -279,8 +281,7 @@ static inline TranslationBlock *tb_lookup(CPUState *cpu, TCGTBCPUState s)
         return NULL;
     }
 
-    jc->array[hash].pc = s.pc;
-    qatomic_set(&jc->array[hash].tb, tb);
+    tb_jmp_cache_insert(jc, hash, s.pc, tb);
 
 hit:
     /*
@@ -994,9 +995,6 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
 
             tb = tb_lookup(cpu, s);
             if (tb == NULL) {
-                CPUJumpCache *jc;
-                uint32_t h;
-
                 mmap_lock();
                 tb = tb_gen_code(cpu, s);
                 mmap_unlock();
@@ -1005,10 +1003,8 @@ cpu_exec_loop(CPUState *cpu, SyncClocks *sc)
                  * We add the TB in the virtual pc hash table
                  * for the fast lookup
                  */
-                h = tb_jmp_cache_hash_func(s.pc);
-                jc = cpu->tb_jmp_cache;
-                jc->array[h].pc = s.pc;
-                qatomic_set(&jc->array[h].tb, tb);
+                tb_jmp_cache_insert(cpu->tb_jmp_cache,
+                                    tb_jmp_cache_hash_func(s.pc), s.pc, tb);
             }
 
 #ifndef CONFIG_USER_ONLY
