@@ -840,6 +840,33 @@ static void tcti_note_env_rmw(TCGContext *s, tcg_insn_unit *start,
     }
 }
 
+/* The last zero put in a whole vector register, for tcg_out_vec_op(). */
+static __thread struct {
+    tcg_insn_unit *start, *end;
+    TCGReg reg;
+} tcti_last_zero_q;
+
+static void set_temp_val_nonreg(TCGContext *s, TCGTemp *ts, TCGTempVal type);
+
+/*
+ * Whether a store may go without the zero just put in reg: TCG has freed reg
+ * (the zero dies at the store), or reg holds TCG's zero constant, which goes
+ * back to being a constant, put in a register again where next used.
+ */
+static bool tcti_drop_zero_q(TCGContext *s, TCGReg reg)
+{
+    TCGTemp *ts = s->reg_to_temp[reg];
+
+    if (ts == NULL) {
+        return true;
+    }
+    if (ts->kind == TEMP_CONST && ts->val == 0) {
+        set_temp_val_nonreg(s, ts, TEMP_VAL_CONST);
+        return true;
+    }
+    return false;
+}
+
 /* The last addi_env emitted, for tcg_out_goto_tb() to join. */
 static __thread struct {
     tcg_insn_unit *start, *end;
@@ -861,6 +888,7 @@ static void tcti_rewind(TCGContext *s, tcg_insn_unit *to)
     tcti_env_rmw.end = NULL;
     tcti_last_movi32.end = NULL;
     tcti_last_addi_env.end = NULL;
+    tcti_last_zero_q.end = NULL;
 }
 
 /*
@@ -2041,6 +2069,16 @@ static void tcg_out_vec_op(TCGContext *s, TCGOpcode opc, unsigned vecl, unsigned
 
     // Store memory -> vector: followed by a 64-bit offset immediate
     case INDEX_op_st_vec:
+        // A zero just put in the register for this store stores without it.
+        if (is_v128 && r1 == TCG_AREG0 && tcti_last_zero_q.reg == r0 &&
+            tcti_last_zero_q.end == s->code_ptr &&
+            !tcti_label_within(s, tcti_last_zero_q.start, s->code_ptr) &&
+            tcti_drop_zero_q(s, r0)) {
+            tcti_rewind(s, tcti_last_zero_q.start);
+            tcg_out_gadget(s, gadget_st_zero_q_env);
+            tcg_out64(s, signed_offset_arg);
+            break;
+        }
         tcg_out_binary_dq_gadget(s, str, is_v128, w0, r1);
         tcg_out64(s, signed_offset_arg);
         break;
@@ -2397,11 +2435,19 @@ static bool tcg_out_optimized_dupi_vec(TCGContext *s, TCGType type, unsigned vec
 /* Emits instructions that can load an immediate into a vector. */
 static void tcg_out_dupi_vec(TCGContext *s, TCGType type, unsigned vece, TCGReg rd, int64_t v64)
 {
+    tcg_insn_unit *start = s->code_ptr;
+    TCGReg reg = rd;
+
     // Convert Rd into a simple gadget number.
     rd = rd - (TCG_REG_V16);
 
     // First, try to create an optimized implementation, if possible.
     if (tcg_out_optimized_dupi_vec(s, type, vece, rd, v64)) {
+        if (type == TCG_TYPE_V128 && v64 == 0) {
+            tcti_last_zero_q.start = start;
+            tcti_last_zero_q.end = s->code_ptr;
+            tcti_last_zero_q.reg = reg;
+        }
         return;
     }
 
@@ -2516,6 +2562,7 @@ static void tcg_out_tb_start(TCGContext *s)
     tcti_env_rmw.end = NULL;
     tcti_last_movi32.end = NULL;
     tcti_last_addi_env.end = NULL;
+    tcti_last_zero_q.end = NULL;
 }
 
 /*
@@ -2530,6 +2577,7 @@ static void tcti_insn_start(TCGContext *s)
     tcti_env_rmw.end = NULL;
     tcti_last_movi32.end = NULL;
     tcti_last_addi_env.end = NULL;
+    tcti_last_zero_q.end = NULL;
 }
 
 /*

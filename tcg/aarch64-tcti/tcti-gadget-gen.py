@@ -1392,6 +1392,12 @@ with_dn("ldr_q",  "ldr x27, [x28], #8", "ldr Qd, [Xn, x27]")
 with_dn("str_d",  "ldr x27, [x28], #8", "str Dd, [Xn, x27]")
 with_dn("str_q",  "ldr x27, [x28], #8", "str Qd, [Xn, x27]")
 
+# Sixteen zero bytes stored to env, as x86 clears the upper half of a YMM
+# register after each VEX-encoded SSE op: one gadget for the MOVI of zero
+# and the STR that would store it. The stream holds the offset. See
+# tcg_out_vec_op().
+simple("st_zero_q_env", "ldr x27, [x28], #8", "add x27, x14, x27", "stp xzr, xzr, [x27]")
+
 
 START_COLLECTION(f"simd_arithmetic")
 
