@@ -21,6 +21,18 @@
 
 #define CPU_TLB_ENTRY_BITS (HOST_LONG_BITS == 32 ? 4 : 5)
 
+/*
+ * The TLB index is the page number's low bits with the bits from
+ * CPU_TLB_INDEX_FOLD up folded in by XOR: otherwise pages a power of two
+ * apart, such as allocations aligned to 2 MiB or thread stacks 8 MiB
+ * apart, share an index at every TLB size and take turns through the
+ * victim TLB. Defined only for hosts whose backends' inline TLB lookup
+ * folds the same way: the AArch64 JIT and TCTI.
+ */
+#if defined(__aarch64__)
+#define CPU_TLB_INDEX_FOLD 8
+#endif
+
 /* Minimalized TLB entry for use by TCG fast path. */
 typedef union CPUTLBEntry {
     struct {

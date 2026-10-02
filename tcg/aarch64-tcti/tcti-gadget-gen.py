@@ -447,8 +447,11 @@ def create_tlb_fastpath(is_aligned, is_write, miss_label="0", size=8):
         # offset is the gadget's asm operand; see tlb_operands().
         "ldp x26, x27, [x14, %[tlb_ofs]]",
 
-        # Extract the TLB index from the address into X26. 
-        "and x26, x26, Xn, lsr #7", # Xn = addr regsiter 
+        # Extract the TLB index from the address into X26, as tlb_index()
+        # does: the page number with the bits from CPU_TLB_INDEX_FOLD (8) up
+        # folded in. x24 is free until the comparison below.
+        "eor x24, Xn, Xn, lsr #8", # Xn = addr register
+        "and x26, x26, x24, lsr #7",
 
         # Add the tlb_table pointer, creating the CPUTLBEntry address into X27. 
         "add x27, x27, x26",
