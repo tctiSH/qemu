@@ -5,6 +5,7 @@ _gadget_addi_env_arg8_arg8
 _gadget_st8_neg_imm_arg8_arg14_arg16
 _gadget_addi_i64_arg8_arg8
 _gadget_str_q_arg0_arg14
+_gadget_st_zero_q_env
 _gadget_call
 _gadget_movi_st32_env_arg8
 _gadget_andi_env_arg8_arg8
