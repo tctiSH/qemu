@@ -357,6 +357,164 @@ static inline bool sse_host_sd(CPUX86State *env, float64 *d, float64 a,
 }
 
 /*
+ * Square root, reciprocal and reciprocal square root, and rounding to an
+ * integer: d = f(a) over `lanes` lanes, 1 for the scalar forms (lane 0
+ * only; the caller fills the rest) or a whole number of vectors.
+ *
+ *  - sqrt is correctly rounded on both, and can raise only invalid (a
+ *    negative input, which gives a NaN), inexact and, from a denormal
+ *    input, DE: so the arithmetic's NaN, DE and PE handling covers it.
+ *  - rcp and rsqrt are x86's approximations, which QEMU computes exactly,
+ *    as 1 / a and 1 / sqrt(a), raising no flags. The host does the same
+ *    roundings; only the default NaN, from a negative input to rsqrt,
+ *    differs, so a NaN result there falls back.
+ *  - round takes its mode from the immediate, or from MXCSR with bit 2 set,
+ *    and raises inexact where a lane changes unless bit 3 suppresses it.
+ *    NaN inputs, and denormal ones while DE is clear, fall back.
+ */
+enum { SSE_HOST_SQRT, SSE_HOST_RCP, SSE_HOST_RSQRT };
+
+#define SSE_HOST_UNARY(w, T, VT, LD, ST, PER, DUP, GET, BITS, SQRT, DIV,    \
+                       ONE, RNDN, RNDM, RNDP, RNDZ, CEQ)                     \
+static inline VT sse_host_ld1##w(const BITS *a, int lanes, int i)           \
+{                                                                           \
+    return lanes < PER ? DUP(*a)                                            \
+                       : LD((const T *)a + PER * i);                        \
+}                                                                           \
+                                                                            \
+static inline void sse_host_st1##w(BITS *d, int lanes, int i, VT r)        \
+{                                                                           \
+    if (lanes < PER) {                                                      \
+        *d = GET(r);                                                        \
+    } else {                                                                \
+        ST((T *)d + PER * i, r);                                            \
+    }                                                                       \
+}                                                                           \
+                                                                            \
+static inline bool sse_host_unary_##w(CPUX86State *env, BITS *d,           \
+                                      const BITS *a, int lanes, int op)     \
+{                                                                           \
+    int flags = sse_host_flags(env);                                        \
+    int n = lanes < PER ? 1 : lanes / PER;                                  \
+    uint32x4_t bad = vdupq_n_u32(0);                                        \
+    VT r[2];                                                                \
+    uint64_t fpsr;                                                          \
+                                                                            \
+    if (!sse_host_mode_ok(env)) {                                           \
+        return false;                                                       \
+    }                                                                       \
+    if (op == SSE_HOST_SQRT && !(flags & float_flag_inexact)) {             \
+        SSE_HOST_CLEAR();                                                   \
+    }                                                                       \
+    for (int i = 0; i < n; i++) {                                           \
+        VT x = sse_host_ld1##w(a, lanes, i);                                \
+        switch (op) {                                                       \
+        case SSE_HOST_SQRT:                                                 \
+            r[i] = SQRT(x);                                                 \
+            if (!(flags & float_flag_input_denormal_used)) {                \
+                bad = vorrq_u32(bad, sse_host_denormal_##w(x));             \
+            }                                                               \
+            break;                                                          \
+        case SSE_HOST_RCP:                                                  \
+            r[i] = DIV(ONE, x);                                             \
+            break;                                                          \
+        default:                                                            \
+            r[i] = DIV(ONE, SQRT(x));                                       \
+            break;                                                          \
+        }                                                                   \
+        if (op != SSE_HOST_RCP) {                                           \
+            bad = vorrq_u32(bad, sse_host_nan_##w(r[i]));                   \
+        }                                                                   \
+    }                                                                       \
+    if (n == 1) {                                                           \
+        r[1] = r[0];                                                        \
+    }                                                                       \
+    if (op == SSE_HOST_SQRT && !(flags & float_flag_inexact)) {             \
+        SSE_HOST_READ(fpsr, "w"(r[0]), "w"(r[1]));                          \
+        if (!sse_host_finish(env, fpsr, sse_host_any(bad))) {               \
+            return false;                                                   \
+        }                                                                   \
+    } else if (sse_host_any(bad)) {                                         \
+        return false;                                                       \
+    }                                                                       \
+    for (int i = 0; i < n; i++) {                                           \
+        sse_host_st1##w(d, lanes, i, r[i]);                                 \
+    }                                                                       \
+    return true;                                                            \
+}                                                                           \
+                                                                            \
+static inline bool sse_host_round_##w(CPUX86State *env, BITS *d,           \
+                                      const BITS *a, int lanes,             \
+                                      uint32_t mode)                        \
+{                                                                           \
+    int flags = sse_host_flags(env);                                        \
+    int n = lanes < PER ? 1 : lanes / PER;                                  \
+    uint32x4_t bad = vdupq_n_u32(0), changed = vdupq_n_u32(0);              \
+    VT r[2];                                                                \
+    int rm;                                                                 \
+                                                                            \
+    if (env->sse_status.flush_inputs_to_zero) {                             \
+        return false;                                                       \
+    }                                                                       \
+    if (mode & 4) {                                                         \
+        switch (env->sse_status.float_rounding_mode) {                      \
+        case float_round_nearest_even:                                      \
+            rm = 0;                                                         \
+            break;                                                          \
+        case float_round_down:                                              \
+            rm = 1;                                                         \
+            break;                                                          \
+        case float_round_up:                                                \
+            rm = 2;                                                         \
+            break;                                                          \
+        case float_round_to_zero:                                           \
+            rm = 3;                                                         \
+            break;                                                          \
+        default:                                                            \
+            return false;                                                   \
+        }                                                                   \
+    } else {                                                                \
+        rm = mode & 3;                                                      \
+    }                                                                       \
+    for (int i = 0; i < n; i++) {                                           \
+        VT x = sse_host_ld1##w(a, lanes, i);                                \
+        r[i] = rm == 0 ? RNDN(x) : rm == 1 ? RNDM(x) : rm == 2 ? RNDP(x)    \
+                                                     : RNDZ(x);             \
+        bad = vorrq_u32(bad, sse_host_nan_##w(x));                          \
+        if (!(flags & float_flag_input_denormal_used)) {                    \
+            bad = vorrq_u32(bad, sse_host_denormal_##w(x));                 \
+        }                                                                   \
+        changed = vorrq_u32(changed, vmvnq_u32(CEQ(r[i], x)));              \
+    }                                                                       \
+    if (sse_host_any(bad)) {                                                \
+        return false;                                                       \
+    }                                                                       \
+    if (!(mode & 8) && sse_host_any(changed)) {                             \
+        float_raise(float_flag_inexact, &env->sse_status);                  \
+    }                                                                       \
+    for (int i = 0; i < n; i++) {                                           \
+        sse_host_st1##w(d, lanes, i, r[i]);                                 \
+    }                                                                       \
+    return true;                                                            \
+}
+
+#define SSE_HOST_DUP_S(x)  vreinterpretq_f32_u32(vdupq_n_u32(x))
+#define SSE_HOST_DUP_D(x)  vreinterpretq_f64_u64(vdupq_n_u64(x))
+#define SSE_HOST_GET_S(r)  vgetq_lane_u32(vreinterpretq_u32_f32(r), 0)
+#define SSE_HOST_GET_D(r)  vgetq_lane_u64(vreinterpretq_u64_f64(r), 0)
+#define SSE_HOST_CEQ_S(a, b) vceqq_f32(a, b)
+#define SSE_HOST_CEQ_D(a, b) vreinterpretq_u32_u64(vceqq_f64(a, b))
+
+SSE_HOST_UNARY(s, float, float32x4_t, vld1q_f32, vst1q_f32, 4, SSE_HOST_DUP_S,
+               SSE_HOST_GET_S, uint32_t, vsqrtq_f32, vdivq_f32,
+               vdupq_n_f32(1.0f), vrndnq_f32, vrndmq_f32, vrndpq_f32,
+               vrndq_f32, SSE_HOST_CEQ_S)
+SSE_HOST_UNARY(d, double, float64x2_t, vld1q_f64, vst1q_f64, 2,
+               SSE_HOST_DUP_D, SSE_HOST_GET_D, uint64_t, vsqrtq_f64,
+               vdivq_f64, vdupq_n_f64(1.0), vrndnq_f64, vrndmq_f64,
+               vrndpq_f64, vrndq_f64, SSE_HOST_CEQ_D)
+
+/*
  * Fused multiply-add, d = (a * b) + c with softfloat's negate flags, over
  * 4 or 8 float32 (2 or 4 float64) lanes; `flip` toggles the flags on odd
  * lanes (fmaddsub). Negating an operand is exact, so -(a * b) = (-a) * b and
@@ -1189,6 +1347,10 @@ static inline bool sse_host_pmovx(void *d, const void *s, int bytes,
 #define sse_host_fma_ss(...) false
 #define sse_host_fma_sd(...) false
 #define sse_host_dpps(...) false
+#define sse_host_unary_s(...) false
+#define sse_host_unary_d(...) false
+#define sse_host_round_s(...) false
+#define sse_host_round_d(...) false
 #define sse_host_cvtps2dq(...) false
 #define sse_host_cvtpd2dq(...) false
 #define sse_host_ss2si(...) false
