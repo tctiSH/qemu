@@ -1067,6 +1067,14 @@ for op in ("add", "and"):
     with_pair(f"{op}i_env", ('d', 'n'), "ldp x26, x27, [x28], #16", "ldr Xn, [x14, x26]",
               f"{op} Xd, Xn, x27", "str Xd, [x14, x26]")
 
+# The same without the store, for when the result goes elsewhere: Xn = the
+# slot (which Xn keeps), Xd = Xn op imm. Above all a guest address, a register
+# plus a displacement. The stream holds the offset, then the immediate. See
+# tcti_note_env_rmw().
+for op in ("add", "and"):
+    with_pair(f"ld_{op}i_env", ('d', 'n'), "ldp x26, x27, [x28], #16", "ldr Xn, [x14, x26]",
+              f"{op} Xd, Xn, x27")
+
 # A constant stored to an env slot: above all x86's cc_op, set as a TB
 # leaves. sti32_env's one stream word holds the constant in its low half and
 # the (signed) offset in its high half; sti64_env's stream holds the offset,
