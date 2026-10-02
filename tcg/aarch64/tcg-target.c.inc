@@ -1429,6 +1429,8 @@ enum {
     INLFP_FSUB_S  = 0x1e203800,
     INLFP_FMUL_S  = 0x1e200800,
     INLFP_FDIV_S  = 0x1e201800,
+    INLFP_FMLA_V  = 0x4e20cc00,     /* d += n * m */
+    INLFP_FMADD_S = 0x1f000000,     /* d = a + n * m, a at bit 10 */
     INLFP_FACGE   = 0x6e20ec00,     /* d = |n| >= |m| */
     INLFP_FACGT   = 0x6ea0ec00,     /* d = |n| > |m| */
     INLFP_FCMGT   = 0x6ea0e400,     /* d = n > m */
@@ -1437,6 +1439,7 @@ enum {
 
     INLFP_AND     = 0x4e201c00,
     INLFP_ORR     = 0x4ea01c00,
+    INLFP_EOR     = 0x6e201c00,
     INLFP_BIC     = 0x4e601c00,
     INLFP_BSL     = 0x6e601c00,     /* d = d ? n : m, bitwise */
     INLFP_UMINV   = 0x6eb1a800,     /* d.s = min of n's 32-bit lanes */
@@ -1450,6 +1453,8 @@ enum {
     INLFP_STR_Q   = 0x3d800000,
     INLFP_LDR_S   = 0xbd400000,
     INLFP_LDR_D   = 0xfd400000,
+    INLFP_STR_S   = 0xbd000000,
+    INLFP_STR_D   = 0xfd000000,
 };
 
 /* The vector registers used, all call-clobbered, so free at a call. */
@@ -1459,6 +1464,8 @@ enum {
     INLFP_ACC = 18,     /* all ones in a lane while it is fine */
     INLFP_T0 = 19,
     INLFP_T1 = 20,
+    INLFP_NEG_P = 21,   /* an FMA's sign masks: the product's... */
+    INLFP_NEG_C = 22,   /* ...and the addend's */
     INLFP_MERGE = 6,    /* a scalar op's destination, v's lanes around it */
 };
 
@@ -1497,9 +1504,10 @@ static void inlfp_check_underflow(TCGContext *s, uint32_t dbl, int r, int a, int
 }
 
 /*
- * A registered float helper (env in x0, then d, v, s in x1-x3): the
- * operation on NEON, under the conditions in tcg/tcg-inline-fp.h, and the
- * call itself whenever they fail.
+ * A registered float helper (env in x0, then d, v, s in x1-x3, or for an
+ * FMA d, a, b, c in x1-x4 and its flags in w5, and w6): the operation on
+ * NEON, under the conditions in tcg/tcg-inline-fp.h, and the call itself
+ * whenever they fail.
  */
 static void tcg_out_inline_fp(TCGContext *s, const TCGInlineFP *fp,
                               const tcg_insn_unit *target)
@@ -1514,10 +1522,42 @@ static void tcg_out_inline_fp(TCGContext *s, const TCGInlineFP *fp,
     };
     uint32_t dbl = fp->esize == MO_64 ? INLFP_DOUBLE : 0;
     bool minmax = fp->op == TCG_INLINE_FP_MIN || fp->op == TCG_INLINE_FP_MAX;
+    bool fma = fp->op == TCG_INLINE_FP_FMA;
     bool scalar = fp->bytes == 0;
     int chunks = fp->bytes == 32 ? 2 : 1;
-    tcg_insn_unit *to_slow[2], *to_done;
+    tcg_insn_unit *to_slow[4], *to_done;
     int n_slow = 0;
+
+    /*
+     * An FMA: negations of the product and of c, the same in every lane.
+     * Negating a factor gives the negated product exactly, so they become
+     * sign masks for a and c.
+     */
+    if (fma) {
+        TCGType t = dbl ? TCG_TYPE_I64 : TCG_TYPE_I32;
+        int max = dbl ? 63 : 31;
+
+        tcg_out_logicali(s, Ilogic_imm_ANDSI, TCG_TYPE_I32, TCG_REG_XZR,
+                         TCG_REG_X5, ~(uint32_t)(TCG_INLINE_FP_NEG_C |
+                                                 TCG_INLINE_FP_NEG_PRODUCT));
+        to_slow[n_slow++] = s->code_ptr;
+        tcg_out_insn(s, bcond_imm, B_C, TCG_COND_NE, 0);
+        if (!scalar) {
+            tcg_out_cmp(s, TCG_TYPE_I32, TCG_COND_NE, TCG_REG_X6, 0, true);
+            to_slow[n_slow++] = s->code_ptr;
+            tcg_out_insn(s, bcond_imm, B_C, TCG_COND_NE, 0);
+        }
+        QEMU_BUILD_BUG_ON(TCG_INLINE_FP_NEG_C != 1);
+        QEMU_BUILD_BUG_ON(TCG_INLINE_FP_NEG_PRODUCT != 2);
+        /* Bit 0 to the sign bit for c; bit 1 for the product. */
+        tcg_out_ubfm(s, t, TCG_REG_TMP1, TCG_REG_X5, -max & max, ~max & max);
+        tcg_out_ubfm(s, t, TCG_REG_TMP0, TCG_REG_X5, -(max - 1) & max,
+                     ~(max - 1) & max);
+        tcg_out_logicali(s, Ilogic_imm_ANDI, t, TCG_REG_TMP0, TCG_REG_TMP0,
+                         1ull << max);
+        inlfp2(s, dbl ? INLFP_DUP_2D : INLFP_DUP_4S, INLFP_NEG_P, TCG_REG_TMP0);
+        inlfp2(s, dbl ? INLFP_DUP_2D : INLFP_DUP_4S, INLFP_NEG_C, TCG_REG_TMP1);
+    }
 
     /* Rounding to nearest, no flushing, inexact already raised. */
     if (!minmax) {
@@ -1545,9 +1585,43 @@ static void tcg_out_inline_fp(TCGContext *s, const TCGInlineFP *fp,
     }
     tcg_out32(s, INLFP_ONES | INLFP_ACC);
 
-    /* v0, v1 -> v2, and for a 256-bit op v3, v4 -> v5. */
+    /*
+     * v0, v1 -> v2, and for a 256-bit op v3, v4 -> v5; an FMA's v0, v1, v2
+     * -> v3, and v4, v5, v6 -> v7.
+     */
     for (int k = 0; k < chunks; k++) {
-        int a = 3 * k, b = a + 1, r = a + 2;
+        int a = (fma ? 4 : 3) * k, b = a + 1, r = a + 2;
+
+        if (fma) {
+            int c = a + 2;
+
+            r = a + 3;
+            if (scalar) {
+                uint32_t ldr = dbl ? INLFP_LDR_D : INLFP_LDR_S;
+                inlfp2(s, ldr, a, TCG_REG_X2);
+                inlfp2(s, ldr, b, TCG_REG_X3);
+                inlfp2(s, ldr, c, TCG_REG_X4);
+            } else {
+                inlfp2(s, INLFP_LDR_Q | k << 10, a, TCG_REG_X2);
+                inlfp2(s, INLFP_LDR_Q | k << 10, b, TCG_REG_X3);
+                inlfp2(s, INLFP_LDR_Q | k << 10, c, TCG_REG_X4);
+            }
+            inlfp3(s, INLFP_EOR, a, a, INLFP_NEG_P);
+            inlfp3(s, INLFP_EOR, c, c, INLFP_NEG_C);
+            if (scalar) {
+                tcg_out32(s, INLFP_FMADD_S | dbl | b << 16 | c << 10 |
+                             a << 5 | r);
+            } else {
+                inlfp3(s, INLFP_ORR, r, c, c);
+                inlfp3(s, INLFP_FMLA_V | dbl, r, a, b);
+            }
+            inlfp_check_normal(s, dbl, a);
+            inlfp_check_normal(s, dbl, b);
+            inlfp_check_normal(s, dbl, c);
+            inlfp_check_normal(s, dbl, r);
+            inlfp_check_underflow(s, dbl, r, a, b);
+            continue;
+        }
 
         if (scalar) {
             uint32_t ldr = dbl ? INLFP_LDR_D : INLFP_LDR_S;
@@ -1590,7 +1664,14 @@ static void tcg_out_inline_fp(TCGContext *s, const TCGInlineFP *fp,
     to_slow[n_slow++] = s->code_ptr;
     tcg_out_insn(s, bcond_imm, B_C, TCG_COND_NE, 0);
 
-    if (scalar) {
+    if (fma && scalar) {
+        /* Lane 0 alone: the rest of d is d's. */
+        inlfp2(s, dbl ? INLFP_STR_D : INLFP_STR_S, 3, TCG_REG_X1);
+    } else if (fma) {
+        for (int k = 0; k < chunks; k++) {
+            inlfp2(s, INLFP_STR_Q | k << 10, 4 * k + 3, TCG_REG_X1);
+        }
+    } else if (scalar) {
         inlfp2(s, INLFP_LDR_Q, INLFP_MERGE, TCG_REG_X2);
         inlfp2(s, dbl ? INLFP_INS_D0 : INLFP_INS_S0, INLFP_MERGE, 2);
         inlfp2(s, INLFP_STR_Q, INLFP_MERGE, TCG_REG_X1);

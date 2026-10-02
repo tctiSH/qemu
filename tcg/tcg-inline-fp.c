@@ -7,6 +7,7 @@
 #include "qemu/osdep.h"
 #include "tcg/tcg-inline-fp.h"
 #include "fpu/softfloat-types.h"
+#include "fpu/softfloat.h"
 
 static GHashTable *inline_fps;
 
@@ -27,6 +28,9 @@ void tcg_register_inline_fp(const void *helper, TCGInlineFPOp op, MemOp esize,
     uint32_t mask = 0, want;
 
     QEMU_BUILD_BUG_ON(sizeof(float_status) < sizeof(uint32_t));
+    QEMU_BUILD_BUG_ON(TCG_INLINE_FP_NEG_C != float_muladd_negate_c);
+    QEMU_BUILD_BUG_ON(TCG_INLINE_FP_NEG_PRODUCT !=
+                      float_muladd_negate_product);
     QEMU_BUILD_BUG_ON(float_round_nearest_even != 0);
 
     /*

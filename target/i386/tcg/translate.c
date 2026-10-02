@@ -3381,6 +3381,12 @@ static void x86_register_inline_fp(void)
         X86_INLINE_FP(min, TCG_INLINE_FP_MIN),
         X86_INLINE_FP(max, TCG_INLINE_FP_MAX),
 #undef X86_INLINE_FP
+        { helper_fma4ps_xmm, TCG_INLINE_FP_FMA, MO_32, 16 },
+        { helper_fma4ps_ymm, TCG_INLINE_FP_FMA, MO_32, 32 },
+        { helper_fma4pd_xmm, TCG_INLINE_FP_FMA, MO_64, 16 },
+        { helper_fma4pd_ymm, TCG_INLINE_FP_FMA, MO_64, 32 },
+        { helper_fma4ss, TCG_INLINE_FP_FMA, MO_32, 0 },
+        { helper_fma4sd, TCG_INLINE_FP_FMA, MO_64, 0 },
     };
 
     for (int i = 0; i < ARRAY_SIZE(fps); i++) {

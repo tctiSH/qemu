@@ -706,6 +706,11 @@ static void tcg_out_call(TCGContext *s, const tcg_insn_unit *func,
 {
     const TCGInlineFP *fp = tcg_inline_fp(func);
 
+    /* There are no FMA gadgets: it takes the call gadget as before. */
+    if (fp && fp->op == TCG_INLINE_FP_FMA) {
+        fp = NULL;
+    }
+
     int n = tcti_env_args.n, first = -1, top = -1;
     intptr_t offset[TCTI_ENV_ARGS];
     unsigned seen = 0;
