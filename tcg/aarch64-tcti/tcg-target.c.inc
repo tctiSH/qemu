@@ -840,6 +840,13 @@ static void tcti_note_env_rmw(TCGContext *s, tcg_insn_unit *start,
     }
 }
 
+/* The last addi_env emitted, for tcg_out_goto_tb() to join. */
+static __thread struct {
+    tcg_insn_unit *start, *end;
+    intptr_t offset;
+    tcg_target_long imm;
+} tcti_last_addi_env;
+
 /*
  * Every fusion moves code_ptr back to the start of what it replaces. A note
  * of something emitted before could then match code_ptr by chance, so each
@@ -853,6 +860,7 @@ static void tcti_rewind(TCGContext *s, tcg_insn_unit *to)
     tcti_last_env_ldst64.end = NULL;
     tcti_env_rmw.end = NULL;
     tcti_last_movi32.end = NULL;
+    tcti_last_addi_env.end = NULL;
 }
 
 /*
@@ -872,11 +880,18 @@ static void tcti_out_env_ldst64(TCGContext *s, bool is_st, TCGReg reg,
         TCGReg dst = rmw->dst, src = rmw->src;
         const void *(*gadgets)[TCG_TARGET_GP_REGS] = rmw->gadgets;
         tcg_target_long imm = rmw->imm;
+        tcg_insn_unit *rmw_start = rmw->start;
 
-        tcti_rewind(s, rmw->start);
+        tcti_rewind(s, rmw_start);
         tcg_out_gadget(s, gadgets[dst][src]);
         tcg_out64(s, offset);
         tcg_out64(s, imm);
+        if (gadgets == gadget_addi_env) {
+            tcti_last_addi_env.start = rmw_start;
+            tcti_last_addi_env.end = s->code_ptr;
+            tcti_last_addi_env.offset = offset;
+            tcti_last_addi_env.imm = imm;
+        }
         return;
     }
     if (last->end == s->code_ptr && last->is_st == is_st &&
@@ -935,11 +950,24 @@ static void tcg_out_exit_tb(TCGContext *s, uintptr_t arg)
 
 static void tcg_out_goto_tb(TCGContext *s, int which)
 {
+    typeof(tcti_last_addi_env) *add = &tcti_last_addi_env;
+
     // If we're using a direct jump, we'll emit a "relocation" that can be usd
     // to patch our gadget stream with the target address, later.
 
-    // Emit our gadget.
-    tcg_out_gadget(s, gadget_br);
+    // Emit our gadget: as one with the addi_env just before, if there is one.
+    if (add->end == s->code_ptr &&
+        !tcti_label_within(s, add->start, s->code_ptr)) {
+        intptr_t offset = add->offset;
+        tcg_target_long imm = add->imm;
+
+        tcti_rewind(s, add->start);
+        tcg_out_gadget(s, gadget_addi_env_br);
+        tcg_out64(s, offset);
+        tcg_out64(s, imm);
+    } else {
+        tcg_out_gadget(s, gadget_br);
+    }
 
     // Place our current instruction into our "relocation table", so it can
     // be patched once we know where the branch will target...
@@ -2487,6 +2515,7 @@ static void tcg_out_tb_start(TCGContext *s)
     tcti_last_env_ldst64.end = NULL;
     tcti_env_rmw.end = NULL;
     tcti_last_movi32.end = NULL;
+    tcti_last_addi_env.end = NULL;
 }
 
 /*
@@ -2500,6 +2529,7 @@ static void tcti_insn_start(TCGContext *s)
     tcti_last_env_ldst64.end = NULL;
     tcti_env_rmw.end = NULL;
     tcti_last_movi32.end = NULL;
+    tcti_last_addi_env.end = NULL;
 }
 
 /*
