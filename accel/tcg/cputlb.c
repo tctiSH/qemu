@@ -1283,7 +1283,7 @@ io_prepare(hwaddr *out_offset, CPUState *cpu, CPUTLBEntryFull *full,
     section = full->section;
     mr_offset = full->xlat_offset + addr;
     cpu->mem_io_pc = retaddr;
-    if (!cpu->neg.can_do_io) {
+    if (!cpu_io_allowed(cpu, retaddr)) {
         cpu_io_recompile(cpu, retaddr);
     }
 

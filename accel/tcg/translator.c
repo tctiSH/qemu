@@ -209,18 +209,22 @@ void translator_loop(CPUState *cpu, TranslationBlock *tb, int *max_insns,
 
     /*
      * Manage can_do_io for the translation block: set to false before
-     * the first insn and set to true before the last insn.
+     * the first insn and set to true before the last insn. Only icount
+     * needs it stored: otherwise cpu_io_allowed() finds the same from the
+     * TB, when there is I/O.
      */
-    if (db->num_insns == 1) {
-        tcg_debug_assert(first_insn_start == db->insn_start);
-    } else {
-        tcg_debug_assert(first_insn_start != db->insn_start);
-        tcg_ctx->emit_before_op = first_insn_start;
-        set_can_do_io(db, false);
+    if (cflags & CF_USE_ICOUNT) {
+        if (db->num_insns == 1) {
+            tcg_debug_assert(first_insn_start == db->insn_start);
+        } else {
+            tcg_debug_assert(first_insn_start != db->insn_start);
+            tcg_ctx->emit_before_op = first_insn_start;
+            set_can_do_io(db, false);
+        }
+        tcg_ctx->emit_before_op = db->insn_start;
+        set_can_do_io(db, true);
+        tcg_ctx->emit_before_op = NULL;
     }
-    tcg_ctx->emit_before_op = db->insn_start;
-    set_can_do_io(db, true);
-    tcg_ctx->emit_before_op = NULL;
 
     /* May be used by disas_log or plugin callbacks. */
     tb->size = db->pc_next - db->pc_first;
