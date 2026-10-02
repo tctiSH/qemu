@@ -2053,6 +2053,13 @@ static void gen_jmp_rel(DisasContext *s, MemOp ot, int diff, int tb_num)
     }
 
     if (use_goto_tb && translator_use_goto_tb(&s->base, new_pc)) {
+        /*
+         * RF is cleared at the end of the TB, as gen_eob() would, so that
+         * the next TB, chained or looked up, is the one without it.
+         */
+        if (s->flags & HF_RF_MASK) {
+            gen_reset_eflags(s, RF_MASK);
+        }
         /* jump to same page: we can use a direct jump */
         tcg_gen_goto_tb(tb_num);
         if (!(tb_cflags(s->base.tb) & CF_PCREL)) {
@@ -3516,7 +3523,7 @@ static void i386_tr_init_disas_context(DisasContextBase *dcbase, CPUState *cpu)
     dc->cpuid_7_1_eax_features = env->features[FEAT_7_1_EAX];
     dc->cpuid_xsave_features = env->features[FEAT_XSAVE];
     dc->jmp_opt = !((cflags & CF_NO_GOTO_TB) ||
-                    (flags & (HF_RF_MASK | HF_TF_MASK | HF_INHIBIT_IRQ_MASK)));
+                    (flags & (HF_TF_MASK | HF_INHIBIT_IRQ_MASK)));
 
     dc->T0 = tcg_temp_new();
     dc->T1 = tcg_temp_new();
