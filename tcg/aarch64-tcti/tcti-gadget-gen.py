@@ -7,6 +7,7 @@ Generates a C-code include file containing 'gadgets' for use by TCTI.
 import os
 import sys
 import itertools
+import re
 
 # Epilogue code follows at the end of each gadget, and handles continuing execution.
 EPILOGUE = ( 
@@ -132,9 +133,28 @@ def simple(name, *lines, export=True, operands=None):
 
     print("{", file=c_file)
 
-    # Add the core gadget
+    # Add the core gadget. A body that touches neither the stream pointer
+    # nor x27, and does not branch itself, loads the next gadget's address
+    # first: the dispatch's target is then known sooner, which shortens a
+    # mispredicted dispatch.
+    body = list(lines)
+    early = not any(re.search(r"\b[xw]2[78]\b", line) or
+                    re.match(r"\s*(b|br|bl|blr|ret|cbz|cbnz|tbz|tbnz|b\.\w+)\s", line + " ")
+                    for line in body)
+    seq = [EPILOGUE[0], *body, EPILOGUE[1]] if early else [*body, *EPILOGUE]
+    # A body that starts by reading one immediate into x27, and otherwise
+    # leaves the stream pointer and x26 alone: read the immediate and the next
+    # gadget's address together, the immediate into x26.
+    rest = body[1:]
+    if (not early and body and body[0] == EPILOGUE[0] and
+            not any(re.search(r"\b[xw]2[68]\b", line) or
+                    re.match(r"\s*(b|br|bl|blr|ret|cbz|cbnz|tbz|tbnz|b\.\w+)\s",
+                             line + " ")
+                    for line in rest)):
+        rest = [re.sub(r"\b([xw])27\b", r"\g<1>26", line) for line in rest]
+        seq = ["ldp x26, x27, [x28], #16", *rest, EPILOGUE[1]]
     print("\tasm(", file=c_file)
-    for line in lines + EPILOGUE:
+    for line in seq:
         print(f"\t\t\"{line} \\n\"", file=c_file)
         instructions += 1
     if operands:
