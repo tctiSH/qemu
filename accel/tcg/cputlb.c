@@ -2850,8 +2850,7 @@ static void do_st16_mmu(CPUState *cpu, vaddr addr, Int128 val,
 #define DATA_SIZE 8
 #include "atomic_template.h"
 
-/* FIXME: this doesn't work in TCTI */
-#if (defined(CONFIG_ATOMIC128) && !defined(CONFIG_TCG_THREADED_INTERPRETER)) || HAVE_CMPXCHG128
+#if defined(CONFIG_ATOMIC128) || HAVE_CMPXCHG128
 #define DATA_SIZE 16
 #include "atomic_template.h"
 #endif
