@@ -361,7 +361,7 @@ static void tcti_out_label(TCGContext *s, TCGLabel *label)
         tcg_debug_assert(label->u.value);
     } else {
         tcg_out_reloc(s, s->code_ptr, sizeof(tcg_target_ulong), label, 0);
-        s->code_ptr += sizeof(tcg_target_ulong);
+        s->code_ptr += sizeof(tcg_target_ulong) / TCG_TARGET_INSN_UNIT_SIZE;
     }
 }
 
@@ -1016,6 +1016,10 @@ static void tcg_out_goto_tb(TCGContext *s, int which)
 
     // Place our current instruction into our "relocation table", so it can
     // be patched once we know where the branch will target...
+    //
+    // tb_target_set_jmp_target patches the word with one 8-byte store,
+    // which is only atomic if it is aligned.
+    tcg_debug_assert(QEMU_PTR_IS_ALIGNED(s->code_ptr, sizeof(uint64_t)));
     s->gen_tb->jmp_insn_offset[which] = tcg_current_code_size(s);
 
     // ... and emit our relocation.

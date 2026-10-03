@@ -41,10 +41,12 @@
 #define TCG_TARGET_H
 
 /*
- * The gadget stream is written in 8-byte pointers and immediates. One-byte
- * units keep the size arithmetic in tcg.c trivial.
+ * The gadget stream is written in 8-byte pointers and immediates, in 4-byte
+ * units: the aarch64 backend's, so that a build with both backends shares
+ * one tcg_insn_unit. Every emission is a whole 8-byte word, and every TB
+ * starts icache-aligned, so the stream stays 8-byte aligned all the same.
  */
-#define TCG_TARGET_INSN_UNIT_SIZE        1
+#define TCG_TARGET_INSN_UNIT_SIZE        4
 #define MAX_CODE_GEN_BUFFER_SIZE  ((size_t)-1)
 
 // We're an interpreted target; even if we're JIT-compiling to our interpreter's
