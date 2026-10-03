@@ -24,6 +24,7 @@
 
 #include "qemu/osdep.h"
 #include "tcg/tcg.h"
+#include "tcg/hybrid.h"
 #include "tcg/tcg-temp-internal.h"
 #include "tcg/tcg-op-common.h"
 #include "tcg/tcg-mo.h"
@@ -143,13 +144,19 @@ static void tcg_gen_req_mo(TCGBar type)
 
 static TCGTemp *tci_extend_addr(TCGTemp *addr)
 {
-#if defined(CONFIG_TCG_INTERPRETER) || defined(CONFIG_TCG_THREADED_INTERPRETER)
+#if defined(CONFIG_TCG_INTERPRETER) || defined(CONFIG_TCG_THREADED_INTERPRETER) \
+    || defined(CONFIG_TCG_HYBRID_RUNTIME)
     /*
      * 64-bit interpreter requires 64-bit addresses.
      * Compare to the extension performed by tcg_out_{ld,st}_helper_args
      * for native code generation.
      */
-    if (tcg_ctx->addr_type == TCG_TYPE_I32) {
+#ifdef CONFIG_TCG_HYBRID_RUNTIME
+    bool interpreted = tcg_tcti_active();
+#else
+    bool interpreted = true;
+#endif
+    if (interpreted && tcg_ctx->addr_type == TCG_TYPE_I32) {
         TCGv_i64 temp = tcg_temp_ebb_new_i64();
         tcg_gen_extu_i32_i64(temp, temp_tcgv_i32(addr));
         return tcgv_i64_temp(temp);

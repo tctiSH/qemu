@@ -28,6 +28,7 @@
 #include "exec/replay-core.h"
 #include "exec/icount.h"
 #include "tcg/startup.h"
+#include "tcg/hybrid.h"
 #include "tcg/tcg.h"
 #include "qapi/error.h"
 #include "qemu/error-report.h"
@@ -55,6 +56,9 @@ struct TCGState {
     bool one_insn_per_tb;
     int splitwx_enabled;
     unsigned long tb_size;
+#ifdef CONFIG_TCG_HYBRID_RUNTIME
+    bool tcti;
+#endif
 };
 typedef struct TCGState TCGState;
 
@@ -166,6 +170,20 @@ static int tcg_init_machine(AccelState *as, MachineState *ms)
 
     page_init();
     tb_htable_init();
+#ifdef CONFIG_TCG_HYBRID_RUNTIME
+    /*
+     * Before tcg_init(), which sets up the backend and the code buffer for
+     * whichever is active. TCTI's buffer holds data, so it is never split.
+     */
+    if (s->tcti && s->splitwx_enabled > 0) {
+        error_report("split-wx is for native code, not tcti=on");
+        return -1;
+    }
+    tcg_hybrid_tcti = s->tcti;
+    if (s->tcti) {
+        s->splitwx_enabled = 0;
+    }
+#endif
     tcg_init(s->tb_size * MiB, s->splitwx_enabled, max_threads);
 
     /*
@@ -250,6 +268,20 @@ static void tcg_set_splitwx(Object *obj, bool value, Error **errp)
     s->splitwx_enabled = value;
 }
 
+#ifdef CONFIG_TCG_HYBRID_RUNTIME
+static bool tcg_get_tcti(Object *obj, Error **errp)
+{
+    TCGState *s = TCG_STATE(obj);
+    return s->tcti;
+}
+
+static void tcg_set_tcti(Object *obj, bool value, Error **errp)
+{
+    TCGState *s = TCG_STATE(obj);
+    s->tcti = value;
+}
+#endif
+
 static bool tcg_get_one_insn_per_tb(Object *obj, Error **errp)
 {
     TCGState *s = TCG_STATE(obj);
@@ -288,6 +320,13 @@ static void tcg_accel_class_init(ObjectClass *oc, const void *data)
         tcg_get_splitwx, tcg_set_splitwx);
     object_class_property_set_description(oc, "split-wx",
         "Map jit pages into separate RW and RX regions");
+
+#ifdef CONFIG_TCG_HYBRID_RUNTIME
+    object_class_property_add_bool(oc, "tcti", tcg_get_tcti, tcg_set_tcti);
+    object_class_property_set_description(oc, "tcti",
+        "Run translated code with TCTI, the threaded interpreter, rather "
+        "than as native code");
+#endif
 
     object_class_property_add_bool(oc, "one-insn-per-tb",
                                    tcg_get_one_insn_per_tb,

@@ -1,15 +1,18 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Define the AArch64 hybrid's operand constraint letters: aarch64's and
- * TCTI's. They are read once, at startup, so 'r' and 'w' mean the active
- * backend's registers.
+ * TCTI's. They are read once, at startup, so 'r' and 'w' mean the backend
+ * active then. (A switch between backends would have to read them again.)
  */
 
 /*
  * Define constraint letters for register sets:
  * REGS(letter, register_mask)
  */
-#ifdef CONFIG_TCG_THREADED_INTERPRETER
+#if defined(CONFIG_TCG_HYBRID_RUNTIME)
+REGS('r', tcg_tcti_active() ? TCG_MASK_GP_REGISTERS : ALL_GENERAL_REGS)
+REGS('w', tcg_tcti_active() ? TCG_MASK_VECTOR_REGISTERS : ALL_VECTOR_REGS)
+#elif defined(CONFIG_TCG_THREADED_INTERPRETER)
 REGS('r', TCG_MASK_GP_REGISTERS)
 REGS('w', TCG_MASK_VECTOR_REGISTERS)
 #else

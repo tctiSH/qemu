@@ -973,6 +973,7 @@ static inline size_t tcg_current_code_size(TCGContext *s)
 #if defined(CONFIG_TCG_INTERPRETER) || defined(CONFIG_TCG_THREADED_INTERPRETER)
 uintptr_t tcg_qemu_tb_exec(CPUArchState *env, const void *tb_ptr);
 #else
+/* In the run-time hybrid, the prologue's or TCTI's, as the backend is. */
 typedef uintptr_t tcg_prologue_fn(CPUArchState *env, const void *tb_ptr);
 extern tcg_prologue_fn *tcg_qemu_tb_exec;
 #endif

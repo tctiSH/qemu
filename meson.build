@@ -2545,6 +2545,8 @@ if have_tcg
   config_host_data.set('CONFIG_TCG_THREADED_INTERPRETER',
                        tcg_arch.endswith('-tcti') or get_option('tcg_hybrid') == 'tcti')
   config_host_data.set('CONFIG_TCG_HYBRID', tcg_arch.endswith('-hybrid'))
+  # Both backends, the one to use chosen at startup: neither of the above.
+  config_host_data.set('CONFIG_TCG_HYBRID_RUNTIME', get_option('tcg_hybrid') == 'runtime')
 endif
 config_host_data.set('CONFIG_TPM', have_tpm)
 config_host_data.set('CONFIG_TSAN', get_option('tsan'))
@@ -4925,7 +4927,9 @@ if config_all_accel.has_key('CONFIG_TCG')
   elif get_option('tcg_threaded_interpreter')
     summary_info += {'TCG backend':   'TCTI (TCG with threaded-dispatch interpreter, for hosts without JIT)'}
   elif get_option('tcg_hybrid') != 'disabled'
-    summary_info += {'TCG backend':   'hybrid of native (@0@) and TCTI, using @1@'.format(cpu, get_option('tcg_hybrid'))}
+    summary_info += {'TCG backend':   get_option('tcg_hybrid') == 'runtime' ?
+                       'hybrid of native (@0@) and TCTI, chosen at startup'.format(cpu) :
+                       'hybrid of native (@0@) and TCTI, using @1@'.format(cpu, get_option('tcg_hybrid'))}
   else
     summary_info += {'TCG backend':   'native (@0@)'.format(cpu)}
   endif

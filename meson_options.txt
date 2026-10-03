@@ -101,8 +101,8 @@ option('tcg_interpreter', type: 'boolean', value: false,
        description: 'TCG with bytecode interpreter (slow)')
 option('tcg_threaded_interpreter', type: 'boolean', value: false,
        description: 'TCG with threaded-dispatch interpreter, for AArch64 hosts that cannot JIT')
-option('tcg_hybrid', type: 'combo', choices: ['disabled', 'tcti', 'jit'], value: 'disabled',
-       description: 'TCG with both the AArch64 backend and TCTI built in, using the one given')
+option('tcg_hybrid', type: 'combo', choices: ['disabled', 'tcti', 'jit', 'runtime'], value: 'disabled',
+       description: 'TCG with both the AArch64 backend and TCTI built in, using the one given, or either (runtime)')
 option('safe_stack', type: 'boolean', value: false,
        description: 'SafeStack Stack Smash Protection (requires clang/llvm and coroutine backend ucontext)')
 option('asan', type: 'boolean', value: false,

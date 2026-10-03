@@ -28,6 +28,7 @@
 #include "qemu/interval-tree.h"
 #include "tcg/tcg-op-common.h"
 #include "tcg-internal.h"
+#include "tcg/hybrid.h"
 #include "tcg-has.h"
 
 
@@ -3039,11 +3040,7 @@ static bool fold_xor(OptContext *ctx, TCGOp *op)
  * Whether loads and stores relative to env are folded into moves of the
  * values last stored there. FIXME: this breaks TCTI.
  */
-#ifdef CONFIG_TCG_THREADED_INTERPRETER
-#define fold_mem_copies false
-#else
-#define fold_mem_copies true
-#endif
+#define fold_mem_copies (!tcg_tcti_active())
 
 /* Propagate constants and copies, fold constant expressions. */
 void tcg_optimize(TCGContext *s)
