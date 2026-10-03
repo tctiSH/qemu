@@ -23,7 +23,7 @@ if get_option('tcg_interpreter')
   tcg_ss.add(files('tci.c'))
 endif
 
-if get_option('tcg_threaded_interpreter')
+if get_option('tcg_threaded_interpreter') or get_option('tcg_hybrid') != 'disabled'
   # The gadgets TCTI dispatches through are generated, a few collections of
   # them to a file so the compile parallelises. The list must match what
   # tcti-gadget-gen.py writes.
@@ -46,7 +46,7 @@ if get_option('tcg_threaded_interpreter')
   foreach c : tcti_collections
     tcti_outputs += ['tcti_@0@_gadgets.c'.format(c), 'tcti_@0@_gadgets.h'.format(c)]
   endforeach
-  tcti_gadget_gen = files(meson.project_source_root() / 'tcg' / tcg_arch / 'tcti-gadget-gen.py')
+  tcti_gadget_gen = files(meson.project_source_root() / 'tcg' / 'aarch64-tcti' / 'tcti-gadget-gen.py')
   tcti_gadgets = custom_target('tcti-gadgets',
                                output: tcti_outputs,
                                input: tcti_gadget_gen,

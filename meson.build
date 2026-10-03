@@ -958,25 +958,36 @@ if have_tcg
     warning('configuration option on this architecture to use the native')
     warning('backend.')
   endif
+  tcg_hybrid = get_option('tcg_hybrid') != 'disabled'
+  if tcg_hybrid and (get_option('tcg_interpreter') or get_option('tcg_threaded_interpreter'))
+    error('-Dtcg_hybrid builds its own backends; drop --enable-tcg-interpreter and --enable-tcg-threaded-interpreter')
+  endif
+  # TCTI's sources are wanted by TCTI and by the hybrid, which includes them.
+  tcg_tcti = get_option('tcg_threaded_interpreter') or tcg_hybrid
   if get_option('tcg_interpreter')
     tcg_arch = 'tci'
-  elif get_option('tcg_threaded_interpreter')
+  elif tcg_tcti
     if cpu not in tcti_supported_cpus
       error('Unsupported CPU @0@ for TCTI, try --enable-tcg-interpreter'.format(cpu))
     endif
-    tcg_arch = '@0@-tcti'.format(cpu)
+    tcg_arch = tcg_hybrid ? '@0@-hybrid'.format(cpu) : '@0@-tcti'.format(cpu)
     # The gadgets fill tens of megabytes, but a thousand of them make 99%
     # of dispatches: link those first, in order of use, to spare the
     # instruction cache and TLB. A name the gadgets no longer have is
     # skipped. Regenerated from a dispatch profile; see the file's history.
     if host_os in ['darwin', 'ios']
       emulator_link_args += ['-Wl,-order_file,' +
-                             (meson.current_source_dir() / 'tcg' / tcg_arch /
+                             (meson.current_source_dir() / 'tcg' / '@0@-tcti'.format(cpu) /
                               'gadget-order.txt')]
     endif
   endif
   add_project_arguments('-iquote', meson.current_source_dir() / 'tcg' / tcg_arch,
                         language: all_languages)
+  if tcg_hybrid
+    # For what TCTI's generated gadget files include from its directory.
+    add_project_arguments('-iquote', meson.current_source_dir() / 'tcg' / '@0@-tcti'.format(cpu),
+                          language: all_languages)
+  endif
 
   accelerators += 'CONFIG_TCG'
 endif
@@ -2530,7 +2541,10 @@ config_host_data.set('CONFIG_SOLARIS', host_os == 'sunos')
 if have_tcg
   config_host_data.set('CONFIG_TCG', 1)
   config_host_data.set('CONFIG_TCG_INTERPRETER', tcg_arch == 'tci')
-  config_host_data.set('CONFIG_TCG_THREADED_INTERPRETER', tcg_arch.endswith('-tcti'))
+  # A hybrid configured for TCTI is TCTI to everything outside the backend.
+  config_host_data.set('CONFIG_TCG_THREADED_INTERPRETER',
+                       tcg_arch.endswith('-tcti') or get_option('tcg_hybrid') == 'tcti')
+  config_host_data.set('CONFIG_TCG_HYBRID', tcg_arch.endswith('-hybrid'))
 endif
 config_host_data.set('CONFIG_TPM', have_tpm)
 config_host_data.set('CONFIG_TSAN', get_option('tsan'))
@@ -4910,6 +4924,8 @@ if config_all_accel.has_key('CONFIG_TCG')
     summary_info += {'TCG backend':   'TCI (TCG with bytecode interpreter, slow)'}
   elif get_option('tcg_threaded_interpreter')
     summary_info += {'TCG backend':   'TCTI (TCG with threaded-dispatch interpreter, for hosts without JIT)'}
+  elif get_option('tcg_hybrid') != 'disabled'
+    summary_info += {'TCG backend':   'hybrid of native (@0@) and TCTI, using @1@'.format(cpu, get_option('tcg_hybrid'))}
   else
     summary_info += {'TCG backend':   'native (@0@)'.format(cpu)}
   endif
