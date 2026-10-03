@@ -63,17 +63,7 @@
 #include "user/guest-base.h"
 #endif
 
-/* Forward declarations for functions declared in tcg-target.c.inc and
-   used here. */
-static void tcg_target_init(TCGContext *s);
-static void tcg_target_qemu_prologue(TCGContext *s);
-static bool patch_reloc(tcg_insn_unit *code_ptr, int type,
-                        intptr_t value, intptr_t addend);
-static void tcg_out_nop_fill(tcg_insn_unit *p, int count);
-
 typedef struct TCGLabelQemuLdst TCGLabelQemuLdst;
-static bool tcg_out_qemu_ld_slow_path(TCGContext *s, TCGLabelQemuLdst *l);
-static bool tcg_out_qemu_st_slow_path(TCGContext *s, TCGLabelQemuLdst *l);
 
 /* The CIE and FDE header definitions will be common to all hosts.  */
 typedef struct {
@@ -115,43 +105,13 @@ static void tcg_register_jit_int(const void *buf, size_t size,
                                  size_t debug_frame_size)
     __attribute__((unused));
 
-/* Forward declarations for functions declared and used in tcg-target.c.inc. */
-static void tcg_out_tb_start(TCGContext *s);
-static void tcg_out_ld(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg1,
-                       intptr_t arg2);
-static bool tcg_out_mov(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg);
-static void tcg_out_movi(TCGContext *s, TCGType type,
-                         TCGReg ret, tcg_target_long arg);
-static void tcg_out_ext8s(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg);
-static void tcg_out_ext16s(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg);
-static void tcg_out_ext8u(TCGContext *s, TCGReg ret, TCGReg arg);
-static void tcg_out_ext16u(TCGContext *s, TCGReg ret, TCGReg arg);
-static void tcg_out_ext32s(TCGContext *s, TCGReg ret, TCGReg arg);
-static void tcg_out_ext32u(TCGContext *s, TCGReg ret, TCGReg arg);
-static void tcg_out_exts_i32_i64(TCGContext *s, TCGReg ret, TCGReg arg);
-static void tcg_out_extu_i32_i64(TCGContext *s, TCGReg ret, TCGReg arg);
-static void tcg_out_extrl_i64_i32(TCGContext *s, TCGReg ret, TCGReg arg);
-static void tcg_out_addi_ptr(TCGContext *s, TCGReg, TCGReg, tcg_target_long);
-static bool tcg_out_xchg(TCGContext *s, TCGType type, TCGReg r1, TCGReg r2);
-static void tcg_out_exit_tb(TCGContext *s, uintptr_t arg);
-static void tcg_out_goto_tb(TCGContext *s, int which);
-static void tcg_out_goto_ptr(TCGContext *s, TCGReg dest);
-static void tcg_out_mb(TCGContext *s, unsigned bar);
-static void tcg_out_br(TCGContext *s, TCGLabel *l);
-static void tcg_out_set_carry(TCGContext *s);
-static void tcg_out_set_borrow(TCGContext *s);
-#if TCG_TARGET_MAYBE_vec
-static bool tcg_out_dup_vec(TCGContext *s, TCGType type, unsigned vece,
-                            TCGReg dst, TCGReg src);
-static bool tcg_out_dupm_vec(TCGContext *s, TCGType type, unsigned vece,
-                             TCGReg dst, TCGReg base, intptr_t offset);
-static void tcg_out_dupi_vec(TCGContext *s, TCGType type, unsigned vece,
-                             TCGReg dst, int64_t arg);
-static void tcg_out_vec_op(TCGContext *s, TCGOpcode opc,
-                           unsigned vecl, unsigned vece,
-                           const TCGArg args[TCG_MAX_OP_ARGS],
-                           const int const_args[TCG_MAX_OP_ARGS]);
-#else
+/*
+ * Forward declarations for functions declared in tcg-target.c.inc and used
+ * here, or declared and used there.
+ */
+#include "tcg-target-protos.h.inc"
+
+#if !TCG_TARGET_MAYBE_vec
 static inline bool tcg_out_dup_vec(TCGContext *s, TCGType type, unsigned vece,
                                    TCGReg dst, TCGReg src)
 {
@@ -179,15 +139,6 @@ int tcg_can_emit_vec_op(TCGOpcode o, TCGType t, unsigned ve)
     return 0;
 }
 #endif
-static void tcg_out_st(TCGContext *s, TCGType type, TCGReg arg, TCGReg arg1,
-                       intptr_t arg2);
-static bool tcg_out_sti(TCGContext *s, TCGType type, TCGArg val,
-                        TCGReg base, intptr_t ofs);
-static void tcg_out_call(TCGContext *s, const tcg_insn_unit *target,
-                         const TCGHelperInfo *info);
-static TCGReg tcg_target_call_oarg_reg(TCGCallReturnKind kind, int slot);
-static bool tcg_target_const_match(int64_t val, int ct,
-                                   TCGType type, TCGCond cond, int vece);
 
 #ifndef CONFIG_USER_ONLY
 #define guest_base  ({ qemu_build_not_reached(); (uintptr_t)0; })
@@ -1154,84 +1105,20 @@ static const TCGOutOpLoad outop_ld = {
  * This verifies that V is of type T, otherwise give a nice compiler error.
  * This prevents trivial mistakes within each arch/tcg-target.c.inc.
  */
-#define OUTOP(O, T, V)  [O] = _Generic(V, T: &V.base)
+#define OUTOP(O, T, V)  [O] = _Generic(V, T: &V.base),
+
+#include "tcg-target-outops.h.inc"
 
 /* Register allocation descriptions for every TCGOpcode. */
 static const TCGOutOp * const all_outop[NB_OPS] = {
-    OUTOP(INDEX_op_add, TCGOutOpBinary, outop_add),
-    OUTOP(INDEX_op_addci, TCGOutOpAddSubCarry, outop_addci),
-    OUTOP(INDEX_op_addcio, TCGOutOpBinary, outop_addcio),
-    OUTOP(INDEX_op_addco, TCGOutOpBinary, outop_addco),
-    /* addc1o is implemented with set_carry + addcio */
-    OUTOP(INDEX_op_addc1o, TCGOutOpBinary, outop_addcio),
-    OUTOP(INDEX_op_and, TCGOutOpBinary, outop_and),
-    OUTOP(INDEX_op_andc, TCGOutOpBinary, outop_andc),
-    OUTOP(INDEX_op_brcond, TCGOutOpBrcond, outop_brcond),
-    OUTOP(INDEX_op_bswap16, TCGOutOpBswap, outop_bswap16),
-    OUTOP(INDEX_op_bswap32, TCGOutOpBswap, outop_bswap32),
-    OUTOP(INDEX_op_clz, TCGOutOpBinary, outop_clz),
-    OUTOP(INDEX_op_ctpop, TCGOutOpUnary, outop_ctpop),
-    OUTOP(INDEX_op_ctz, TCGOutOpBinary, outop_ctz),
-    OUTOP(INDEX_op_deposit, TCGOutOpDeposit, outop_deposit),
-    OUTOP(INDEX_op_divs, TCGOutOpBinary, outop_divs),
-    OUTOP(INDEX_op_divu, TCGOutOpBinary, outop_divu),
-    OUTOP(INDEX_op_divs2, TCGOutOpDivRem, outop_divs2),
-    OUTOP(INDEX_op_divu2, TCGOutOpDivRem, outop_divu2),
-    OUTOP(INDEX_op_eqv, TCGOutOpBinary, outop_eqv),
-    OUTOP(INDEX_op_extract, TCGOutOpExtract, outop_extract),
-    OUTOP(INDEX_op_extract2, TCGOutOpExtract2, outop_extract2),
-    OUTOP(INDEX_op_ld8u, TCGOutOpLoad, outop_ld8u),
-    OUTOP(INDEX_op_ld8s, TCGOutOpLoad, outop_ld8s),
-    OUTOP(INDEX_op_ld16u, TCGOutOpLoad, outop_ld16u),
-    OUTOP(INDEX_op_ld16s, TCGOutOpLoad, outop_ld16s),
-    OUTOP(INDEX_op_ld, TCGOutOpLoad, outop_ld),
-    OUTOP(INDEX_op_movcond, TCGOutOpMovcond, outop_movcond),
-    OUTOP(INDEX_op_mul, TCGOutOpBinary, outop_mul),
-    OUTOP(INDEX_op_muls2, TCGOutOpMul2, outop_muls2),
-    OUTOP(INDEX_op_mulsh, TCGOutOpBinary, outop_mulsh),
-    OUTOP(INDEX_op_mulu2, TCGOutOpMul2, outop_mulu2),
-    OUTOP(INDEX_op_muluh, TCGOutOpBinary, outop_muluh),
-    OUTOP(INDEX_op_nand, TCGOutOpBinary, outop_nand),
-    OUTOP(INDEX_op_neg, TCGOutOpUnary, outop_neg),
-    OUTOP(INDEX_op_negsetcond, TCGOutOpSetcond, outop_negsetcond),
-    OUTOP(INDEX_op_nor, TCGOutOpBinary, outop_nor),
-    OUTOP(INDEX_op_not, TCGOutOpUnary, outop_not),
-    OUTOP(INDEX_op_or, TCGOutOpBinary, outop_or),
-    OUTOP(INDEX_op_orc, TCGOutOpBinary, outop_orc),
-    OUTOP(INDEX_op_qemu_ld, TCGOutOpQemuLdSt, outop_qemu_ld),
-    OUTOP(INDEX_op_qemu_ld2, TCGOutOpQemuLdSt2, outop_qemu_ld2),
-    OUTOP(INDEX_op_qemu_st, TCGOutOpQemuLdSt, outop_qemu_st),
-    OUTOP(INDEX_op_qemu_st2, TCGOutOpQemuLdSt2, outop_qemu_st2),
-    OUTOP(INDEX_op_rems, TCGOutOpBinary, outop_rems),
-    OUTOP(INDEX_op_remu, TCGOutOpBinary, outop_remu),
-    OUTOP(INDEX_op_rotl, TCGOutOpBinary, outop_rotl),
-    OUTOP(INDEX_op_rotr, TCGOutOpBinary, outop_rotr),
-    OUTOP(INDEX_op_sar, TCGOutOpBinary, outop_sar),
-    OUTOP(INDEX_op_setcond, TCGOutOpSetcond, outop_setcond),
-    OUTOP(INDEX_op_sextract, TCGOutOpExtract, outop_sextract),
-    OUTOP(INDEX_op_shl, TCGOutOpBinary, outop_shl),
-    OUTOP(INDEX_op_shr, TCGOutOpBinary, outop_shr),
-    OUTOP(INDEX_op_st, TCGOutOpStore, outop_st),
-    OUTOP(INDEX_op_st8, TCGOutOpStore, outop_st8),
-    OUTOP(INDEX_op_st16, TCGOutOpStore, outop_st16),
-    OUTOP(INDEX_op_sub, TCGOutOpSubtract, outop_sub),
-    OUTOP(INDEX_op_subbi, TCGOutOpAddSubCarry, outop_subbi),
-    OUTOP(INDEX_op_subbio, TCGOutOpAddSubCarry, outop_subbio),
-    OUTOP(INDEX_op_subbo, TCGOutOpAddSubCarry, outop_subbo),
-    /* subb1o is implemented with set_borrow + subbio */
-    OUTOP(INDEX_op_subb1o, TCGOutOpAddSubCarry, outop_subbio),
-    OUTOP(INDEX_op_xor, TCGOutOpBinary, outop_xor),
+    TCG_TARGET_OUTOPS(OUTOP)
 
+    /* Those defined above, the same for every backend. */
+    OUTOP(INDEX_op_ld, TCGOutOpLoad, outop_ld)
     [INDEX_op_goto_ptr] = &outop_goto_ptr,
-
-    OUTOP(INDEX_op_bswap64, TCGOutOpUnary, outop_bswap64),
-    OUTOP(INDEX_op_ext_i32_i64, TCGOutOpUnary, outop_exts_i32_i64),
-    OUTOP(INDEX_op_extu_i32_i64, TCGOutOpUnary, outop_extu_i32_i64),
-    OUTOP(INDEX_op_extrl_i64_i32, TCGOutOpUnary, outop_extrl_i64_i32),
-    OUTOP(INDEX_op_extrh_i64_i32, TCGOutOpUnary, outop_extrh_i64_i32),
-    OUTOP(INDEX_op_ld32u, TCGOutOpLoad, outop_ld32u),
-    OUTOP(INDEX_op_ld32s, TCGOutOpLoad, outop_ld32s),
-    OUTOP(INDEX_op_st32, TCGOutOpStore, outop_st),
+    OUTOP(INDEX_op_ext_i32_i64, TCGOutOpUnary, outop_exts_i32_i64)
+    OUTOP(INDEX_op_extu_i32_i64, TCGOutOpUnary, outop_extu_i32_i64)
+    OUTOP(INDEX_op_extrl_i64_i32, TCGOutOpUnary, outop_extrl_i64_i32)
 };
 
 #undef OUTOP
