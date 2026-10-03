@@ -7,6 +7,7 @@
 #include "disas/disas.h"
 #include "disas/capstone.h"
 #include "disas-internal.h"
+#include "tcg/hybrid.h"
 
 
 /*
@@ -64,7 +65,13 @@ static void initialize_debug_host(CPUDebug *s)
 #error unsupported RISC-V ABI
 #endif
 #elif defined(__aarch64__)
-    s->info.cap_arch = CS_ARCH_ARM64;
+    if (tcg_tcti_active()) {
+#ifdef CONFIG_TCG_HYBRID_RUNTIME
+        s->info.print_insn = print_insn_tcti;
+#endif
+    } else {
+        s->info.cap_arch = CS_ARCH_ARM64;
+    }
 #elif defined(__alpha__)
     s->info.print_insn = print_insn_alpha;
 #elif defined(__sparc__)

@@ -34,6 +34,7 @@
 #include "tcg/tcg.h"
 #include "exec/translation-block.h"
 #include "tcg-internal.h"
+#include "tcg/hybrid.h"
 #include "host/cpuinfo.h"
 
 
@@ -869,7 +870,9 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task,
 static bool jit_region_blessing_requested(void)
 {
     const char *requested = getenv("TCTISH_JIT_BLESS");
-    return requested != NULL && requested[0] == '1';
+
+    /* TCTI executes nothing it writes, so in a hybrid it has nothing to bless. */
+    return !tcg_tcti_active() && requested != NULL && requested[0] == '1';
 }
 
 static int is_debugger_attached(void)
@@ -1163,7 +1166,7 @@ static int alloc_code_gen_buffer(size_t size, int splitwx, Error **errp)
      * is data, never executed, and it exists for hosts that may not map
      * JIT memory at all -- where asking for MAP_JIT fails the mmap.
      */
-    if (!splitwx) {
+    if (!splitwx && !tcg_tcti_active()) {
         flags |= MAP_JIT;
     }
 #endif
@@ -1361,7 +1364,7 @@ void tcg_region_init(size_t tb_size, int splitwx, unsigned max_threads)
      */
     need_prot = PROT_READ | PROT_WRITE;
 #if !defined(CONFIG_TCG_INTERPRETER) && !defined(CONFIG_TCG_THREADED_INTERPRETER)
-    if (tcg_splitwx_diff == 0) {
+    if (tcg_splitwx_diff == 0 && !tcg_tcti_active()) {
         need_prot |= host_prot_read_exec();
     }
 #endif

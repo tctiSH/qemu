@@ -59,6 +59,7 @@
 #include "tcg-internal.h"
 #include "tcg/perf.h"
 #include "tcg-has.h"
+#include "tcg/hybrid.h"
 #ifdef CONFIG_USER_ONLY
 #include "user/guest-base.h"
 #endif
@@ -187,6 +188,11 @@ typedef struct {
 static TCGAtomAlign atom_and_align_for_opc(TCGContext *s, MemOp opc,
                                            MemOp host_atom, bool allow_two_ops)
     __attribute__((unused));
+
+#ifdef CONFIG_TCG_HYBRID_RUNTIME
+/* Set once, from -accel tcg,tcti=, before tcg_init(). */
+bool tcg_hybrid_tcti;
+#endif
 
 TCGContext tcg_init_ctx;
 __thread TCGContext *tcg_ctx;
@@ -1049,6 +1055,15 @@ typedef struct TCGOutOpSubtract {
 
 #include "tcg-target.c.inc"
 
+/*
+ * How many registers the allocation order lists, and at most: a hybrid of
+ * two backends has one order for each.
+ */
+#ifndef TCG_TARGET_REG_ALLOC_ORDER_COUNT
+#define TCG_TARGET_REG_ALLOC_ORDER_COUNT  ARRAY_SIZE(tcg_target_reg_alloc_order)
+#define TCG_TARGET_REG_ALLOC_ORDER_MAX    ARRAY_SIZE(tcg_target_reg_alloc_order)
+#endif
+
 #ifndef CONFIG_TCG_INTERPRETER
 /* Validate CPUTLBDescFast placement. */
 QEMU_BUILD_BUG_ON((int)(offsetof(CPUNegativeOffsetState, tlb.f[0]) -
@@ -1109,17 +1124,32 @@ static const TCGOutOpLoad outop_ld = {
 
 #include "tcg-target-outops.h.inc"
 
+/* Those defined above, the same for every backend. */
+#define TCG_GENERIC_OUTOPS                                              \
+    OUTOP(INDEX_op_ld, TCGOutOpLoad, outop_ld)                          \
+    [INDEX_op_goto_ptr] = &outop_goto_ptr,                              \
+    OUTOP(INDEX_op_ext_i32_i64, TCGOutOpUnary, outop_exts_i32_i64)      \
+    OUTOP(INDEX_op_extu_i32_i64, TCGOutOpUnary, outop_extu_i32_i64)     \
+    OUTOP(INDEX_op_extrl_i64_i32, TCGOutOpUnary, outop_extrl_i64_i32)
+
 /* Register allocation descriptions for every TCGOpcode. */
+#ifdef TCG_HYBRID_OUTOP_AA64
+/* A hybrid with both backends active by turns: a table for each. */
+static const TCGOutOp * const all_outop_aa64[NB_OPS] = {
+    TCG_TARGET_OUTOPS(TCG_HYBRID_OUTOP_AA64)
+    TCG_GENERIC_OUTOPS
+};
+static const TCGOutOp * const all_outop_tcti[NB_OPS] = {
+    TCG_TARGET_OUTOPS(TCG_HYBRID_OUTOP_TCTI)
+    TCG_GENERIC_OUTOPS
+};
+#define all_outop  (tcg_tcti_active() ? all_outop_tcti : all_outop_aa64)
+#else
 static const TCGOutOp * const all_outop[NB_OPS] = {
     TCG_TARGET_OUTOPS(OUTOP)
-
-    /* Those defined above, the same for every backend. */
-    OUTOP(INDEX_op_ld, TCGOutOpLoad, outop_ld)
-    [INDEX_op_goto_ptr] = &outop_goto_ptr,
-    OUTOP(INDEX_op_ext_i32_i64, TCGOutOpUnary, outop_exts_i32_i64)
-    OUTOP(INDEX_op_extu_i32_i64, TCGOutOpUnary, outop_extu_i32_i64)
-    OUTOP(INDEX_op_extrl_i64_i32, TCGOutOpUnary, outop_extrl_i64_i32)
+    TCG_GENERIC_OUTOPS
 };
+#endif
 
 #undef OUTOP
 
@@ -1642,7 +1672,7 @@ static void init_call_layout(TCGHelperInfo *info)
     }
 }
 
-static int indirect_reg_alloc_order[ARRAY_SIZE(tcg_target_reg_alloc_order)];
+static int indirect_reg_alloc_order[TCG_TARGET_REG_ALLOC_ORDER_MAX];
 static void process_constraint_sets(void);
 static TCGTemp *tcg_global_reg_new_internal(TCGContext *s, TCGType type,
                                             TCGReg reg, const char *name);
@@ -1668,7 +1698,7 @@ static void tcg_context_init(unsigned max_threads)
 
     /* Reverse the order of the saved registers, assuming they're all at
        the start of tcg_target_reg_alloc_order.  */
-    for (n = 0; n < ARRAY_SIZE(tcg_target_reg_alloc_order); ++n) {
+    for (n = 0; n < TCG_TARGET_REG_ALLOC_ORDER_COUNT; ++n) {
         int r = tcg_target_reg_alloc_order[n];
         if (tcg_regset_test_reg(tcg_target_call_clobber_regs, r)) {
             break;
@@ -1677,7 +1707,7 @@ static void tcg_context_init(unsigned max_threads)
     for (i = 0; i < n; ++i) {
         indirect_reg_alloc_order[i] = tcg_target_reg_alloc_order[n - 1 - i];
     }
-    for (; i < ARRAY_SIZE(tcg_target_reg_alloc_order); ++i) {
+    for (; i < TCG_TARGET_REG_ALLOC_ORDER_COUNT; ++i) {
         indirect_reg_alloc_order[i] = tcg_target_reg_alloc_order[i];
     }
 
@@ -1748,7 +1778,13 @@ void tcg_prologue_init(void)
     s->data_gen_ptr = NULL;
 
 #if !defined(CONFIG_TCG_INTERPRETER) && !defined(CONFIG_TCG_THREADED_INTERPRETER)
-    tcg_qemu_tb_exec = (tcg_prologue_fn *)tcg_splitwx_to_rx(s->code_ptr);
+    if (tcg_tcti_active()) {
+#ifdef CONFIG_TCG_HYBRID_RUNTIME
+        tcg_qemu_tb_exec = tcti_tcg_qemu_tb_exec;
+#endif
+    } else {
+        tcg_qemu_tb_exec = (tcg_prologue_fn *)tcg_splitwx_to_rx(s->code_ptr);
+    }
 #endif
 
     s->pool_labels = NULL;
@@ -1767,8 +1803,10 @@ void tcg_prologue_init(void)
     perf_report_prologue(s->code_gen_ptr, prologue_size);
 
 #if !defined(CONFIG_TCG_INTERPRETER) && !defined(CONFIG_TCG_THREADED_INTERPRETER)
-    flush_idcache_range((uintptr_t)tcg_splitwx_to_rx(s->code_buf),
-                        (uintptr_t)s->code_buf, prologue_size);
+    if (!tcg_tcti_active()) {
+        flush_idcache_range((uintptr_t)tcg_splitwx_to_rx(s->code_buf),
+                            (uintptr_t)s->code_buf, prologue_size);
+    }
 #endif
 
     if (qemu_loglevel_mask(CPU_LOG_TB_OUT_ASM)) {
@@ -4601,7 +4639,7 @@ static TCGReg tcg_reg_alloc(TCGContext *s, TCGRegSet required_regs,
                             TCGRegSet allocated_regs,
                             TCGRegSet preferred_regs, bool rev)
 {
-    int i, j, f, n = ARRAY_SIZE(tcg_target_reg_alloc_order);
+    int i, j, f, n = TCG_TARGET_REG_ALLOC_ORDER_COUNT;
     TCGRegSet reg_ct[2];
     const int *order;
 
@@ -4663,7 +4701,7 @@ static TCGReg tcg_reg_alloc_pair(TCGContext *s, TCGRegSet required_regs,
                                  TCGRegSet allocated_regs,
                                  TCGRegSet preferred_regs, bool rev)
 {
-    int i, j, k, fmin, n = ARRAY_SIZE(tcg_target_reg_alloc_order);
+    int i, j, k, fmin, n = TCG_TARGET_REG_ALLOC_ORDER_COUNT;
     TCGRegSet reg_ct[2];
     const int *order;
 
@@ -5480,7 +5518,8 @@ static void tcg_reg_alloc_op(TCGContext *s, const TCGOp *op)
 
     case INDEX_op_sub:
         {
-            const TCGOutOpSubtract *out = &outop_sub;
+            const TCGOutOpSubtract *out =
+                container_of(all_outop[INDEX_op_sub], TCGOutOpSubtract, base);
 
             /*
              * Constants should never appear in the second source operand.
@@ -5553,7 +5592,8 @@ static void tcg_reg_alloc_op(TCGContext *s, const TCGOp *op)
 
     case INDEX_op_deposit:
         {
-            const TCGOutOpDeposit *out = &outop_deposit;
+            const TCGOutOpDeposit *out =
+                container_of(all_outop[INDEX_op_deposit], TCGOutOpDeposit, base);
 
             if (const_args[2]) {
                 tcg_debug_assert(!const_args[1]);
@@ -5599,7 +5639,8 @@ static void tcg_reg_alloc_op(TCGContext *s, const TCGOp *op)
 
     case INDEX_op_extract2:
         {
-            const TCGOutOpExtract2 *out = &outop_extract2;
+            const TCGOutOpExtract2 *out =
+                container_of(all_outop[INDEX_op_extract2], TCGOutOpExtract2, base);
 
             tcg_debug_assert(!const_args[1]);
             tcg_debug_assert(!const_args[2]);
@@ -5679,7 +5720,8 @@ static void tcg_reg_alloc_op(TCGContext *s, const TCGOp *op)
 
     case INDEX_op_brcond:
         {
-            const TCGOutOpBrcond *out = &outop_brcond;
+            const TCGOutOpBrcond *out =
+                container_of(all_outop[INDEX_op_brcond], TCGOutOpBrcond, base);
             TCGCond cond = new_args[2];
             TCGLabel *label = arg_label(new_args[3]);
 
@@ -5694,7 +5736,8 @@ static void tcg_reg_alloc_op(TCGContext *s, const TCGOp *op)
 
     case INDEX_op_movcond:
         {
-            const TCGOutOpMovcond *out = &outop_movcond;
+            const TCGOutOpMovcond *out =
+                container_of(all_outop[INDEX_op_movcond], TCGOutOpMovcond, base);
             TCGCond cond = new_args[5];
 
             tcg_debug_assert(!const_args[1]);
@@ -6635,8 +6678,10 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
             break;
         case INDEX_op_insn_start:
             assert_carry_dead(s);
-#ifdef CONFIG_TCG_THREADED_INTERPRETER
-            tcti_insn_start(s);
+#if defined(CONFIG_TCG_THREADED_INTERPRETER) || defined(CONFIG_TCG_HYBRID_RUNTIME)
+            if (tcg_tcti_active()) {
+                tcti_insn_start(s);
+            }
 #endif
             if (num_insns >= 0) {
                 size_t off = tcg_current_code_size(s);
@@ -6716,9 +6761,11 @@ int tcg_gen_code(TCGContext *s, TranslationBlock *tb, uint64_t pc_start)
 
 #if !defined(CONFIG_TCG_INTERPRETER) && !defined(CONFIG_TCG_THREADED_INTERPRETER)
     /* flush instruction cache */
-    flush_idcache_range((uintptr_t)tcg_splitwx_to_rx(s->code_buf),
-                        (uintptr_t)s->code_buf,
-                        tcg_ptr_byte_diff(s->code_ptr, s->code_buf));
+    if (!tcg_tcti_active()) {
+        flush_idcache_range((uintptr_t)tcg_splitwx_to_rx(s->code_buf),
+                            (uintptr_t)s->code_buf,
+                            tcg_ptr_byte_diff(s->code_ptr, s->code_buf));
+    }
 #endif
 
     return tcg_current_code_size(s);

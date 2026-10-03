@@ -40,7 +40,24 @@
 #define TCG_TARGET_HAS_bitsel_vec       1
 #define TCG_TARGET_HAS_cmpsel_vec       0
 
-#ifdef CONFIG_TCG_THREADED_INTERPRETER
+#if defined(CONFIG_TCG_HYBRID_RUNTIME)
+/* Whichever is active's; both are below. */
+#include "tcg/hybrid.h"
+#define TCG_TARGET_HAS_qemu_ldst_i128 \
+    (tcg_tcti_active() ? (cpuinfo & CPUINFO_LSE2) != 0 : 1)
+#define TCG_TARGET_HAS_ordered_ldst \
+    (tcg_tcti_active() && \
+     (cpuinfo & (CPUINFO_LSE2 | CPUINFO_LRCPC)) == (CPUINFO_LSE2 | CPUINFO_LRCPC))
+#define TCG_TARGET_HAS_tst              (!tcg_tcti_active())
+#define TCG_TARGET_HAS_tst_vec          (!tcg_tcti_active())
+#define TCG_TARGET_extract_valid(type, ofs, len) \
+    (!tcg_tcti_active() || \
+     ((ofs) == 0 && ((len) == 8 || (len) == 16 || \
+                     ((len) == 32 && (type) == TCG_TYPE_I64))))
+#define TCG_TARGET_sextract_valid(type, ofs, len) \
+    TCG_TARGET_extract_valid(type, ofs, len)
+#define TCG_TARGET_deposit_valid(type, ofs, len)   (!tcg_tcti_active())
+#elif defined(CONFIG_TCG_THREADED_INTERPRETER)
 /* TCTI's; see ../aarch64-tcti/tcg-target-has.h for why. */
 #define TCG_TARGET_HAS_qemu_ldst_i128   (cpuinfo & CPUINFO_LSE2)
 #define TCG_TARGET_HAS_ordered_ldst \

@@ -20,6 +20,13 @@ extern __thread uintptr_t tci_tb_ptr;
 /* Set by TCTI's call gadget: the gadget stream position of the call. */
 extern __thread uintptr_t tcti_call_return_address;
 # define GETPC() tcti_call_return_address
+#elif defined(CONFIG_TCG_HYBRID_RUNTIME)
+/* The hybrid: TCTI's, or the return address, as the active backend has it. */
+extern bool tcg_hybrid_tcti;
+extern __thread uintptr_t tcti_call_return_address;
+# define GETPC() \
+    (tcg_hybrid_tcti ? tcti_call_return_address : \
+     (uintptr_t)__builtin_extract_return_addr(__builtin_return_address(0)))
 #else
 # define GETPC() \
     ((uintptr_t)__builtin_extract_return_addr(__builtin_return_address(0)))
