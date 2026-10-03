@@ -51,6 +51,10 @@ meson_options_help() {
   printf "%s\n" '  --enable-strict-rust-lints'
   printf "%s\n" '                           Enable stricter set of Rust warnings'
   printf "%s\n" '  --enable-strip           Strip targets on install'
+  printf "%s\n" '  --enable-tcg-hybrid=CHOICE'
+  printf "%s\n" '                           TCG with both the AArch64 backend and TCTI built'
+  printf "%s\n" '                           in, using the one given [disabled] (choices:'
+  printf "%s\n" '                           disabled/jit/tcti)'
   printf "%s\n" '  --enable-tcg-interpreter TCG with bytecode interpreter (slow)'
   printf "%s\n" '  --enable-tcg-threaded-interpreter'
   printf "%s\n" '                           TCG with threaded-dispatch interpreter, for'
@@ -519,6 +523,8 @@ _meson_option_parse() {
     --sysconfdir=*) quote_sh "-Dsysconfdir=$2" ;;
     --enable-tcg) printf "%s" -Dtcg=enabled ;;
     --disable-tcg) printf "%s" -Dtcg=disabled ;;
+    --disable-tcg-hybrid) printf "%s" -Dtcg_hybrid=disabled ;;
+    --enable-tcg-hybrid=*) quote_sh "-Dtcg_hybrid=$2" ;;
     --enable-tcg-interpreter) printf "%s" -Dtcg_interpreter=true ;;
     --disable-tcg-interpreter) printf "%s" -Dtcg_interpreter=false ;;
     --enable-tcg-threaded-interpreter) printf "%s" -Dtcg_threaded_interpreter=true ;;
