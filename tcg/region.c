@@ -533,6 +533,44 @@ static size_t tcg_regions_within(size_t bytes)
     return n;
 }
 
+#ifdef MADV_FREE_REUSABLE
+/*
+ * Gives `advice` for the writable view of the buffer in use between byte
+ * offsets `from` and `to`, region by region: around the guard page that ends
+ * each one, and in whole pages only. Returns 0, or the first errno.
+ *
+ * Darwin refuses MADV_FREE_REUSABLE (and MADV_FREE_REUSE) for the whole call,
+ * EPERM, as soon as one page in the range isn't writable -- and a guard page
+ * never is. Over a range that crosses regions, which a release nearly always
+ * does, one call gave nothing back at all.
+ */
+static int tctish_madvise_regions(size_t from, size_t to, int advice)
+{
+    char *rw = region.start_aligned;
+    int err = 0;
+
+    for (size_t i = 0; i < region.n; i++) {
+        void *start, *end;
+        char *s;
+        size_t length;
+
+        tcg_region_bounds(i, &start, &end);
+        s = MAX((char *)start, rw + from);
+        if (MIN((char *)end, rw + to) <= s) {
+            continue;
+        }
+        length = MIN((char *)end, rw + to) - s;
+
+        if (tctish_pages_within(&s, &length) &&
+            madvise(s, length, advice) != 0 && err == 0) {
+            err = errno;
+        }
+    }
+
+    return err;
+}
+#endif
+
 static void tcg_region_assign(TCGContext *s, size_t curr_region)
 {
     void *start, *end;
@@ -1873,9 +1911,11 @@ static void tctish_pay_release__locked(void)
         }
     }
 
-    if (madvise(rw + keep, length, MADV_FREE_REUSABLE) != 0) {
+    /* Around the guard pages; see tctish_madvise_regions(). */
+    tctish_release_errno_rw = tctish_madvise_regions(keep, keep + length,
+                                                     MADV_FREE_REUSABLE);
+    if (tctish_release_errno_rw != 0) {
         /* Not fatal: the pages stay ours, and the cap on growth still holds. */
-        tctish_release_errno_rw = errno;
         error_report("code cache: could not release %zu bytes (rw): %s",
                      length, strerror(tctish_release_errno_rw));
         released = false;
