@@ -754,11 +754,31 @@ static size_t tcg_min_regions(unsigned max_threads)
   (DEFAULT_CODE_GEN_BUFFER_SIZE_1 < MAX_CODE_GEN_BUFFER_SIZE \
    ? DEFAULT_CODE_GEN_BUFFER_SIZE_1 : MAX_CODE_GEN_BUFFER_SIZE)
 
+/*
+ * A code buffer as alloc_code_gen_buffer() mapped it, before it is the one in
+ * use: tcg_region_take_buffer() makes it so.
+ *
+ * Filled in rather than written straight into the region state, so that a
+ * buffer can be mapped -- and on iOS, prepared by a debugger -- while another
+ * is in use and the vCPUs run in it.
+ */
+typedef struct TCGCodeBuffer {
+    void *start;            /* region.start_aligned: the writable view */
+    size_t size;            /* region.total_size, as mapped */
+    ptrdiff_t splitwx_diff; /* tcg_splitwx_diff */
+
+    /* tctish_usable_bytes, tctish_chunked and tctish_purgeable, for it. */
+    size_t usable_bytes;
+    bool chunked;
+    bool purgeable;
+} TCGCodeBuffer;
+
 #ifdef USE_STATIC_CODE_GEN_BUFFER
 static uint8_t static_code_gen_buffer[DEFAULT_CODE_GEN_BUFFER_SIZE]
     __attribute__((aligned(CODE_GEN_ALIGN)));
 
-static int alloc_code_gen_buffer(size_t tb_size, int splitwx, Error **errp)
+static int alloc_code_gen_buffer(size_t tb_size, int splitwx, bool tcti,
+                                 TCGCodeBuffer *cb, Error **errp)
 {
     void *buf, *end;
     size_t size;
@@ -781,13 +801,14 @@ static int alloc_code_gen_buffer(size_t tb_size, int splitwx, Error **errp)
         size = QEMU_ALIGN_DOWN(tb_size, qemu_real_host_page_size());
     }
 
-    region.start_aligned = buf;
-    region.total_size = size;
+    cb->start = buf;
+    cb->size = size;
 
     return PROT_READ | PROT_WRITE;
 }
 #elif defined(_WIN32)
-static int alloc_code_gen_buffer(size_t size, int splitwx, Error **errp)
+static int alloc_code_gen_buffer(size_t size, int splitwx, bool tcti,
+                                 TCGCodeBuffer *cb, Error **errp)
 {
     void *buf;
 
@@ -804,14 +825,15 @@ static int alloc_code_gen_buffer(size_t size, int splitwx, Error **errp)
         return false;
     }
 
-    region.start_aligned = buf;
-    region.total_size = size;
+    cb->start = buf;
+    cb->size = size;
 
     return PROT_READ | PROT_WRITE | PROT_EXEC;
 }
 #else
 static int alloc_code_gen_buffer_anon(size_t size, int prot,
-                                      int flags, Error **errp)
+                                      int flags, TCGCodeBuffer *cb,
+                                      Error **errp)
 {
     void *buf;
 
@@ -822,8 +844,8 @@ static int alloc_code_gen_buffer_anon(size_t size, int prot,
         return -1;
     }
 
-    region.start_aligned = buf;
-    region.total_size = size;
+    cb->start = buf;
+    cb->size = size;
     return prot;
 }
 
@@ -831,7 +853,8 @@ static int alloc_code_gen_buffer_anon(size_t size, int prot,
 #ifdef CONFIG_POSIX
 #include "qemu/memfd.h"
 
-static int alloc_code_gen_buffer_splitwx_memfd(size_t size, Error **errp)
+static int alloc_code_gen_buffer_splitwx_memfd(size_t size, TCGCodeBuffer *cb,
+                                               Error **errp)
 {
     void *buf_rw = NULL, *buf_rx = MAP_FAILED;
     int fd = -1;
@@ -849,9 +872,9 @@ static int alloc_code_gen_buffer_splitwx_memfd(size_t size, Error **errp)
     }
 
     close(fd);
-    region.start_aligned = buf_rw;
-    region.total_size = size;
-    tcg_splitwx_diff = buf_rx - buf_rw;
+    cb->start = buf_rw;
+    cb->size = size;
+    cb->splitwx_diff = buf_rx - buf_rw;
 
     return PROT_READ | PROT_WRITE;
 
@@ -904,13 +927,24 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task,
  * cannot disagree. Upstream tests __builtin_available(iOS 26) here instead,
  * which answers a different question: whether the OS *might* need blessing,
  * not whether anything is listening to do it.
+ *
+ * For a buffer of native code, which is all that is ever split, and so all the
+ * split allocator below ever maps.
  */
-static bool jit_region_blessing_requested(void)
+static bool jit_region_blessing_wanted(void)
 {
     const char *requested = getenv("TCTISH_JIT_BLESS");
 
-    /* TCTI executes nothing it writes, so in a hybrid it has nothing to bless. */
-    return !tcg_tcti_active() && requested != NULL && requested[0] == '1';
+    return requested != NULL && requested[0] == '1';
+}
+
+/*
+ * Whether the buffer in use is one to bless. TCTI executes nothing it writes,
+ * so in a hybrid it has nothing to bless.
+ */
+static bool jit_region_blessing_requested(void)
+{
+    return !tcg_tcti_active() && jit_region_blessing_wanted();
 }
 
 static int is_debugger_attached(void)
@@ -999,7 +1033,7 @@ static void tctish_piece_at(size_t offset, size_t size, size_t *start,
  * mmap()'s descriptor, as Darwin takes VM flags for anonymous memory. On any
  * refusal nothing is left mapped and the caller maps the ordinary way.
  */
-static bool tctish_alloc_purgeable(size_t size)
+static bool tctish_alloc_purgeable(size_t size, TCGCodeBuffer *cb)
 {
     size_t page = qemu_real_host_page_size();
     size_t start, end;
@@ -1029,13 +1063,14 @@ static bool tctish_alloc_purgeable(size_t size)
 
     info_report("code cache: purgeable after the first page, so it can be "
                 "released and prepared again");
-    region.start_aligned = buf;
-    region.total_size = size;
+    cb->start = buf;
+    cb->size = size;
     return true;
 }
 #endif
 
-static int alloc_code_gen_buffer_splitwx_vmremap(size_t size, Error **errp)
+static int alloc_code_gen_buffer_splitwx_vmremap(size_t size, TCGCodeBuffer *cb,
+                                                 Error **errp)
 {
     kern_return_t ret;
     mach_vm_address_t buf_rw, buf_rx;
@@ -1044,20 +1079,20 @@ static int alloc_code_gen_buffer_splitwx_vmremap(size_t size, Error **errp)
 
 #if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
     /* TXM requires the region to start out executable. */
-    if (jit_region_blessing_requested()) {
+    if (jit_region_blessing_wanted()) {
         orig_prot = PROT_READ | PROT_EXEC;
-        tctish_purgeable = tctish_alloc_purgeable(size);
+        cb->purgeable = tctish_alloc_purgeable(size, cb);
     }
 #endif
 
     /* Negative on failure, not zero: upstream's `!` never caught one. */
-    if (!tctish_purgeable &&
+    if (!cb->purgeable &&
         alloc_code_gen_buffer_anon(size, orig_prot,
-                                   MAP_PRIVATE | MAP_ANONYMOUS, errp) < 0) {
+                                   MAP_PRIVATE | MAP_ANONYMOUS, cb, errp) < 0) {
         return -1;
     }
 
-    buf_rw = (mach_vm_address_t)region.start_aligned;
+    buf_rw = (mach_vm_address_t)cb->start;
     buf_rx = 0;
     ret = mach_vm_remap(mach_task_self(),
                         &buf_rx,
@@ -1085,7 +1120,7 @@ static int alloc_code_gen_buffer_splitwx_vmremap(size_t size, Error **errp)
     }
 
 #if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
-    if (jit_region_blessing_requested()) {
+    if (jit_region_blessing_wanted()) {
         /*
          * Sampled once, because everything below has to agree about whether a
          * script is listening: trapping with none attached kills the process,
@@ -1145,38 +1180,52 @@ static int alloc_code_gen_buffer_splitwx_vmremap(size_t size, Error **errp)
          * limit would buy nothing: leave the buffer whole and let JIT fail the
          * way it was already going to.
          */
-        tctish_usable_bytes = attached ? first : size;
-        tctish_chunked = attached && first < size;
+        cb->usable_bytes = attached ? first : size;
+        cb->chunked = attached && first < size;
     }
 #endif
 
-    tcg_splitwx_diff = buf_rx - buf_rw;
+    cb->splitwx_diff = buf_rx - buf_rw;
     return PROT_READ | PROT_WRITE;
 }
 #endif /* CONFIG_DARWIN */
 #endif /* !CONFIG_TCG_INTERPRETER && !CONFIG_TCG_THREADED_INTERPRETER */
 
-static int alloc_code_gen_buffer_splitwx(size_t size, Error **errp)
+static int alloc_code_gen_buffer_splitwx(size_t size, TCGCodeBuffer *cb,
+                                         Error **errp)
 {
 #if !defined(CONFIG_TCG_INTERPRETER) && !defined(CONFIG_TCG_THREADED_INTERPRETER)
 # ifdef CONFIG_DARWIN
-    return alloc_code_gen_buffer_splitwx_vmremap(size, errp);
+    return alloc_code_gen_buffer_splitwx_vmremap(size, cb, errp);
 # endif
 # ifdef CONFIG_POSIX
-    return alloc_code_gen_buffer_splitwx_memfd(size, errp);
+    return alloc_code_gen_buffer_splitwx_memfd(size, cb, errp);
 # endif
 #endif
     error_setg(errp, "jit split-wx not supported");
     return -1;
 }
 
-static int alloc_code_gen_buffer(size_t size, int splitwx, Error **errp)
+/*
+ * Maps a code buffer of `size` bytes for TCTI (tcti) or for native code, and
+ * describes it in *cb; returns the protection it was mapped with, or -1.
+ *
+ * Touches nothing else -- not the region state, not tcg_splitwx_diff, not which
+ * backend is active -- so it may run while another buffer is in use. On iOS
+ * under TXM it also has the attached debugger prepare the buffer, or its first
+ * chunk, which stops every thread in the process until the debugger is done,
+ * but changes nothing they see.
+ */
+static int alloc_code_gen_buffer(size_t size, int splitwx, bool tcti,
+                                 TCGCodeBuffer *cb, Error **errp)
 {
     ERRP_GUARD();
     int prot, flags;
 
+    *cb = (TCGCodeBuffer) { };
+
     if (splitwx) {
-        prot = alloc_code_gen_buffer_splitwx(size, errp);
+        prot = alloc_code_gen_buffer_splitwx(size, cb, errp);
         if (prot >= 0) {
             return prot;
         }
@@ -1188,6 +1237,7 @@ static int alloc_code_gen_buffer(size_t size, int splitwx, Error **errp)
             return -1;
         }
         error_free_or_abort(errp);
+        *cb = (TCGCodeBuffer) { };
     }
 
     /*
@@ -1204,14 +1254,28 @@ static int alloc_code_gen_buffer(size_t size, int splitwx, Error **errp)
      * is data, never executed, and it exists for hosts that may not map
      * JIT memory at all -- where asking for MAP_JIT fails the mmap.
      */
-    if (!splitwx && !tcg_tcti_active()) {
+    if (!splitwx && !tcti) {
         flags |= MAP_JIT;
     }
 #endif
 
-    return alloc_code_gen_buffer_anon(size, prot, flags, errp);
+    return alloc_code_gen_buffer_anon(size, prot, flags, cb, errp);
 }
 #endif /* USE_STATIC_CODE_GEN_BUFFER, WIN32, POSIX */
+
+/*
+ * Makes a buffer that alloc_code_gen_buffer() mapped the code buffer, for
+ * tcg_region_init() to partition.
+ */
+static void tcg_region_take_buffer(const TCGCodeBuffer *cb)
+{
+    region.start_aligned = cb->start;
+    region.total_size = cb->size;
+    tcg_splitwx_diff = cb->splitwx_diff;
+    tctish_usable_bytes = cb->usable_bytes;
+    tctish_chunked = cb->chunked;
+    tctish_purgeable = cb->purgeable;
+}
 
 /*
  * Initializes region partitioning.
@@ -1240,6 +1304,7 @@ static int alloc_code_gen_buffer(size_t size, int splitwx, Error **errp)
 void tcg_region_init(size_t tb_size, int splitwx, unsigned max_threads)
 {
     const size_t page_size = qemu_real_host_page_size();
+    TCGCodeBuffer cb = { };
     size_t region_size;
     int have_prot, need_prot;
 
@@ -1268,8 +1333,10 @@ void tcg_region_init(size_t tb_size, int splitwx, unsigned max_threads)
         tb_size = MAX_CODE_GEN_BUFFER_SIZE;
     }
 
-    have_prot = alloc_code_gen_buffer(tb_size, splitwx, &error_fatal);
+    have_prot = alloc_code_gen_buffer(tb_size, splitwx, tcg_tcti_active(), &cb,
+                                      &error_fatal);
     assert(have_prot >= 0);
+    tcg_region_take_buffer(&cb);
 
     /*
      * What the allocator managed to prepare, now that it has run.
