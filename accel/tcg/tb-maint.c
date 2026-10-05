@@ -36,6 +36,8 @@
 #include "tb-context.h"
 #include "internal-common.h"
 #include "qemu/main-loop.h"
+#include "qapi/error.h"
+#include "tcg/hybrid.h"
 #ifdef CONFIG_USER_ONLY
 #include "user/page-protection.h"
 #define runstate_is_running()  true
@@ -782,10 +784,194 @@ static void tctish_shrink_now(void *opaque)
     }
 }
 
-/* Created at init, so a shrink never has to create one from the wrong thread. */
+#ifdef CONFIG_TCG_HYBRID_RUNTIME
+/*
+ * Switching a hybrid between its backends, for the app and the monitor alike:
+ * asked for from any thread, run in safe work, and counted once settled.
+ *
+ * A bottom half for the same reason as the shrink's flush. Requests made
+ * before it runs come to one switch, to the backend asked for last.
+ */
+static QEMUBH *tctish_switch_bh;
+static bool tctish_switch_to_tcti;
+static size_t tctish_switches;
+
+/*
+ * Why the last preparation or switch failed; under its own lock. A GMutex,
+ * which is ready zeroed, because the app can call in as soon as it has opened
+ * the library, before anything here has been initialized.
+ */
+static GMutex tctish_backend_lock;
+static char *tctish_backend_error;
+
+static void tctish_backend_failed(Error *err)
+{
+    error_report_err(error_copy(err));
+
+    g_mutex_lock(&tctish_backend_lock);
+    g_free(tctish_backend_error);
+    tctish_backend_error = g_strdup(error_get_pretty(err));
+    g_mutex_unlock(&tctish_backend_lock);
+    error_free(err);
+}
+
+/*
+ * Whether TCG is far enough up to be asked about its buffers: the code buffer
+ * is partitioned, and with it every lock below has been initialized.
+ */
+static bool tctish_backend_running(Error **errp)
+{
+    if (tctish_code_cache_total() == 0) {
+        error_setg(errp, "TCG isn't running yet");
+        return false;
+    }
+    return true;
+}
+
+/*
+ * Counted last, and with release ordering, because the app watches the count
+ * and reads the backend, or the error, the moment it moves.
+ */
+static void tctish_switch_settled(void)
+{
+    qatomic_store_release(&tctish_switches, tctish_switches + 1);
+}
+
+static void tctish_switch_work(CPUState *cpu, run_on_cpu_data data)
+{
+    Error *err = NULL;
+
+    if (!tcg_hybrid_switch(data.host_int, &err)) {
+        tctish_backend_failed(err);
+    }
+    tctish_switch_settled();
+}
+
+static void tctish_switch_now(void *opaque)
+{
+    bool tcti = qatomic_read(&tctish_switch_to_tcti);
+
+    if (first_cpu == NULL) {
+        Error *err = NULL;
+
+        error_setg(&err, "there is no vCPU to switch");
+        tctish_backend_failed(err);
+        tctish_switch_settled();
+        return;
+    }
+    async_safe_run_on_cpu(first_cpu, tctish_switch_work,
+                          RUN_ON_CPU_HOST_INT(tcti));
+}
+
+bool tctish_backend_is_tcti(void)
+{
+    return tcg_tcti_active();
+}
+
+int tctish_backend_prepare_native(void)
+{
+    Error *err = NULL;
+    int ret = 0;
+
+    if (tctish_backend_running(&err)) {
+        ret = tcg_region_hybrid_prepare(false, &err);
+    }
+    if (ret == 0) {
+        tctish_backend_failed(err);
+    }
+    return ret;
+}
+
+bool tctish_backend_native_ready(void)
+{
+    return tctish_backend_running(NULL) && tcg_region_hybrid_native_ready();
+}
+
+bool tctish_backend_release_native(void)
+{
+    Error *err = NULL;
+
+    if (!tctish_backend_running(&err) ||
+        !tcg_region_hybrid_release_native(&err)) {
+        tctish_backend_failed(err);
+        return false;
+    }
+    return true;
+}
+
+bool tctish_backend_switch(bool tcti)
+{
+    if (tctish_switch_bh == NULL) {
+        return false;
+    }
+    qatomic_set(&tctish_switch_to_tcti, tcti);
+    qemu_bh_schedule(tctish_switch_bh);
+    return true;
+}
+
+size_t tctish_backend_switches(void)
+{
+    return qatomic_load_acquire(&tctish_switches);
+}
+
+char *tctish_backend_last_error(void)
+{
+    char *copy;
+
+    g_mutex_lock(&tctish_backend_lock);
+    copy = g_strdup(tctish_backend_error);
+    g_mutex_unlock(&tctish_backend_lock);
+    return copy;
+}
+#else
+/* One backend, so nothing to prepare and nowhere to switch to. */
+bool tctish_backend_is_tcti(void)
+{
+    return tcg_tcti_active();
+}
+
+int tctish_backend_prepare_native(void)
+{
+    return 0;
+}
+
+bool tctish_backend_native_ready(void)
+{
+    return !tcg_tcti_active();
+}
+
+/* TCTI has no native buffer to give back; native code's is in use. */
+bool tctish_backend_release_native(void)
+{
+    return tcg_tcti_active();
+}
+
+bool tctish_backend_switch(bool tcti)
+{
+    return false;
+}
+
+size_t tctish_backend_switches(void)
+{
+    return 0;
+}
+
+char *tctish_backend_last_error(void)
+{
+    return g_strdup("this QEMU has one TCG backend");
+}
+#endif
+
+/*
+ * Created at init, so a shrink -- or a switch -- never has to create one from
+ * the wrong thread.
+ */
 void tctish_flush_init(void)
 {
     tctish_shrink_bh = qemu_bh_new(tctish_shrink_now, NULL);
+#ifdef CONFIG_TCG_HYBRID_RUNTIME
+    tctish_switch_bh = qemu_bh_new(tctish_switch_now, NULL);
+#endif
 }
 
 void tctish_request_flush(void)

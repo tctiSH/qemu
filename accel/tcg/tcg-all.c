@@ -173,16 +173,10 @@ static int tcg_init_machine(AccelState *as, MachineState *ms)
 #ifdef CONFIG_TCG_HYBRID_RUNTIME
     /*
      * Before tcg_init(), which sets up the backend and the code buffer for
-     * whichever is active. TCTI's buffer holds data, so it is never split.
+     * whichever is active. split-wx applies to native code only; under TCTI
+     * it is kept for the native backend's buffer, mapped at a switch.
      */
-    if (s->tcti && s->splitwx_enabled > 0) {
-        error_report("split-wx is for native code, not tcti=on");
-        return -1;
-    }
     tcg_hybrid_tcti = s->tcti;
-    if (s->tcti) {
-        s->splitwx_enabled = 0;
-    }
 #endif
     tcg_init(s->tb_size * MiB, s->splitwx_enabled, max_threads);
 

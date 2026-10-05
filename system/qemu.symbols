@@ -31,4 +31,13 @@
   tctish_code_cache_release_attempts;
   tctish_code_cache_release_errno;
   tctish_code_cache_release_errno_rx;
+
+  /* The backend, in a hybrid of TCTI and native code; see tcg/tcg.h. */
+  tctish_backend_is_tcti;
+  tctish_backend_prepare_native;
+  tctish_backend_native_ready;
+  tctish_backend_release_native;
+  tctish_backend_switch;
+  tctish_backend_switches;
+  tctish_backend_last_error;
 };

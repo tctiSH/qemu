@@ -41,6 +41,9 @@ extern unsigned int tcg_max_ctxs;
 #endif
 
 void tcg_region_init(size_t tb_size, int splitwx, unsigned max_threads);
+#ifdef CONFIG_TCG_HYBRID_RUNTIME
+void tcg_region_hybrid_switch(void);
+#endif
 bool tcg_region_alloc(TCGContext *s);
 void tcg_region_thread_initial_alloc(TCGContext *s);
 void tcg_region_prologue_set(TCGContext *s);

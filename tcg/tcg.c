@@ -60,6 +60,8 @@
 #include "tcg/perf.h"
 #include "tcg-has.h"
 #include "tcg/hybrid.h"
+#include "exec/tb-flush.h"
+#include "qapi/error.h"
 #ifdef CONFIG_USER_ONLY
 #include "user/guest-base.h"
 #endif
@@ -1677,10 +1679,29 @@ static void process_constraint_sets(void);
 static TCGTemp *tcg_global_reg_new_internal(TCGContext *s, TCGType type,
                                             TCGReg reg, const char *name);
 
+/* Reverse the order of the saved registers, assuming they're all at
+   the start of tcg_target_reg_alloc_order.  */
+static void init_indirect_reg_alloc_order(void)
+{
+    int n, i;
+
+    for (n = 0; n < TCG_TARGET_REG_ALLOC_ORDER_COUNT; ++n) {
+        int r = tcg_target_reg_alloc_order[n];
+        if (tcg_regset_test_reg(tcg_target_call_clobber_regs, r)) {
+            break;
+        }
+    }
+    for (i = 0; i < n; ++i) {
+        indirect_reg_alloc_order[i] = tcg_target_reg_alloc_order[n - 1 - i];
+    }
+    for (; i < TCG_TARGET_REG_ALLOC_ORDER_COUNT; ++i) {
+        indirect_reg_alloc_order[i] = tcg_target_reg_alloc_order[i];
+    }
+}
+
 static void tcg_context_init(unsigned max_threads)
 {
     TCGContext *s = &tcg_init_ctx;
-    int n, i;
     TCGTemp *ts;
 
     memset(s, 0, sizeof(*s));
@@ -1695,21 +1716,7 @@ static void tcg_context_init(unsigned max_threads)
 
     tcg_target_init(s);
     process_constraint_sets();
-
-    /* Reverse the order of the saved registers, assuming they're all at
-       the start of tcg_target_reg_alloc_order.  */
-    for (n = 0; n < TCG_TARGET_REG_ALLOC_ORDER_COUNT; ++n) {
-        int r = tcg_target_reg_alloc_order[n];
-        if (tcg_regset_test_reg(tcg_target_call_clobber_regs, r)) {
-            break;
-        }
-    }
-    for (i = 0; i < n; ++i) {
-        indirect_reg_alloc_order[i] = tcg_target_reg_alloc_order[n - 1 - i];
-    }
-    for (; i < TCG_TARGET_REG_ALLOC_ORDER_COUNT; ++i) {
-        indirect_reg_alloc_order[i] = tcg_target_reg_alloc_order[i];
-    }
+    init_indirect_reg_alloc_order();
 
     tcg_ctx = s;
     /*
@@ -1853,6 +1860,96 @@ void tcg_prologue_init(void)
     tcg_region_prologue_set(s);
 }
 
+#ifdef CONFIG_TCG_HYBRID_RUNTIME
+/*
+ * Switches a hybrid of two backends from one to the other, in a running VM,
+ * and returns whether it is now on the one asked for; if not, errp says why,
+ * and nothing has changed.
+ *
+ * Call from safe work, every vCPU stopped between TBs: everything the guest
+ * is lives in CPUArchState, guest RAM and the devices, none of which the
+ * backend touches, so a switch is everything the backend decided at startup,
+ * decided again for the other one, and every TB translated afresh.
+ */
+bool tcg_hybrid_switch(bool tcti, Error **errp)
+{
+    TCGContext *s = &tcg_init_ctx;
+    TCGContext *running = tcg_ctx;
+    unsigned int n_ctxs = qatomic_read(&tcg_cur_ctxs);
+    TCGTemp *env = (void *)s + (uintptr_t)tcg_env;
+    size_t env_idx = env - s->temps;
+    size_t frame_idx;
+
+    if (tcti == tcg_hybrid_tcti) {
+        return true;
+    }
+
+    /*
+     * Not while the code cache is being handed back or waits to be prepared
+     * again: the machine may not run then, and neither buffer is settled.
+     */
+    if (!tctish_code_cache_may_run()) {
+        error_setg(errp, "the code cache is being released");
+        return false;
+    }
+
+    /*
+     * The buffer switched to, mapped first, so that failing to changes
+     * nothing. Normally the app has prepared it already, while the guest ran;
+     * if not, under TXM, this is where the debugger prepares it, with the
+     * vCPUs stopped for as long as that takes. Held until it is in use, so
+     * that nothing releases it in between.
+     */
+    tcg_region_hybrid_lock();
+    if (!tcg_region_hybrid_prepare__locked(tcti, errp)) {
+        tcg_region_hybrid_unlock();
+        return false;
+    }
+
+    /* Nothing either backend generated survives. */
+    tb_flush__exclusive_or_serial();
+    tcg_hybrid_tcti = tcti;
+
+    /*
+     * The backend's registers -- available, clobbered by calls, reserved --
+     * and, for TCTI, its frame. env stays the global it is, in the new
+     * backend's register.
+     */
+    tcg_target_init(s);
+    env->reg = TCG_AREG0;
+    tcg_regset_set_reg(s->reserved_regs, TCG_AREG0);
+    process_constraint_sets();
+    init_indirect_reg_alloc_order();
+
+    /*
+     * Its code buffer, and its prologue there, which for aarch64 also sets
+     * its frame. The prologue goes in through the initial context, as at
+     * startup.
+     */
+    tcg_region_hybrid_switch();
+    tcg_ctx = s;
+    tcg_prologue_init();
+    tcg_ctx = running;
+    tcg_region_hybrid_unlock();
+
+    /* Every vCPU's context began as a copy of the initial one; update each. */
+    frame_idx = s->frame_temp - s->temps;
+    for (unsigned int i = 0; i < n_ctxs; i++) {
+        TCGContext *c = qatomic_read(&tcg_ctxs[i]);
+
+        c->reserved_regs = s->reserved_regs;
+        c->frame_start = s->frame_start;
+        c->frame_end = s->frame_end;
+        c->temps[env_idx].reg = env->reg;
+        c->temps[frame_idx].reg = s->frame_temp->reg;
+    }
+
+    /* And a region of the new buffer for each, after the prologue. */
+    tcg_region_reset_all();
+    return true;
+}
+#endif
+
 void tcg_func_start(TCGContext *s)
 {
     tcg_pool_reset(s);
@@ -1926,6 +2023,17 @@ void tcg_set_frame(TCGContext *s, TCGReg reg, intptr_t start, intptr_t size)
 {
     s->frame_start = start;
     s->frame_end = start + size;
+#ifdef CONFIG_TCG_HYBRID_RUNTIME
+    /*
+     * Set again when a hybrid switches backends, after the guest's globals
+     * have been made: the global stays where it is, in its new register.
+     */
+    if (s->frame_temp) {
+        s->frame_temp->reg = reg;
+        tcg_regset_set_reg(s->reserved_regs, reg);
+        return;
+    }
+#endif
     s->frame_temp
         = tcg_global_reg_new_internal(s, TCG_TYPE_PTR, reg, "_frame");
 }
@@ -3130,6 +3238,9 @@ static TCGArgConstraint all_cts[ARRAY_SIZE(constraint_sets)][TCG_MAX_OP_ARGS];
 
 static void process_constraint_sets(void)
 {
+    /* The letters accumulate into all_cts; a hybrid's switch reads them again. */
+    memset(all_cts, 0, sizeof(all_cts));
+
     for (size_t c = 0; c < ARRAY_SIZE(constraint_sets); ++c) {
         const TCGConstraintSet *tdefs = &constraint_sets[c];
         TCGArgConstraint *args_ct = all_cts[c];

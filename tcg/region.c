@@ -771,6 +771,9 @@ typedef struct TCGCodeBuffer {
     size_t usable_bytes;
     bool chunked;
     bool purgeable;
+
+    /* Under TXM: mapped for blessing, but no debugger was there to bless it. */
+    bool unprepared;
 } TCGCodeBuffer;
 
 #ifdef USE_STATIC_CODE_GEN_BUFFER
@@ -1182,6 +1185,7 @@ static int alloc_code_gen_buffer_splitwx_vmremap(size_t size, TCGCodeBuffer *cb,
          */
         cb->usable_bytes = attached ? first : size;
         cb->chunked = attached && first < size;
+        cb->unprepared = !attached;
     }
 #endif
 
@@ -1278,35 +1282,18 @@ static void tcg_region_take_buffer(const TCGCodeBuffer *cb)
 }
 
 /*
- * Initializes region partitioning.
+ * Partitions the code buffer that tcg_region_take_buffer() has just made the
+ * one in use into regions, with guard pages between them. have_prot is what
+ * the buffer was mapped with.
  *
- * Called at init time from the parent thread (i.e. the one calling
- * tcg_context_init), after the target's TCG globals have been set.
- *
- * Region partitioning works by splitting code_gen_buffer into separate regions,
- * and then assigning regions to TCG threads so that the threads can translate
- * code in parallel without synchronization.
- *
- * In system-mode the number of TCG threads is bounded by max_threads,
- *
- * In user-mode we use a single region.  Having multiple regions in user-mode
- * is not supported, because the number of vCPU threads (recall that each thread
- * spawned by the guest corresponds to a vCPU thread) is only bounded by the
- * OS, and usually this number is huge (tens of thousands is not uncommon).
- * Thus, given this large bound on the number of vCPU threads and the fact
- * that code_gen_buffer is allocated at compile-time, we cannot guarantee
- * that the availability of at least one region per vCPU thread.
- *
- * However, this user-mode limitation is unlikely to be a significant problem
- * in practice. Multi-threaded guests share most if not all of their translated
- * code, which makes parallel code generation less appealing than in system-mode
+ * From tcg_region_init(), and in a hybrid of two backends again for the other
+ * one's buffer, the first time a switch makes it the one in use.
  */
-void tcg_region_init(size_t tb_size, int splitwx, unsigned max_threads)
+static void tcg_region_layout(size_t tb_size, unsigned max_threads, int have_prot)
 {
     const size_t page_size = qemu_real_host_page_size();
-    TCGCodeBuffer cb = { };
     size_t region_size;
-    int have_prot, need_prot;
+    int need_prot;
 
     /*
      * How much of the buffer to start with, in bytes; zero for all of it, which
@@ -1315,28 +1302,6 @@ void tcg_region_init(size_t tb_size, int splitwx, unsigned max_threads)
      * usable later is raising a count, not re-partitioning.
      */
     size_t initial_usable;
-
-    /* Size the buffer.  */
-    if (tb_size == 0) {
-        size_t phys_mem = qemu_get_host_physmem();
-        if (phys_mem == 0) {
-            tb_size = DEFAULT_CODE_GEN_BUFFER_SIZE;
-        } else {
-            tb_size = QEMU_ALIGN_DOWN(phys_mem / 8, page_size);
-            tb_size = MIN(DEFAULT_CODE_GEN_BUFFER_SIZE, tb_size);
-        }
-    }
-    if (tb_size < MIN_CODE_GEN_BUFFER_SIZE) {
-        tb_size = MIN_CODE_GEN_BUFFER_SIZE;
-    }
-    if (tb_size > MAX_CODE_GEN_BUFFER_SIZE) {
-        tb_size = MAX_CODE_GEN_BUFFER_SIZE;
-    }
-
-    have_prot = alloc_code_gen_buffer(tb_size, splitwx, tcg_tcti_active(), &cb,
-                                      &error_fatal);
-    assert(have_prot >= 0);
-    tcg_region_take_buffer(&cb);
 
     /*
      * What the allocator managed to prepare, now that it has run.
@@ -1452,15 +1417,6 @@ void tcg_region_init(size_t tb_size, int splitwx, unsigned max_threads)
      */
     region.after_prologue = region.start_aligned;
 
-    /* init the region struct */
-    qemu_mutex_init(&region.lock);
-
-    /*
-     * Before the ready flag below, because that is what lets the app call in
-     * from its own thread -- and every one of those calls takes this.
-     */
-    qemu_mutex_init(&tctish_cache_lock);
-
     /*
      * Set guard pages in the rw buffer, as that's the one into which
      * buffer overruns could occur.  Do not set guard pages in the rx
@@ -1504,6 +1460,515 @@ void tcg_region_init(size_t tb_size, int splitwx, unsigned max_threads)
             (void)qemu_mprotect_none(end, page_size);
         }
     }
+}
+
+/*
+ * Whether this build hands JIT pages to a debugger before they can be executed.
+ *
+ * Exactly the condition the helpers above are compiled under. TCTI never
+ * generates anything the host executes directly, so it never blesses -- which
+ * means its code buffer is usable in full from the start and has nothing to
+ * grow.
+ */
+#if !defined(CONFIG_TCG_INTERPRETER) && !defined(CONFIG_TCG_THREADED_INTERPRETER) \
+    && defined(CONFIG_DARWIN) && defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE \
+    && !TARGET_OS_SIMULATOR
+#define TCTISH_BLESSING_POSSIBLE 1
+#else
+#define TCTISH_BLESSING_POSSIBLE 0
+#endif
+
+#ifdef CONFIG_TCG_HYBRID_RUNTIME
+static void tctish_release_unused__locked(void);
+
+/*
+ * A hybrid of two backends has a code buffer for each, as each needs its own
+ * kind of memory: TCTI's holds data, the native backend's holds code the host
+ * executes (MAP_JIT, maybe split, and under TXM prepared by a debugger). Only
+ * the active one is in use; the other is parked as it was left -- mapped,
+ * partitioned, prepared as far as it was -- so that switching back maps and
+ * prepares nothing again.
+ *
+ * Each is mapped by tcg_region_hybrid_prepare() before the first switch to it,
+ * which for the native backend's is the app's to call while the guest runs:
+ * under TXM, preparing it stops the process for as long as the debugger takes,
+ * and the switch itself, with every vCPU stopped, should take milliseconds.
+ * It is partitioned at the first switch to it, and keeps that partitioning.
+ */
+typedef struct TCGHybridBuffer {
+    TCGCodeBuffer cb;       /* as mapped; .start is NULL until it is */
+    int prot;               /* what it was mapped with */
+    bool laid_out;          /* partitioned, and the fields below set */
+
+    /*
+     * Its partitioning, as region holds it while in use. The same every time,
+     * because its guard pages are where the first one put them -- and macOS
+     * will not make MAP_JIT pages that have been executable RWX a second time,
+     * so they could not be moved -- and because a buffer prepared in chunks
+     * has regions sized to fit its first one (tcg_region_layout()).
+     */
+    size_t n, size, stride, total_size, min_available;
+    void *trees;            /* region_trees, one per region, so its own */
+
+    /* tctish_ever_unprotected, for it; the rest of its state is in cb. */
+    bool ever_unprotected;
+
+    /*
+     * Emptied while parked, by tcg_region_hybrid_release_native(), and to be
+     * prepared again before it is used: see there.
+     */
+    bool released;
+} TCGHybridBuffer;
+
+static struct {
+    /*
+     * Over mapping, preparing and releasing a buffer, which the app's thread
+     * does, and switching, which safe work does and holds from preparing the
+     * buffer switched to until it is in use: a switch waits for a buffer
+     * still being prepared, and a release cannot take one from under it.
+     * Taken before tctish_cache_lock.
+     */
+    QemuMutex lock;
+    TCGHybridBuffer buf[2]; /* [tcti] */
+    size_t tb_size;
+    int splitwx;
+    unsigned max_threads;
+} tcg_region_hybrid;
+
+static void tcg_region_hybrid_init(size_t tb_size, int splitwx,
+                                   unsigned max_threads,
+                                   const TCGCodeBuffer *cb, int prot)
+{
+    qemu_mutex_init(&tcg_region_hybrid.lock);
+    tcg_region_hybrid.tb_size = tb_size;
+    tcg_region_hybrid.splitwx = splitwx;
+    tcg_region_hybrid.max_threads = max_threads;
+    tcg_region_hybrid.buf[tcg_tcti_active()] = (TCGHybridBuffer) {
+        .cb = *cb,
+        .prot = prot,
+    };
+}
+
+static void tcg_code_buffer_unmap(const TCGCodeBuffer *cb)
+{
+    munmap(cb->start, cb->size);
+    if (cb->splitwx_diff) {
+        munmap(cb->start + cb->splitwx_diff, cb->size);
+    }
+}
+
+void tcg_region_hybrid_lock(void)
+{
+    qemu_mutex_lock(&tcg_region_hybrid.lock);
+}
+
+void tcg_region_hybrid_unlock(void)
+{
+    qemu_mutex_unlock(&tcg_region_hybrid.lock);
+}
+
+#if TCTISH_BLESSING_POSSIBLE
+/*
+ * Has the debugger prepare a released native buffer again, as far as it was
+ * prepared when first mapped: everything after the first page, which held the
+ * prologue and was never emptied, up to the first chunk.
+ */
+static bool tcg_region_hybrid_reprepare(TCGHybridBuffer *b, Error **errp)
+{
+    size_t page = qemu_real_host_page_size();
+    size_t total = b->laid_out ? b->total_size : b->cb.size;
+    size_t chunk = tctish_requested_chunk();
+    size_t first = (chunk != 0 && chunk < total) ? chunk : total;
+    char *from = (char *)b->cb.start + b->cb.splitwx_diff + page;
+    void *prepared;
+
+    /* A piece that could not be kept may be purged from under it. */
+    if (b->ever_unprotected) {
+        error_setg(errp, "native code's buffer cannot be prepared again");
+        return false;
+    }
+
+    /* Trapping with nothing listening kills the process. */
+    if (!is_debugger_attached()) {
+        error_setg(errp, "no debugger is attached to prepare native code");
+        return false;
+    }
+
+    prepared = jit26_prepare_region(from, first - page);
+    jit26_detach();
+    if (prepared != from) {
+        error_setg(errp, "debugger prepared %p, not the jit region %p",
+                   prepared, from);
+        return false;
+    }
+
+    b->cb.usable_bytes = first;
+    b->released = false;
+    return true;
+}
+#endif
+
+/*
+ * Maps the code buffer for TCTI (tcti) or for native code, unless it is mapped
+ * already, or prepares it again if it was released. Returns 1 if this mapped
+ * or prepared it, 2 if there was nothing to do, or 0, with errp set, if it
+ * could not; then nothing has changed.
+ *
+ * With tcg_region_hybrid_lock() held, from any thread, while the guest runs in
+ * the buffer in use. Under TXM the native backend's buffer is prepared here,
+ * or its first chunk, as at startup: the debugger must be attached already,
+ * and everything stops while it works.
+ */
+int tcg_region_hybrid_prepare__locked(bool tcti, Error **errp)
+{
+    TCGHybridBuffer *b = &tcg_region_hybrid.buf[tcti];
+    TCGCodeBuffer cb;
+    int prot;
+
+    if (b->cb.start != NULL) {
+#if TCTISH_BLESSING_POSSIBLE
+        if (b->released) {
+            return tcg_region_hybrid_reprepare(b, errp) ? 1 : 0;
+        }
+#endif
+        return 2;
+    }
+
+    prot = alloc_code_gen_buffer(tcg_region_hybrid.tb_size,
+                                 tcti ? 0 : tcg_region_hybrid.splitwx, tcti,
+                                 &cb, errp);
+    if (prot < 0) {
+        return 0;
+    }
+
+    /*
+     * At startup a buffer no debugger prepared is left to fail where it is
+     * executed; here the guest is running in the other one, and stays there.
+     */
+    if (cb.unprepared) {
+        tcg_code_buffer_unmap(&cb);
+        error_setg(errp, "no debugger was attached to prepare native code");
+        return 0;
+    }
+
+    b->cb = cb;
+    b->prot = prot;
+    return 1;
+}
+
+int tcg_region_hybrid_prepare(bool tcti, Error **errp)
+{
+    int ret;
+
+    tcg_region_hybrid_lock();
+    ret = tcg_region_hybrid_prepare__locked(tcti, errp);
+    tcg_region_hybrid_unlock();
+    return ret;
+}
+
+/* Whether the native backend's buffer is mapped and prepared, ready to use. */
+bool tcg_region_hybrid_native_ready(void)
+{
+    TCGHybridBuffer *b = &tcg_region_hybrid.buf[0];
+    bool ready;
+
+    tcg_region_hybrid_lock();
+    ready = b->cb.start != NULL && !b->released;
+    tcg_region_hybrid_unlock();
+    return ready;
+}
+
+/*
+ * Gives the native backend's buffer back to the system while TCTI is in use,
+ * so that the guest's native code costs nothing while it is not running, and
+ * returns whether it was given back (or there was nothing to give); if not,
+ * errp says why. A refusal changes nothing; under TXM a failure part way
+ * leaves the buffer to be prepared again, as if it had all been given back.
+ *
+ * What it costs is the way back: the next switch to native code maps and
+ * prepares its buffer again, which under TXM needs the debugger, where coming
+ * back to a parked buffer does not. In tctiSH, the user's to choose.
+ *
+ *  - Under TXM, the buffer is emptied, piece by purgeable piece, as a release
+ *    of everything empties it (tctish_purgeable), and stays mapped: its
+ *    addresses keep their executability, and what was prepared is prepared
+ *    again from the same place. Its first page, with the prologue, stays.
+ *    One that could not be made purgeable is refused: releasing it would
+ *    cost its executability for good.
+ *  - Anywhere else, it is unmapped, and mapped afresh for the next switch.
+ */
+bool tcg_region_hybrid_release_native(Error **errp)
+{
+    TCGHybridBuffer *b = &tcg_region_hybrid.buf[0];
+    bool ok = true;
+
+    tcg_region_hybrid_lock();
+
+    if (!tcg_tcti_active()) {
+        error_setg(errp, "native code is in use");
+        ok = false;
+        goto out;
+    }
+    if (b->cb.start == NULL || b->released) {
+        goto out;
+    }
+
+#if TCTISH_BLESSING_POSSIBLE
+    if (jit_region_blessing_wanted()) {
+        size_t page = qemu_real_host_page_size();
+        char *rw = b->cb.start;
+        size_t start, end;
+
+        if (!b->cb.purgeable || b->ever_unprotected) {
+            error_setg(errp, "native code's buffer cannot be released and "
+                       "prepared again");
+            ok = false;
+            goto out;
+        }
+
+        /*
+         * Made non-volatile again at once, as in a release: the pages are gone
+         * either way, and a piece the kernel could purge later could not be
+         * translated into once prepared again.
+         */
+        for (size_t offset = page; offset < b->cb.size; offset = end) {
+            int state = VM_PURGABLE_EMPTY;
+
+            tctish_piece_at(offset, b->cb.size, &start, &end);
+            if (mach_vm_purgable_control(mach_task_self(),
+                                         (mach_vm_address_t)(rw + start),
+                                         VM_PURGABLE_SET_STATE,
+                                         &state) != KERN_SUCCESS) {
+                /* Nothing changed there; what was emptied is prepared again. */
+                error_setg(errp, "could not empty native code's buffer at "
+                           "%zu MiB", (size_t)(start / MiB));
+                ok = false;
+                break;
+            }
+            state = VM_PURGABLE_NONVOLATILE;
+            if (mach_vm_purgable_control(mach_task_self(),
+                                         (mach_vm_address_t)(rw + start),
+                                         VM_PURGABLE_SET_STATE,
+                                         &state) != KERN_SUCCESS) {
+                error_setg(errp, "could not keep native code's buffer at "
+                           "%zu MiB; it cannot be prepared again",
+                           (size_t)(start / MiB));
+                b->ever_unprotected = true;
+                ok = false;
+                break;
+            }
+        }
+
+        b->cb.usable_bytes = page;
+        b->released = true;
+        goto out;
+    }
+#endif
+
+    tcg_code_buffer_unmap(&b->cb);
+    if (b->laid_out) {
+        for (size_t i = 0; i < b->n; i++) {
+            struct tcg_region_tree *rt = b->trees + i * tree_size;
+
+            q_tree_destroy(rt->tree);
+            qemu_mutex_destroy(&rt->lock);
+        }
+        qemu_vfree(b->trees);
+    }
+    *b = (TCGHybridBuffer) { };
+
+out:
+    tcg_region_hybrid_unlock();
+    return ok;
+}
+
+/* Puts the buffer in use, as it is now, in its description. */
+static void tcg_region_hybrid_park(TCGHybridBuffer *b)
+{
+    b->cb.usable_bytes = tctish_usable_bytes;
+    b->cb.chunked = tctish_chunked;
+    b->cb.purgeable = tctish_purgeable;
+    b->ever_unprotected = tctish_ever_unprotected;
+
+    b->n = region.n;
+    b->size = region.size;
+    b->stride = region.stride;
+    b->total_size = region.total_size;
+    b->min_available = region.min_available;
+    b->trees = region_trees;
+    b->laid_out = true;
+}
+
+/* Makes a parked or newly mapped buffer the one in use. */
+static void tcg_region_hybrid_unpark(TCGHybridBuffer *b)
+{
+    tcg_region_take_buffer(&b->cb);
+    tctish_ever_unprotected = b->ever_unprotected;
+
+    if (!b->laid_out) {
+        tcg_region_layout(tcg_region_hybrid.tb_size,
+                          tcg_region_hybrid.max_threads, b->prot);
+        tcg_region_trees_init();
+        return;
+    }
+
+    region.n = b->n;
+    region.size = b->size;
+    region.stride = b->stride;
+    region.total_size = b->total_size;
+    region.min_available = b->min_available;
+    region.after_prologue = region.start_aligned;
+    region_trees = b->trees;
+
+    /*
+     * As far as it is prepared, which a grow, a shrink or a release while it
+     * was parked has moved. The same count tcg_region_set_usable() keeps.
+     */
+    region.available = MAX(tcg_regions_within(tctish_usable_bytes),
+                           region.min_available);
+}
+
+/*
+ * Makes the newly active backend's buffer the code buffer, and gives the
+ * initial context its first region for the prologue.
+ *
+ * Call from safe work, with tcg_region_hybrid_lock() held since the buffer
+ * was prepared (tcg_region_hybrid_prepare__locked()), every TB flushed, and
+ * tcg_hybrid_tcti already set to the backend being switched to. Its regions
+ * are handed to the vCPUs' contexts by tcg_region_reset_all() once the
+ * prologue is in.
+ */
+void tcg_region_hybrid_switch(void)
+{
+    TCGHybridBuffer *to = &tcg_region_hybrid.buf[tcg_tcti_active()];
+    TCGHybridBuffer *from = &tcg_region_hybrid.buf[!tcg_tcti_active()];
+
+    g_assert(to->cb.start != NULL && !to->released);
+
+    /*
+     * The code cache's state goes with its buffer: a grow or a shrink from
+     * the app's thread is for one or the other, never half of each.
+     */
+    qemu_mutex_lock(&tctish_cache_lock);
+
+    /*
+     * A shrink asked for since the flush is the leaving buffer's to pay, and
+     * nothing has run since the flush to make it unsafe.
+     */
+    tctish_release_unused__locked();
+    tcg_region_hybrid_park(from);
+
+    /*
+     * Leaving TCTI, its buffer's contents are dead -- every TB was just
+     * flushed -- so its pages go back to the system until it is used again.
+     * The native backend's stay: keeping it as prepared is the point of
+     * parking it, and under TXM what was executable and is released must be
+     * prepared again.
+     */
+    if (!tcg_tcti_active()) {
+        /* Region by region, while `region` still describes it. */
+#ifdef MADV_FREE_REUSABLE
+        int err = tctish_madvise_regions(0, region.total_size,
+                                         MADV_FREE_REUSABLE);
+
+        if (err != 0) {
+            warn_report("code cache: could not release TCTI's buffer: %s",
+                        strerror(err));
+        }
+#else
+        qemu_madvise(from->cb.start, from->cb.size, QEMU_MADV_DONTNEED);
+#endif
+    }
+
+    tcg_region_hybrid_unpark(to);
+
+#ifdef MADV_FREE_REUSE
+    /* Back in use, after the release when it was left; for the accounting. */
+    if (tcg_tcti_active() && to->laid_out) {
+        tctish_madvise_regions(0, region.total_size, MADV_FREE_REUSE);
+    }
+#endif
+
+    qemu_mutex_unlock(&tctish_cache_lock);
+
+    qemu_mutex_lock(&region.lock);
+    region.current = 0;
+    region.agg_size_full = 0;
+    tcg_region_initial_alloc__locked(&tcg_init_ctx);
+    qemu_mutex_unlock(&region.lock);
+}
+#endif
+
+/*
+ * Initializes region partitioning.
+ *
+ * Called at init time from the parent thread (i.e. the one calling
+ * tcg_context_init), after the target's TCG globals have been set.
+ *
+ * Region partitioning works by splitting code_gen_buffer into separate regions,
+ * and then assigning regions to TCG threads so that the threads can translate
+ * code in parallel without synchronization.
+ *
+ * In system-mode the number of TCG threads is bounded by max_threads,
+ *
+ * In user-mode we use a single region.  Having multiple regions in user-mode
+ * is not supported, because the number of vCPU threads (recall that each thread
+ * spawned by the guest corresponds to a vCPU thread) is only bounded by the
+ * OS, and usually this number is huge (tens of thousands is not uncommon).
+ * Thus, given this large bound on the number of vCPU threads and the fact
+ * that code_gen_buffer is allocated at compile-time, we cannot guarantee
+ * that the availability of at least one region per vCPU thread.
+ *
+ * However, this user-mode limitation is unlikely to be a significant problem
+ * in practice. Multi-threaded guests share most if not all of their translated
+ * code, which makes parallel code generation less appealing than in system-mode
+ */
+void tcg_region_init(size_t tb_size, int splitwx, unsigned max_threads)
+{
+    const size_t page_size = qemu_real_host_page_size();
+    TCGCodeBuffer cb = { };
+    int have_prot;
+
+    /* Size the buffer.  */
+    if (tb_size == 0) {
+        size_t phys_mem = qemu_get_host_physmem();
+        if (phys_mem == 0) {
+            tb_size = DEFAULT_CODE_GEN_BUFFER_SIZE;
+        } else {
+            tb_size = QEMU_ALIGN_DOWN(phys_mem / 8, page_size);
+            tb_size = MIN(DEFAULT_CODE_GEN_BUFFER_SIZE, tb_size);
+        }
+    }
+    if (tb_size < MIN_CODE_GEN_BUFFER_SIZE) {
+        tb_size = MIN_CODE_GEN_BUFFER_SIZE;
+    }
+    if (tb_size > MAX_CODE_GEN_BUFFER_SIZE) {
+        tb_size = MAX_CODE_GEN_BUFFER_SIZE;
+    }
+
+#ifdef CONFIG_TCG_HYBRID_RUNTIME
+    /* TCTI's buffer holds data; split-wx is for the native backend's. */
+    have_prot = alloc_code_gen_buffer(tb_size, tcg_tcti_active() ? 0 : splitwx,
+                                      tcg_tcti_active(), &cb, &error_fatal);
+    assert(have_prot >= 0);
+    tcg_region_hybrid_init(tb_size, splitwx, max_threads, &cb, have_prot);
+#else
+    have_prot = alloc_code_gen_buffer(tb_size, splitwx, tcg_tcti_active(), &cb,
+                                      &error_fatal);
+    assert(have_prot >= 0);
+#endif
+    tcg_region_take_buffer(&cb);
+
+    tcg_region_layout(tb_size, max_threads, have_prot);
+
+    /* init the region struct */
+    qemu_mutex_init(&region.lock);
+
+    /*
+     * Before the ready flag below, because that is what lets the app call in
+     * from its own thread -- and every one of those calls takes this.
+     */
+    qemu_mutex_init(&tctish_cache_lock);
 
     tcg_region_trees_init();
 
@@ -1665,22 +2130,6 @@ static size_t tcg_region_usable_end(void)
                         - (char *)region.start_aligned),
                region.total_size);
 }
-
-/*
- * Whether this build hands JIT pages to a debugger before they can be executed.
- *
- * Exactly the condition the helpers above are compiled under. TCTI never
- * generates anything the host executes directly, so it never blesses -- which
- * means its code buffer is usable in full from the start and has nothing to
- * grow.
- */
-#if !defined(CONFIG_TCG_INTERPRETER) && !defined(CONFIG_TCG_THREADED_INTERPRETER) \
-    && defined(CONFIG_DARWIN) && defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE \
-    && !TARGET_OS_SIMULATOR
-#define TCTISH_BLESSING_POSSIBLE 1
-#else
-#define TCTISH_BLESSING_POSSIBLE 0
-#endif
 
 /* How much of the code buffer exists at all, in bytes. */
 size_t tctish_code_cache_total(void)

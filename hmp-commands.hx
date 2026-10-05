@@ -423,6 +423,25 @@ SRST
   only *tag* as parameter.
 ERST
 
+#if defined(CONFIG_TCG_HYBRID_RUNTIME)
+    {
+        .name       = "tcg_switch",
+        .args_type  = "tcti:b",
+        .params     = "on|off",
+        .help       = "run translated code with TCTI (on) or as native code (off)",
+        .cmd        = hmp_tcg_switch,
+    },
+
+SRST
+``tcg_switch on|off``
+  In a QEMU built with both of TCG's AArch64 backends
+  (``--enable-tcg-hybrid=runtime``), switch the running VM between TCTI,
+  the threaded interpreter (``on``), and native code (``off``). Every
+  translation is discarded and made again by the other backend; the guest
+  carries on where it was.
+ERST
+#endif
+
     {
         .name       = "one-insn-per-tb",
         .args_type  = "option:s?",

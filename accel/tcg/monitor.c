@@ -14,6 +14,8 @@
 #include "system/tcg.h"
 #include "tcg/tcg.h"
 #include "internal-common.h"
+#include "monitor/hmp.h"
+#include "qobject/qdict.h"
 
 HumanReadableText *qmp_x_query_jit(Error **errp)
 {
@@ -35,3 +37,17 @@ static void hmp_tcg_register(void)
 }
 
 type_init(hmp_tcg_register);
+
+#ifdef CONFIG_TCG_HYBRID_RUNTIME
+void hmp_tcg_switch(Monitor *mon, const QDict *qdict)
+{
+    bool tcti = qdict_get_bool(qdict, "tcti");
+
+    /* The app's way, in safe work; a failure is reported as it happens. */
+    if (!tcg_enabled() || !tctish_backend_switch(tcti)) {
+        monitor_printf(mon, "TCG is not running\n");
+        return;
+    }
+    monitor_printf(mon, "switching to %s\n", tcti ? "TCTI" : "native code");
+}
+#endif
