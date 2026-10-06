@@ -34,6 +34,14 @@ extern TCGContext **tcg_ctxs;
 extern unsigned int tcg_cur_ctxs;
 extern unsigned int tcg_max_ctxs;
 
+/*
+ * Held to change tcg_ctxs[] or to walk it handing out regions; see
+ * tcg_register_thread(). Taken before region.lock, never after.
+ */
+void tcg_ctxs_lock(void);
+void tcg_ctxs_unlock(void);
+void tcg_region_reset_all__locked(void);
+
 #ifdef CONFIG_USER_ONLY
 #define tcg_use_softmmu false
 #else

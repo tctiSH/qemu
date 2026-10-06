@@ -1176,12 +1176,70 @@ void tcg_register_thread(void)
 {
     tcg_ctx = &tcg_init_ctx;
 }
+
+void tcg_unregister_thread(void)
+{
+}
+
+void tcg_ctxs_lock(void)
+{
+}
+
+void tcg_ctxs_unlock(void)
+{
+}
 #else
+/*
+ * Taken to change tcg_ctxs[] or which of its contexts are in use, and by
+ * anything that rewrites every context from the initial one, so that a
+ * thread copying that context cannot see it half rewritten and then publish
+ * a copy the rewrite never visited.
+ */
+static QemuMutex tcg_ctxs_mutex;
+
+/*
+ * For the walks in tcg/region.c that hand every context a region, which must
+ * not miss one registered while they run.
+ */
+void tcg_ctxs_lock(void)
+{
+    qemu_mutex_lock(&tcg_ctxs_mutex);
+}
+
+void tcg_ctxs_unlock(void)
+{
+    qemu_mutex_unlock(&tcg_ctxs_mutex);
+}
+
+/*
+ * Which entries in tcg_ctxs[] belong to a vCPU thread that has exited.
+ *
+ * A vCPU can be unplugged and another plugged in its place any number of
+ * times, but tcg_ctxs[] has room for max_cpus contexts, which used to be one
+ * per thread ever started: the (max_cpus + 1)th aborted QEMU. A context
+ * outlives its thread as it is -- in tcg_ctxs[], kept up to date with the
+ * rest, its region still counted -- and the next thread to start takes it
+ * over, so there are never more contexts than vCPUs present at once.
+ */
+static bool *tcg_ctxs_unused;
+
 void tcg_register_thread(void)
 {
-    TCGContext *s = g_malloc(sizeof(*s));
+    TCGContext *s;
     unsigned int i, n;
 
+    tcg_ctxs_lock();
+
+    for (i = 0; i < tcg_cur_ctxs; i++) {
+        if (tcg_ctxs_unused[i]) {
+            tcg_ctxs_unused[i] = false;
+            tcg_ctx = tcg_ctxs[i];
+            tcg_ctxs_unlock();
+            return;
+        }
+    }
+
+    s = g_malloc(sizeof(*s));
     *s = tcg_init_ctx;
 
     /* Relink mem_base.  */
@@ -1193,16 +1251,35 @@ void tcg_register_thread(void)
         }
     }
 
-    /* Claim an entry in tcg_ctxs */
-    n = qatomic_fetch_inc(&tcg_cur_ctxs);
+    /*
+     * Claim an entry in tcg_ctxs, filled before it is counted: the walks
+     * over the array read the count without the lock, and would otherwise
+     * find NULL in the entry just claimed.
+     */
+    n = tcg_cur_ctxs;
     g_assert(n < tcg_max_ctxs);
     qatomic_set(&tcg_ctxs[n], s);
+    qatomic_store_release(&tcg_cur_ctxs, n + 1);
 
     if (n > 0) {
         tcg_region_thread_initial_alloc(s);
     }
 
+    tcg_ctxs_unlock();
     tcg_ctx = s;
+}
+
+void tcg_unregister_thread(void)
+{
+    tcg_ctxs_lock();
+    for (unsigned int i = 0; i < tcg_cur_ctxs; i++) {
+        if (tcg_ctxs[i] == tcg_ctx) {
+            tcg_ctxs_unused[i] = true;
+            break;
+        }
+    }
+    tcg_ctxs_unlock();
+    tcg_ctx = NULL;
 }
 #endif /* !CONFIG_USER_ONLY */
 
@@ -1732,6 +1809,8 @@ static void tcg_context_init(unsigned max_threads)
 #else
     tcg_max_ctxs = max_threads;
     tcg_ctxs = g_new0(TCGContext *, max_threads);
+    tcg_ctxs_unused = g_new0(bool, max_threads);
+    qemu_mutex_init(&tcg_ctxs_mutex);
 #endif
 
     tcg_debug_assert(!tcg_regset_test_reg(s->reserved_regs, TCG_AREG0));
@@ -1875,7 +1954,6 @@ bool tcg_hybrid_switch(bool tcti, Error **errp)
 {
     TCGContext *s = &tcg_init_ctx;
     TCGContext *running = tcg_ctx;
-    unsigned int n_ctxs = qatomic_read(&tcg_cur_ctxs);
     TCGTemp *env = (void *)s + (uintptr_t)tcg_env;
     size_t env_idx = env - s->temps;
     size_t frame_idx;
@@ -1908,6 +1986,12 @@ bool tcg_hybrid_switch(bool tcti, Error **errp)
 
     /* Nothing either backend generated survives. */
     tb_flush__exclusive_or_serial();
+
+    /*
+     * Until every context is rewritten: a vCPU plugged in meanwhile copies
+     * the initial context either before it changes or after the walk below.
+     */
+    tcg_ctxs_lock();
     tcg_hybrid_tcti = tcti;
 
     /*
@@ -1934,7 +2018,7 @@ bool tcg_hybrid_switch(bool tcti, Error **errp)
 
     /* Every vCPU's context began as a copy of the initial one; update each. */
     frame_idx = s->frame_temp - s->temps;
-    for (unsigned int i = 0; i < n_ctxs; i++) {
+    for (unsigned int i = 0; i < tcg_cur_ctxs; i++) {
         TCGContext *c = qatomic_read(&tcg_ctxs[i]);
 
         c->reserved_regs = s->reserved_regs;
@@ -1945,7 +2029,8 @@ bool tcg_hybrid_switch(bool tcti, Error **errp)
     }
 
     /* And a region of the new buffer for each, after the prologue. */
-    tcg_region_reset_all();
+    tcg_region_reset_all__locked();
+    tcg_ctxs_unlock();
     return true;
 }
 #endif

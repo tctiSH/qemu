@@ -46,6 +46,14 @@ void tcg_init(size_t tb_size, int splitwx, unsigned max_threads);
 void tcg_register_thread(void);
 
 /**
+ * tcg_unregister_thread: Give this thread's TCG context up as it exits
+ *
+ * For a vCPU thread that ends while the machine runs on, as one does when its
+ * vCPU is unplugged; the next thread to register takes the context over.
+ */
+void tcg_unregister_thread(void);
+
+/**
  * tcg_prologue_init(): Generate the code for the TCG prologue
  *
  * In softmmu this is done automatically as part of the TCG

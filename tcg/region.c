@@ -655,10 +655,23 @@ void tcg_region_thread_initial_alloc(TCGContext *s)
     }
 }
 
-/* Call from a safe-work context */
+/*
+ * Call from a safe-work context. The vCPUs are stopped, but one being plugged
+ * in is not a running vCPU and can register meanwhile: under the contexts'
+ * lock, so that it either gets its region from this walk or after it, and
+ * never one the walk is about to hand to someone else.
+ */
 void tcg_region_reset_all(void)
 {
-    unsigned int n_ctxs = qatomic_read(&tcg_cur_ctxs);
+    tcg_ctxs_lock();
+    tcg_region_reset_all__locked();
+    tcg_ctxs_unlock();
+}
+
+/* As tcg_region_reset_all(), with tcg_ctxs_lock() already held. */
+void tcg_region_reset_all__locked(void)
+{
+    unsigned int n_ctxs = qatomic_load_acquire(&tcg_cur_ctxs);
     unsigned int i;
 
     qemu_mutex_lock(&region.lock);
@@ -2007,7 +2020,8 @@ void tcg_region_prologue_set(TCGContext *s)
  */
 size_t tcg_code_size(void)
 {
-    unsigned int n_ctxs = qatomic_read(&tcg_cur_ctxs);
+    /* Acquire: tcg_register_thread() fills the entry before the count. */
+    unsigned int n_ctxs = qatomic_load_acquire(&tcg_cur_ctxs);
     unsigned int i;
     size_t total;
 

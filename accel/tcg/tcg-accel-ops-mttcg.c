@@ -115,6 +115,8 @@ static void *mttcg_cpu_thread_fn(void *arg)
         }
     } while (!cpu->unplug || cpu_can_run(cpu));
 
+    /* Before the unplug can finish, so that a vCPU plugged next finds it. */
+    tcg_unregister_thread();
     tcg_cpu_destroy(cpu);
     bql_unlock();
     rcu_remove_force_rcu_notifier(&force_rcu.notifier);
