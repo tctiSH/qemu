@@ -28,6 +28,12 @@
 
 #include "qemu/osdep.h"
 #include "hw/core/boards.h"
+#include "hw/core/cpu.h"
+#include "hw/core/hotplug.h"
+#include "hw/core/qdev.h"
+#include "monitor/qdev.h"
+#include "qobject/qdict.h"
+#include "system/cpus.h"
 #include "net/net.h"
 #include "migration.h"
 #include "migration/snapshot.h"
@@ -263,6 +269,8 @@ typedef struct SaveState {
     uint32_t caps_count;
     MigrationCapability *capabilities;
     QemuUUID uuid;
+    uint64_t tctish_vcpu_slots;
+    bool tctish_vcpu_slots_loaded;
 } SaveState;
 
 static SaveState savevm_state = {
@@ -341,6 +349,7 @@ static bool configuration_pre_load(void *opaque, Error **errp)
      * minimum possible value for this CPU.
      */
     state->target_page_bits = migration_legacy_page_bits();
+    state->tctish_vcpu_slots_loaded = false;
     return true;
 }
 
@@ -377,6 +386,8 @@ static bool configuration_validate_capabilities(SaveState *state)
     return ret;
 }
 
+static bool tctish_match_vcpu_slots(uint64_t want, Error **errp);
+
 static bool configuration_post_load(void *opaque, int version_id, Error **errp)
 {
     SaveState *state = opaque;
@@ -401,6 +412,12 @@ static bool configuration_post_load(void *opaque, int version_id, Error **errp)
 
     if (!configuration_validate_capabilities(state)) {
         error_setg(errp, "Failed to validate capabilities");
+        ok = false;
+        goto out;
+    }
+
+    if (state->tctish_vcpu_slots_loaded &&
+        !tctish_match_vcpu_slots(state->tctish_vcpu_slots, errp)) {
         ok = false;
         goto out;
     }
@@ -542,6 +559,187 @@ static const VMStateDescription vmstate_uuid = {
     }
 };
 
+/*
+ * tctiSH: the vCPUs a snapshot was taken with, and a machine made to match.
+ *
+ * A snapshot holds the state of each vCPU that was present, but nothing says
+ * which ones those were, and the vCPU and APIC sections are matched by slot.
+ * Loaded into a machine with a vCPU it lacks, it fails partway, at the first
+ * section with nowhere to go; with one it doesn't have state for, it loads
+ * without a word, and that vCPU stays in reset, unknown to the guest and to
+ * ACPI hotplug. tctiSH plugs and unplugs vCPUs while the guest runs, so the
+ * vCPUs a snapshot needs are not the ones a machine starts with.
+ *
+ * So the configuration section carries which of the possible-CPU slots were
+ * filled, and once it has checked the stream is for this machine, the machine
+ * is brought to exactly those: vCPUs taken from slots the snapshot didn't
+ * have, as an ACPI eject would, and plugged into the ones it did, as
+ * device_add would. That is before any RAM or device state is loaded, though
+ * a startup -loadvm or a loadvm has already reverted the disks and reset the
+ * machine by then. Slots this machine doesn't have are refused.
+ *
+ * Sent whenever the slots fit in the mask; a stream without it, from before,
+ * loads as it always did.
+ */
+static const CPUArchIdList *tctish_vcpu_slots(void)
+{
+    MachineClass *mc = MACHINE_GET_CLASS(current_machine);
+
+    return mc->possible_cpu_arch_ids ?
+           mc->possible_cpu_arch_ids(current_machine) : NULL;
+}
+
+static bool tctish_vcpu_slots_needed(void *opaque)
+{
+    const CPUArchIdList *slots = tctish_vcpu_slots();
+
+    return slots && slots->len <= 64;
+}
+
+static bool tctish_vcpu_slots_pre_save(void *opaque, Error **errp)
+{
+    SaveState *state = opaque;
+    const CPUArchIdList *slots = tctish_vcpu_slots();
+
+    state->tctish_vcpu_slots = 0;
+    for (int i = 0; i < slots->len; i++) {
+        if (slots->cpus[i].cpu) {
+            state->tctish_vcpu_slots |= 1ULL << i;
+        }
+    }
+    return true;
+}
+
+static bool tctish_vcpu_slots_post_load(void *opaque, int version_id,
+                                        Error **errp)
+{
+    SaveState *state = opaque;
+
+    /* Acted on in configuration_post_load(), once the stream is known good. */
+    state->tctish_vcpu_slots_loaded = true;
+    return true;
+}
+
+static const VMStateDescription vmstate_tctish_vcpu_slots = {
+    .name = "configuration/tctish-vcpu-slots",
+    .version_id = 1,
+    .minimum_version_id = 1,
+    .needed = tctish_vcpu_slots_needed,
+    .pre_save_errp = tctish_vcpu_slots_pre_save,
+    .post_load_errp = tctish_vcpu_slots_post_load,
+    .fields = (const VMStateField[]) {
+        VMSTATE_UINT64(tctish_vcpu_slots, SaveState),
+        VMSTATE_END_OF_LIST()
+    }
+};
+
+/* Plugs a vCPU into @slot, as device_add would. */
+static bool tctish_plug_vcpu(const CPUArchId *slot, Error **errp)
+{
+    const CpuInstanceProperties *props = &slot->props;
+    DeviceState *dev;
+    QDict *opts = qdict_new();
+
+    qdict_put_str(opts, "driver", slot->type);
+    if (props->has_socket_id) {
+        qdict_put_int(opts, "socket-id", props->socket_id);
+    }
+    if (props->has_die_id) {
+        qdict_put_int(opts, "die-id", props->die_id);
+    }
+    if (props->has_cluster_id) {
+        qdict_put_int(opts, "cluster-id", props->cluster_id);
+    }
+    if (props->has_module_id) {
+        qdict_put_int(opts, "module-id", props->module_id);
+    }
+    if (props->has_core_id) {
+        qdict_put_int(opts, "core-id", props->core_id);
+    }
+    if (props->has_thread_id) {
+        qdict_put_int(opts, "thread-id", props->thread_id);
+    }
+
+    dev = qdev_device_add_from_qdict(opts, true, errp);
+    qobject_unref(opts);
+    if (!dev) {
+        return false;
+    }
+    object_unref(OBJECT(dev));
+    return true;
+}
+
+/* Takes the vCPU in a slot away, as an ACPI eject would. */
+static bool tctish_unplug_vcpu(CPUState *cpu, Error **errp)
+{
+    ERRP_GUARD();
+    DeviceState *dev = DEVICE(cpu);
+    HotplugHandler *ctrl = qdev_get_hotplug_handler(dev);
+
+    if (cpu == first_cpu || !ctrl) {
+        error_setg(errp, "vCPU %d cannot be taken away", cpu->cpu_index);
+        return false;
+    }
+    hotplug_handler_unplug(ctrl, dev, errp);
+    if (*errp) {
+        return false;
+    }
+    object_unparent(OBJECT(dev));
+    return true;
+}
+
+static bool tctish_match_vcpu_slots(uint64_t want, Error **errp)
+{
+    const CPUArchIdList *slots = tctish_vcpu_slots();
+    unsigned int plugged = 0, unplugged = 0;
+
+    if (!slots || slots->len > 64 || !want ||
+        (slots->len < 64 && want >> slots->len)) {
+        error_setg(errp, "the snapshot's vCPUs (slots 0x%" PRIx64 ") don't fit "
+                   "this machine's %d", want, slots ? slots->len : 0);
+        return false;
+    }
+
+    /*
+     * Taken away first, from the top, so that there are never more vCPUs than
+     * this machine has room for.
+     */
+    for (int i = slots->len - 1; i >= 0; i--) {
+        CPUState *cpu = slots->cpus[i].cpu;
+
+        if (cpu && !(want & (1ULL << i))) {
+            if (!tctish_unplug_vcpu(cpu, errp)) {
+                return false;
+            }
+            unplugged++;
+        }
+    }
+    for (int i = 0; i < slots->len; i++) {
+        if (!slots->cpus[i].cpu && (want & (1ULL << i))) {
+            if (!tctish_plug_vcpu(&slots->cpus[i], errp)) {
+                return false;
+            }
+            plugged++;
+        }
+    }
+
+    if (plugged || unplugged) {
+        info_report("matched the snapshot's vCPUs: %u plugged in, %u taken "
+                    "away", plugged, unplugged);
+    }
+
+    /*
+     * A plugged vCPU is hotplugged, so realizing it resumed it whatever the
+     * machine is doing. A fresh one would only sit halted, but the stream is
+     * about to load a running vCPU's registers into it, and it must not run
+     * them while the machine is stopped.
+     */
+    if (plugged && !runstate_is_running()) {
+        pause_all_vcpus();
+    }
+    return true;
+}
+
 static const VMStateDescription vmstate_configuration = {
     .name = "configuration",
     .version_id = 1,
@@ -558,6 +756,7 @@ static const VMStateDescription vmstate_configuration = {
         &vmstate_target_page_bits,
         &vmstate_capabilites,
         &vmstate_uuid,
+        &vmstate_tctish_vcpu_slots,
         NULL
     }
 };
