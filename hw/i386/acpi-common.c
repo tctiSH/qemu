@@ -36,15 +36,25 @@ void pc_madt_cpu_entry(int uid, const CPUArchIdList *apic_ids,
                        GArray *entry, bool force_enabled)
 {
     uint32_t apic_id = apic_ids->cpus[uid].arch_id;
-    /* Flags – Local APIC Flags */
+    /*
+     * Flags – Local APIC Flags. A CPU that is not present yet but can be
+     * plugged in is Online Capable (ACPI 6.3, MADT revision 5), never both.
+     */
     uint32_t flags = apic_ids->cpus[uid].cpu != NULL || force_enabled ?
-                     1 /* Enabled */ : 0;
+                     1 /* Enabled */ : 2 /* Online Capable */;
 
     /* ACPI spec says that LAPIC entry for non present
      * CPU may be omitted from MADT or it must be marked
      * as disabled. However omitting non present CPU from
      * MADT breaks hotplug on linux. So possible CPUs
      * should be put in MADT but kept disabled.
+     *
+     * Disabled alone is not enough for Linux on bare TCG: since 6.9 it
+     * counts an entry with neither flag as a CPU to come only when it
+     * finds a hypervisor it knows, and TCG's CPUID signature is not one of
+     * them, so the spare slots were never possible CPUs and a hot-plugged
+     * one was refused. Online Capable says so whatever the hypervisor, in
+     * a machine whose FADT is ACPI 6.3 or later.
      */
     if (apic_id < 255) {
         /* Rev 1.0b, Table 5-13 Processor Local APIC Structure */
@@ -101,7 +111,8 @@ void acpi_build_madt(GArray *table_data, BIOSLinker *linker,
     MachineClass *mc = MACHINE_GET_CLASS(x86ms);
     X86MachineClass *x86mc = X86_MACHINE_GET_CLASS(x86ms);
     const CPUArchIdList *apic_ids = mc->possible_cpu_arch_ids(MACHINE(x86ms));
-    AcpiTable table = { .sig = "APIC", .rev = 3, .oem_id = oem_id,
+    /* Revision 5, for the Online Capable flag; see pc_madt_cpu_entry(). */
+    AcpiTable table = { .sig = "APIC", .rev = 5, .oem_id = oem_id,
                         .oem_table_id = oem_table_id };
 
     acpi_table_begin(&table, table_data);

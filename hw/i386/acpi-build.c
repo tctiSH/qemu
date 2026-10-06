@@ -212,8 +212,16 @@ static void acpi_get_pm_info(MachineState *machine, AcpiPmInfo *pm)
     assert(obj);
     init_common_fadt_data(machine, obj, &pm->fadt);
     if (piix) {
-        /* w2k requires FADT(rev1) or it won't boot, keep PC compatible */
-        pm->fadt.rev = 1;
+        /*
+         * ACPI 6.3, where upstream keeps FADT(rev1) for w2k, which needs it
+         * to boot. tctiSH runs Linux only, and Linux trusts the MADT's Online
+         * Capable flag only from an ACPI 6.3 FADT on; see pc_madt_cpu_entry().
+         * Nothing else changes: the extended blocks describe the same ports,
+         * as Q35's rev 3 already does, and PIIX has no reset register or
+         * sleep registers to name.
+         */
+        pm->fadt.rev = 6;
+        pm->fadt.minor_ver = 3;
         pm->cpu_hp_io_base = PIIX4_CPU_HOTPLUG_IO_BASE;
     }
     if (lpc) {
