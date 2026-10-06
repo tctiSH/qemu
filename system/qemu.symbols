@@ -40,4 +40,7 @@
   tctish_backend_switch;
   tctish_backend_switches;
   tctish_backend_last_error;
+
+  /* The vCPU threads' QoS; see tcg/startup.h. */
+  tctish_vcpu_set_qos;
 };

@@ -53,6 +53,18 @@ void tcg_register_thread(void);
  */
 void tcg_unregister_thread(void);
 
+/*
+ * The QoS class of every vCPU thread, for tctiSH's app process, which fetches
+ * this with dlsym() from the framework. Takes a qos_class_t, and applies it to
+ * each vCPU thread from that thread, as Darwin only lets a thread set its own;
+ * a vCPU plugged in later starts in it too. QOS_CLASS_UNSPECIFIED puts each
+ * back in the class it started in. Under background QoS, Darwin keeps a thread
+ * to the efficiency cores, which is the one placement it lets an app insist
+ * on. False if there is nothing to apply it to: not Darwin, or not
+ * multi-threaded TCG, or not running yet.
+ */
+bool tctish_vcpu_set_qos(int qos_class);
+
 /**
  * tcg_prologue_init(): Generate the code for the TCG prologue
  *
