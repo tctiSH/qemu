@@ -975,10 +975,17 @@ if have_tcg
     # of dispatches: link those first, in order of use, to spare the
     # instruction cache and TLB. A name the gadgets no longer have is
     # skipped. Regenerated from a dispatch profile; see the file's history.
+    #
+    # Where those thousand start is pinned too: at a page boundary, as a
+    # dylib's first page after its header already puts them. Left to the
+    # linker, the start follows the size of whatever precedes __text, so
+    # an unrelated change moved the packed gadgets across cache lines and
+    # cost TCTI 3-4% on the Mac with no change to any of them.
     if host_os in ['darwin', 'ios']
       emulator_link_args += ['-Wl,-order_file,' +
                              (meson.current_source_dir() / 'tcg' / '@0@-tcti'.format(cpu) /
-                              'gadget-order.txt')]
+                              'gadget-order.txt'),
+                             '-Wl,-sectalign,__TEXT,__text,0x4000']
     endif
   endif
   add_project_arguments('-iquote', meson.current_source_dir() / 'tcg' / tcg_arch,
