@@ -25,6 +25,17 @@
 /* Maximum instruction code size */
 #define TARGET_MAX_INSN_SIZE 16
 
+/*
+ * tctiSH: what helper_rep_movs and helper_rep_stos leave the translated code
+ * to do: nothing more, re-execute the instruction from the main loop for the
+ * rest, or the whole instruction with its own loop.
+ */
+enum {
+    REP_BULK_DONE,
+    REP_BULK_YIELD,
+    REP_BULK_SLOW,
+};
+
 #if defined(TARGET_X86_64)
 # define TCG_PHYS_ADDR_BITS 40
 #else

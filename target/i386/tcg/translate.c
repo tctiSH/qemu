@@ -1318,6 +1318,7 @@ static void do_gen_rep(DisasContext *s, MemOp ot, TCGv dshift,
     TCGLabel *last = gen_new_label();
     TCGLabel *loop = gen_new_label();
     TCGLabel *done = gen_new_label();
+    TCGLabel *reenter = NULL;
 
     target_ulong cx_mask = MAKE_64BIT_MASK(0, 8 << s->aflag);
     TCGv cx_next = tcg_temp_new();
@@ -1354,6 +1355,35 @@ static void do_gen_rep(DisasContext *s, MemOp ot, TCGv dshift,
 
     /* Any iteration at all?  */
     tcg_gen_brcondi_tl(TCG_COND_TSTEQ, cpu_regs[R_ECX], cx_mask, done);
+
+    /*
+     * tctiSH: REP MOVS and REP STOS go to a helper that moves as much of a
+     * page as it can at a time, rather than an element per trip round the loop
+     * below; see string_helper.c. The loop stays for everything else, and for
+     * a backwards copy, which the helper hands back untouched.
+     *
+     * Only where the loop could run at all, for the same reasons; only in
+     * 64-bit code with a 64-bit address size, where no wraparound or segment
+     * limit applies and only FS and GS have a base; and not under plugins,
+     * which would not see the accesses the helper makes.
+     */
+    if (can_loop && !is_repz_nz && CODE64(s) && s->aflag == MO_64 &&
+        !s->base.plugin_enabled && (fn == gen_movs || fn == gen_stos)) {
+        TCGv_i32 next = tcg_temp_new_i32();
+
+        reenter = gen_new_label();
+        if (fn == gen_movs) {
+            int src_seg = s->override >= R_FS ? s->override : -1;
+            gen_helper_rep_movs(next, tcg_env, tcg_constant_i32(ot),
+                                tcg_constant_i32(s->mem_index),
+                                tcg_constant_i32(src_seg));
+        } else {
+            gen_helper_rep_stos(next, tcg_env, tcg_constant_i32(ot),
+                                tcg_constant_i32(s->mem_index));
+        }
+        tcg_gen_brcondi_i32(TCG_COND_EQ, next, REP_BULK_DONE, done);
+        tcg_gen_brcondi_i32(TCG_COND_EQ, next, REP_BULK_YIELD, reenter);
+    }
 
     /*
      * From now on we operate on the value of CX/ECX/RCX that will be written
@@ -1400,6 +1430,9 @@ static void do_gen_rep(DisasContext *s, MemOp ot, TCGv dshift,
      * but the last.  Set it here before giving the main loop a chance to
      * execute.  (For faults, seg_helper.c sets the flag as usual).
      */
+    if (reenter) {
+        gen_set_label(reenter);
+    }
     if (!had_rf) {
         gen_set_eflags(s, RF_MASK);
     }

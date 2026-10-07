@@ -210,3 +210,7 @@ DEF_HELPER_1(emms, void, env)
 #include "tcg/ops_sse_header.h.inc"
 
 DEF_HELPER_1(rdrand, tl, env)
+
+/* tctiSH: REP MOVS and REP STOS a page at a time; see string_helper.c. */
+DEF_HELPER_4(rep_movs, i32, env, i32, i32, s32)
+DEF_HELPER_3(rep_stos, i32, env, i32, i32)
