@@ -3089,6 +3089,17 @@ void qmp_drive_mirror(DriveMirror *arg, Error **errp)
         qdict_put_str(options, "driver", format);
     }
 
+    /*
+     * The target inherits the source's open flags above, discard=unmap
+     * among them, but detect-zeroes is a node option rather than a flag,
+     * so pass it on too. Otherwise a guest switched over to the target
+     * stops having its zero writes detected.
+     */
+    if (bs->detect_zeroes != BLOCKDEV_DETECT_ZEROES_OPTIONS_OFF) {
+        qdict_put_str(options, "detect-zeroes",
+                      BlockdevDetectZeroesOptions_str(bs->detect_zeroes));
+    }
+
     /* Mirroring takes care of copy-on-write using the source's backing
      * file.
      */
