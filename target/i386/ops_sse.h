@@ -22,6 +22,9 @@
 #include "crypto/aes-round.h"
 #include "crypto/clmul.h"
 #include "ops_sse_host.h"
+#if defined(__aarch64__) && defined(__ARM_FEATURE_CRC32)
+#include <arm_acle.h>
+#endif
 
 #if SHIFT == 0
 #define Reg MMXReg
@@ -2398,6 +2401,27 @@ void glue(helper_pcmpistrm, SUFFIX)(CPUX86State *env, Reg *d, Reg *s,
 #define CRCPOLY_BITREV 0x82f63b78
 target_ulong helper_crc32(uint32_t crc1, target_ulong msg, uint32_t len)
 {
+#if defined(__aarch64__) && defined(__ARM_FEATURE_CRC32)
+    /*
+     * tctiSH: the x86 CRC32 instruction computes CRC-32C, as AArch64's CRC32C*
+     * instructions do -- the same Castagnoli polynomial, bit-reflected, with
+     * no final inversion -- so on such a host it is a single instruction,
+     * where the loop below takes a trip per bit: 64 for CRC32 r64. Linux
+     * checksums every ext4 inode, directory block, bitmap and journal block
+     * with it.
+     */
+    switch (len) {
+    case 8:
+        return __crc32cb(crc1, msg);
+    case 16:
+        return __crc32ch(crc1, msg);
+    case 32:
+        return __crc32cw(crc1, msg);
+    case 64:
+        return __crc32cd(crc1, msg);
+    }
+#endif
+
     target_ulong crc = (msg & ((target_ulong) -1 >>
                                (TARGET_LONG_BITS - len))) ^ crc1;
 
