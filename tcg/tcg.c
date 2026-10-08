@@ -1974,7 +1974,7 @@ bool tcg_hybrid_switch(bool tcti, Error **errp)
     /*
      * The buffer switched to, mapped first, so that failing to changes
      * nothing. Normally the app has prepared it already, while the guest ran;
-     * if not, under TXM, this is where the debugger prepares it, with the
+     * if not, when blessing, this is where the debugger prepares it, with the
      * vCPUs stopped for as long as that takes. Held until it is in use, so
      * that nothing releases it in between.
      */

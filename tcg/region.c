@@ -149,7 +149,8 @@ static bool tctish_release_everything;
 /*
  * Set once any page has been dropped from read-execute to read-write.
  *
- * Under TXM that is for good. Measured on device: the executable alias of
+ * Where blessing applies that is for good. Measured on a TXM device: the
+ * executable alias of
  * those pages comes back with a maximum protection of read-write, so
  * mprotect() cannot make it executable again; and
  * the alias itself is permanent, so it cannot be replaced either -- an
@@ -161,7 +162,7 @@ static bool tctish_ever_unprotected;
 
 /*
  * Whether everything after the buffer's first page is purgeable, in pieces of
- * TCTISH_PURGEABLE_PIECE (tctish_alloc_purgeable()), under TXM only.
+ * TCTISH_PURGEABLE_PIECE (tctish_alloc_purgeable()), when blessing only.
  *
  * What makes releasing survivable there. Emptying a purgeable object discards
  * its pages however many views map them, and changes neither view's protection
@@ -191,10 +192,10 @@ static bool tctish_release_all_outstanding;
  *
  * With either flag set the machine must not run: TCG's regions still reach
  * past the boundary (region.available can't go below a region per vCPU), so
- * the first translation would land in pages that were emptied and, under TXM,
- * aren't executable. QEMU refuses `cont` and `unpark` meanwhile, rather than
- * trusting everyone who might start the machine to know. See
- * tctish_code_cache_may_run().
+ * the first translation would land in pages that were emptied and, where
+ * blessing applies, aren't executable. QEMU refuses `cont` and `unpark`
+ * meanwhile, rather than trusting everyone who might start the machine to
+ * know. See tctish_code_cache_may_run().
  */
 static bool tctish_needs_preparing;
 
@@ -785,7 +786,7 @@ typedef struct TCGCodeBuffer {
     bool chunked;
     bool purgeable;
 
-    /* Under TXM: mapped for blessing, but no debugger was there to bless it. */
+    /* Mapped for blessing, but no debugger was there to bless it. */
     bool unprepared;
 } TCGCodeBuffer;
 
@@ -939,10 +940,11 @@ extern kern_return_t mach_vm_remap(vm_map_t target_task,
  * arranges for the debugger to be attached with the script that speaks this
  * protocol. A trap with no script listening kills the process.
  *
- * The app keys this off TXM presence, matching StikJIT's own gate, so the two
- * cannot disagree. Upstream tests __builtin_available(iOS 26) here instead,
- * which answers a different question: whether the OS *might* need blessing,
- * not whether anything is listening to do it.
+ * The app asks for it on every iOS device, with TXM or without: iOS 26 will
+ * not execute a page the process wrote unless a debugger blessed it, even with
+ * a debugger attached throughout. Upstream tests __builtin_available(iOS 26)
+ * here instead, which answers a different question: whether the OS *might*
+ * need blessing, not whether anything is listening to do it.
  *
  * For a buffer of native code, which is all that is ever split, and so all the
  * split allocator below ever maps.
@@ -1070,7 +1072,7 @@ static bool tctish_alloc_purgeable(size_t size, TCGCodeBuffer *cb)
                  MAP_FIXED | MAP_PRIVATE | MAP_ANONYMOUS, VM_FLAGS_PURGABLE,
                  0) == MAP_FAILED) {
             error_report("code cache: no purgeable piece at %zu MiB (%s); "
-                         "releases under TXM will be refused or final",
+                         "releases will be refused or final",
                          (size_t)(start / MiB), strerror(errno));
             munmap(buf, size);
             return false;
@@ -1094,7 +1096,7 @@ static int alloc_code_gen_buffer_splitwx_vmremap(size_t size, TCGCodeBuffer *cb,
     int orig_prot = PROT_READ | PROT_WRITE;
 
 #if TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR
-    /* TXM requires the region to start out executable. */
+    /* Blessing needs the region to start out executable. */
     if (jit_region_blessing_wanted()) {
         orig_prot = PROT_READ | PROT_EXEC;
         cb->purgeable = tctish_alloc_purgeable(size, cb);
@@ -1228,10 +1230,10 @@ static int alloc_code_gen_buffer_splitwx(size_t size, TCGCodeBuffer *cb,
  * describes it in *cb; returns the protection it was mapped with, or -1.
  *
  * Touches nothing else -- not the region state, not tcg_splitwx_diff, not which
- * backend is active -- so it may run while another buffer is in use. On iOS
- * under TXM it also has the attached debugger prepare the buffer, or its first
- * chunk, which stops every thread in the process until the debugger is done,
- * but changes nothing they see.
+ * backend is active -- so it may run while another buffer is in use. Where
+ * blessing applies it also has the attached debugger prepare the buffer, or
+ * its first chunk, which stops every thread in the process until the debugger
+ * is done, but changes nothing they see.
  */
 static int alloc_code_gen_buffer(size_t size, int splitwx, bool tcti,
                                  TCGCodeBuffer *cb, Error **errp)
@@ -1497,14 +1499,15 @@ static void tctish_release_unused__locked(void);
 /*
  * A hybrid of two backends has a code buffer for each, as each needs its own
  * kind of memory: TCTI's holds data, the native backend's holds code the host
- * executes (MAP_JIT, maybe split, and under TXM prepared by a debugger). Only
+ * executes (MAP_JIT, maybe split, and maybe prepared by a debugger). Only
  * the active one is in use; the other is parked as it was left -- mapped,
  * partitioned, prepared as far as it was -- so that switching back maps and
  * prepares nothing again.
  *
  * Each is mapped by tcg_region_hybrid_prepare() before the first switch to it,
  * which for the native backend's is the app's to call while the guest runs:
- * under TXM, preparing it stops the process for as long as the debugger takes,
+ * where blessing applies, preparing it stops the process for as long as the
+ * debugger takes,
  * and the switch itself, with every vCPU stopped, should take milliseconds.
  * It is partitioned at the first switch to it, and keeps that partitioning.
  */
@@ -1628,7 +1631,8 @@ static bool tcg_region_hybrid_reprepare(TCGHybridBuffer *b, Error **errp)
  * could not; then nothing has changed.
  *
  * With tcg_region_hybrid_lock() held, from any thread, while the guest runs in
- * the buffer in use. Under TXM the native backend's buffer is prepared here,
+ * the buffer in use. Where blessing applies, the native backend's buffer is
+ * prepared here,
  * or its first chunk, as at startup: the debugger must be attached already,
  * and everything stops while it works.
  */
@@ -1695,19 +1699,19 @@ bool tcg_region_hybrid_native_ready(void)
  * Gives the native backend's buffer back to the system while TCTI is in use,
  * so that the guest's native code costs nothing while it is not running, and
  * returns whether it was given back (or there was nothing to give); if not,
- * errp says why. A refusal changes nothing; under TXM a failure part way
+ * errp says why. A refusal changes nothing; when blessing, a failure part way
  * leaves the buffer to be prepared again, as if it had all been given back.
  *
  * What it costs is the way back: the next switch to native code maps and
- * prepares its buffer again, which under TXM needs the debugger, where coming
- * back to a parked buffer does not. In tctiSH, the user's to choose.
+ * prepares its buffer again, which when blessing needs the debugger, where
+ * coming back to a parked buffer does not. In tctiSH, the user's to choose.
  *
- *  - Under TXM, the buffer is emptied, piece by purgeable piece, as a release
- *    of everything empties it (tctish_purgeable), and stays mapped: its
- *    addresses keep their executability, and what was prepared is prepared
- *    again from the same place. Its first page, with the prologue, stays.
- *    One that could not be made purgeable is refused: releasing it would
- *    cost its executability for good.
+ *  - When blessing, the buffer is emptied, piece by purgeable piece, as a
+ *    release of everything empties it (tctish_purgeable), and stays mapped:
+ *    its addresses keep their executability, and what was prepared is
+ *    prepared again from the same place. Its first page, with the prologue,
+ *    stays. One that could not be made purgeable is refused: releasing it
+ *    would cost its executability for good.
  *  - Anywhere else, it is unmapped, and mapped afresh for the next switch.
  */
 bool tcg_region_hybrid_release_native(Error **errp)
@@ -1875,8 +1879,8 @@ void tcg_region_hybrid_switch(void)
      * Leaving TCTI, its buffer's contents are dead -- every TB was just
      * flushed -- so its pages go back to the system until it is used again.
      * The native backend's stay: keeping it as prepared is the point of
-     * parking it, and under TXM what was executable and is released must be
-     * prepared again.
+     * parking it, and when blessing what was executable and is released must
+     * be prepared again.
      */
     if (!tcg_tcti_active()) {
         /* Region by region, while `region` still describes it. */
@@ -2404,10 +2408,10 @@ static void tctish_pay_release__locked(void)
      * through a read-execute view of them, and while it holds on to them
      * through that view the writable side's consent counts for nothing.
      *
-     * Under TXM this is one-way: those addresses can never be executed again
-     * in this process; see tctish_ever_unprotected. Growth stops here, and a
-     * release of everything is refused outright. Only reached under TXM when
-     * the buffer couldn't be made purgeable.
+     * Where blessing applies this is one-way: those addresses can never be
+     * executed again in this process; see tctish_ever_unprotected. Growth stops
+     * here, and a release of everything is refused outright. Only reached there
+     * when the buffer couldn't be made purgeable.
      */
     if (tcg_splitwx_diff != 0) {
         char *rx = rw + tcg_splitwx_diff;
@@ -2600,10 +2604,11 @@ size_t tctish_code_cache_shrink(size_t target)
  *
  * Refused wherever the buffer has an executable alias and is not purgeable.
  * Releasing through that alias costs its addresses their executability for
- * good under TXM (see tctish_ever_unprotected), and before TXM nothing puts it
- * back. A purgeable buffer is emptied instead, which touches neither alias;
- * see tctish_purgeable. So: TCTI, where nothing is executed from the buffer at
- * all, and JIT under TXM when the buffer could be made purgeable.
+ * good where blessing applies (see tctish_ever_unprotected), and elsewhere
+ * nothing puts it back. A purgeable buffer is emptied instead, which touches
+ * neither alias; see tctish_purgeable. So: TCTI, where nothing is executed
+ * from the buffer at all, and blessed JIT when the buffer could be made
+ * purgeable.
  *
  * The flush is asked for here, and runs on the vCPUs even while the machine
  * is stopped; watch tctish_code_cache_release_attempts() to see it happen.
@@ -2702,7 +2707,7 @@ size_t tctish_code_cache_grow(size_t target)
 
         /* Released pages cannot be made executable again; see the flag. */
         if (tctish_ever_unprotected) {
-            error_report("code cache: cannot grow past a release under TXM");
+            error_report("code cache: cannot grow past a release");
             goto unchanged;
         }
 

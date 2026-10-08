@@ -669,14 +669,14 @@ int tctish_code_cache_release_errno_rx(void);
  * as the library is open: before TCG is up, the ones that act refuse, and
  * is_tcti means nothing yet -- tctish_code_cache_total() is 0 until it does.
  *
- *  - prepare_native maps the native backend's code buffer, and under TXM has
- *    the attached debugger prepare it, while the guest runs on: 1 if it did,
- *    2 if that was done already, 0 if it could not be.
+ *  - prepare_native maps the native backend's code buffer, and when blessing
+ *    has the attached debugger prepare it, while the guest runs on: 1 if it
+ *    did, 2 if that was done already, 0 if it could not be.
  *  - native_ready says whether that buffer is mapped and prepared, so that a
  *    switch to native code needs no debugger.
  *  - release_native gives the native backend's buffer back while TCTI is
  *    in use, so that the next prepare_native maps and prepares it again --
- *    under TXM, with the debugger -- rather than finding it parked as it
+ *    when blessing, with the debugger -- rather than finding it parked as it
  *    was left. False if it could not, or native code is in use.
  *  - switch asks for a switch, which happens in safe work, preparing first
  *    if prepare_native has not. Watch switches() move, then read is_tcti()

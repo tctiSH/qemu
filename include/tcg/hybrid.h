@@ -20,10 +20,10 @@ extern bool tcg_hybrid_tcti;
 #define tcg_tcti_active()  (tcg_hybrid_tcti)
 
 /*
- * Map, and under TXM prepare, the code buffer for TCTI or native code, ahead
- * of a switch to it; from any thread. 1 if done now, 2 if already, 0 if it
- * could not be. The __locked form is for a switch, which holds the lock from
- * preparing to the buffer being in use. See region.c.
+ * Map, and when blessing prepare, the code buffer for TCTI or native code,
+ * ahead of a switch to it; from any thread. 1 if done now, 2 if already, 0 if
+ * it could not be. The __locked form is for a switch, which holds the lock
+ * from preparing to the buffer being in use. See region.c.
  */
 void tcg_region_hybrid_lock(void);
 void tcg_region_hybrid_unlock(void);
