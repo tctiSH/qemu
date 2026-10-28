@@ -15,6 +15,7 @@ _gadget_st_i64_imm_arg8_arg14_arg32
 _gadget_ext32u_i64_arg8_arg8
 _gadget_st_i64_imm_arg8_arg14_arg0
 _gadget_call_env0
+_gadget_lookup_tb
 _gadget_ld_addi_env_arg9_arg8
 _gadget_addi_i64_arg9_arg9
 _gadget_mov_i64_arg9_arg8

@@ -11,6 +11,8 @@
 
 #include "qemu/osdep.h"
 #include "hw/core/cpu.h"
+#include "exec/translation-block.h"
+#include "tcg/lookup-key.h"
 
 /*
  * The offset from env of the CPUTLBDescFast for mmu_idx: what
@@ -59,5 +61,25 @@ QEMU_BUILD_BUG_ON(offsetof(CPUTLBDescFast, table) != 8);
 QEMU_BUILD_BUG_ON(sizeof_field(CPUTLBEntry, addr_read) != 8);
 QEMU_BUILD_BUG_ON(sizeof_field(CPUTLBEntry, addr_write) != 8);
 QEMU_BUILD_BUG_ON(sizeof_field(CPUTLBEntry, addend) != 8);
+
+/*
+ * The lookup_tb gadget's constants: a TCGLookupKey field's offset, which it
+ * loads in pairs; tb_jmp_cache_hash_func() for 4 KiB pages; and the
+ * TranslationBlock fields it compares, flags and cflags in one LDP.
+ */
+#define TCTI_LK(field) ((int)offsetof(TCGLookupKey, field))
+#define TCTI_LK_HASH_SHIFT (TCG_LOOKUP_PAGE_BITS - TCG_LOOKUP_JC_BITS / 2)
+#define TCTI_LK_PAGE_MASK                                               \
+    ((1 << TCG_LOOKUP_JC_BITS) - (1 << (TCG_LOOKUP_JC_BITS / 2)))
+#define TCTI_LK_ADDR_MASK ((1 << (TCG_LOOKUP_JC_BITS / 2)) - 1)
+
+QEMU_BUILD_BUG_ON(TCTI_LK(extra_ofs) != TCTI_LK(flags_ofs) + 8);
+QEMU_BUILD_BUG_ON(TCTI_LK(mode) != TCTI_LK(extra_mask) + 8);
+QEMU_BUILD_BUG_ON(TCTI_LK(cflags_ofs) != TCTI_LK(pc_ofs) + 8);
+QEMU_BUILD_BUG_ON(TCTI_LK(bp_ofs) != TCTI_LK(sstep_ofs) + 8);
+QEMU_BUILD_BUG_ON(TCTI_LK(loglevel) != TCTI_LK(one_insn_per_tb) + 8);
+QEMU_BUILD_BUG_ON(offsetof(TranslationBlock, cflags) !=
+                  offsetof(TranslationBlock, flags) + 4);
+QEMU_BUILD_BUG_ON(sizeof_field(TranslationBlock, cs_base) != 8);
 
 #endif /* TCTI_GADGET_DEFS_H */

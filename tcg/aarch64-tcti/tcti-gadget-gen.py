@@ -676,6 +676,104 @@ for n in range(8):
         "mov x0, x27"
     )
 
+# helper_lookup_tb_ptr(env)'s common case, done here (include/tcg/lookup-key.h):
+# the target's state from env, the two ways of the jump cache, and on a hit
+# can_do_io set and the TB's code in x0, as the helper returns it. Anything
+# the helper would treat otherwise -- one_insn_per_tb, a log bit,
+# single-stepping, a breakpoint, a mode the key does not describe -- and a
+# miss call it. The stream holds the helper, then the key's address.
+def lookup_way(fail):
+    """ The lines that check the jump cache entry at x3 against the state
+    (flags w1, pc x4, cflags w5), leaving its TB in x2. """
+    return [
+        "ldp x2, x0, [x3]",
+        f"cbz x2, {fail}",
+        "cmp x0, x4",
+        f"b.ne {fail}",
+        "ldr x0, [x2, %[tb_cs_base]]",
+        f"cbnz x0, {fail}",
+        "ldp w0, w3, [x2, %[tb_flags]]",
+        "cmp w0, w1",
+        "ccmp w3, w5, #0, eq",
+        f"b.ne {fail}",
+    ]
+
+simple("lookup_tb",
+    "ldp x27, x16, [x28], #16",
+    # What curr_cflags() and check_for_breakpoints() look at.
+    "ldp x1, x2, [x16, %[lk_one]]",
+    "ldrb w1, [x1]",
+    "ldr w2, [x2]",
+    "ldr x3, [x16, %[lk_logmask]]",
+    "tst w2, w3",
+    "ccmp w1, #0, #0, eq",
+    "b.ne 9f",
+    "ldp x1, x2, [x16, %[lk_sstep]]",
+    "ldr w1, [x14, x1]",
+    "ldr x2, [x14, x2]",
+    "tst w1, #1",
+    "ccmp x2, #0, #0, eq",
+    "b.ne 9f",
+    # The state: flags, pc and cflags.
+    "ldp x1, x2, [x16, %[lk_flags]]",
+    "ldp x3, x4, [x16, %[lk_masks]]",
+    "ldr w1, [x14, x1]",
+    "ldr w2, [x14, x2]",
+    "tst w1, w4",
+    "b.eq 9f",
+    "and w2, w2, w3",
+    "orr w1, w1, w2",
+    "ldp x4, x5, [x16, %[lk_pc]]",
+    "ldr x4, [x14, x4]",
+    "ldr w5, [x14, x5]",
+    # The entry, as tb_jmp_cache_hash_func() finds it, and its partner.
+    "ldr x6, [x16, %[lk_jc]]",
+    "ldr x6, [x14, x6]",
+    "eor x7, x4, x4, lsr #%[shift]",
+    "lsr x2, x7, #%[shift]",
+    "and x2, x2, #%[page_mask]",
+    "and x7, x7, #%[addr_mask]",
+    "orr x7, x2, x7",
+    "add x6, x6, #%[jc_array]",
+    "add x3, x6, x7, lsl #4",
+    *lookup_way("1f"),
+    "b 2f",
+    "1:",
+    "eor x7, x7, #1",
+    "add x3, x6, x7, lsl #4",
+    *lookup_way("9f"),
+    "2:",
+    "ldr x3, [x16, %[lk_io]]",
+    "mov w0, #1",
+    "strb w0, [x14, x3]",
+    "ldr x0, [x2, %[tb_tc_ptr]]",
+    *EPILOGUE,
+    "9:",
+    "mov x0, x14",
+    "str x28, [x25]",
+    *C_CALL_PROLOGUE,
+    "blr x27",
+    "mov x27, x0",
+    *C_CALL_EPILOGUE,
+    "mov x0, x27",
+    operands=", ".join([
+        '[lk_flags] "i" (TCTI_LK(flags_ofs))',
+        '[lk_masks] "i" (TCTI_LK(extra_mask))',
+        '[lk_pc] "i" (TCTI_LK(pc_ofs))',
+        '[lk_jc] "i" (TCTI_LK(jc_ofs))',
+        '[lk_sstep] "i" (TCTI_LK(sstep_ofs))',
+        '[lk_io] "i" (TCTI_LK(io_ofs))',
+        '[lk_one] "i" (TCTI_LK(one_insn_per_tb))',
+        '[lk_logmask] "i" (TCTI_LK(log_mask))',
+        '[shift] "i" (TCTI_LK_HASH_SHIFT)',
+        '[page_mask] "i" (TCTI_LK_PAGE_MASK)',
+        '[addr_mask] "i" (TCTI_LK_ADDR_MASK)',
+        '[jc_array] "i" (TCG_LOOKUP_JC_ARRAY_OFS)',
+        '[tb_cs_base] "i" (offsetof(TranslationBlock, cs_base))',
+        '[tb_flags] "i" (offsetof(TranslationBlock, flags))',
+        '[tb_tc_ptr] "i" (offsetof(TranslationBlock, tc.ptr))',
+    ]))
+
 # The inline float fast path (tcg/tcg-inline-fp.h): a registered SSE float
 # helper's operation done here on NEON, under the conditions that make it
 # exactly the helper's, and the call otherwise. The "_env" forms compute the

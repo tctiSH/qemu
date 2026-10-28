@@ -42,6 +42,9 @@
 #include "tcg/tcg-inline-fp.h"
 #include "tcti-gadget-defs.h"
 
+/* The helper the lookup_tb gadget stands in for (accel/tcg/tcg-runtime.h). */
+const void *helper_lookup_tb_ptr(CPUArchState *env);
+
 /* Grab our gadget headers. */
 #include "tcti_gadgets.h"
 
@@ -829,6 +832,24 @@ static void tcg_out_call(TCGContext *s, const tcg_insn_unit *func,
     if (first >= 0 &&
         tcti_label_within(s, tcti_env_args.e[first].start, s->code_ptr)) {
         first = -1;
+    }
+
+    /*
+     * helper_lookup_tb_ptr(env): the lookup_tb gadget does its common case
+     * itself (include/tcg/lookup-key.h), and calls it for the rest. It takes
+     * env from x14, so the gadget that set R0 to env goes. The key's hash is
+     * for 4 KiB guest pages; a target that does not describe its state
+     * leaves pc_ofs 0.
+     */
+    if (func == (const void *)helper_lookup_tb_ptr &&
+        tcg_lookup_key.pc_ofs && TARGET_PAGE_BITS == TCG_LOOKUP_PAGE_BITS) {
+        if (first >= 0 && top == 0 && offset[0] == 0) {
+            tcti_rewind(s, tcti_env_args.e[first].start);
+        }
+        tcg_out_gadget(s, gadget_lookup_tb);
+        tcg_out64(s, (uintptr_t)func);
+        tcg_out64(s, (uintptr_t)&tcg_lookup_key);
+        return;
     }
 
     /*

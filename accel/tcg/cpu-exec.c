@@ -72,6 +72,7 @@ static inline TCGTBCPUState tb_cpu_state(CPUState *cpu)
 #include "tb-context.h"
 #include "tb-internal.h"
 #include "internal-common.h"
+#include "tcg/lookup-key.h"
 #if !defined(CONFIG_USER_ONLY)
 #include "accel/tcg/iommu.h"
 #endif
@@ -407,6 +408,33 @@ static inline bool check_for_breakpoints(CPUState *cpu, vaddr pc,
     return unlikely(!QTAILQ_EMPTY(&cpu->breakpoints)) &&
         check_for_breakpoints_slow(cpu, pc, cflags);
 }
+
+/*
+ * What helper_lookup_tb_ptr() does in its common case, as data, for a back
+ * end that does it itself (include/tcg/lookup-key.h). The target sets its
+ * part; the rest is here, beside what it describes.
+ */
+TCGLookupKey tcg_lookup_key = {
+    .cflags_ofs = offsetof(CPUState, tcg_cflags) - sizeof(CPUState),
+    .jc_ofs = offsetof(CPUState, tb_jmp_cache) - sizeof(CPUState),
+    .sstep_ofs = offsetof(CPUState, singlestep_flags) - sizeof(CPUState),
+    .bp_ofs = offsetof(CPUState, breakpoints.tqh_first) - sizeof(CPUState),
+    .io_ofs = offsetof(CPUState, neg.can_do_io) - sizeof(CPUState),
+    .one_insn_per_tb = &one_insn_per_tb,
+    .loglevel = &qemu_loglevel,
+    .log_mask = CPU_LOG_TB_NOCHAIN | CPU_LOG_TB_CPU | CPU_LOG_EXEC,
+};
+
+/* The shape of the jump cache, and the hash, that the key's users assume. */
+QEMU_BUILD_BUG_ON(TB_JMP_CACHE_BITS != TCG_LOOKUP_JC_BITS);
+QEMU_BUILD_BUG_ON(offsetof(CPUJumpCache, array) != TCG_LOOKUP_JC_ARRAY_OFS);
+QEMU_BUILD_BUG_ON(sizeof(((CPUJumpCache *)0)->array[0]) != 16);
+QEMU_BUILD_BUG_ON(offsetof(CPUJumpCache, array[0].pc) !=
+                  TCG_LOOKUP_JC_ARRAY_OFS + 8);
+QEMU_BUILD_BUG_ON(sizeof_field(CPUState, tcg_cflags) != 4);
+QEMU_BUILD_BUG_ON(sizeof_field(CPUState, singlestep_flags) != 4);
+QEMU_BUILD_BUG_ON(SSTEP_ENABLE != 1);
+QEMU_BUILD_BUG_ON(sizeof_field(CPUState, neg.can_do_io) != 1);
 
 /**
  * helper_lookup_tb_ptr: quick check for next tb

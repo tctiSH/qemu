@@ -13,7 +13,8 @@
 /*
  * What x86_get_tb_cpu_state() returns, for callers that can see CPUX86State:
  * accel/tcg/cpu-exec.c when it is compiled for this target, where it runs on
- * every TB lookup. See the comment there.
+ * every TB lookup. See the comment there. tcg_x86_init() describes its
+ * 64-bit case in tcg_lookup_key, for TCTI's lookup gadget: change both.
  */
 static inline TCGTBCPUState x86_tb_cpu_state(CPUState *cs)
 {
