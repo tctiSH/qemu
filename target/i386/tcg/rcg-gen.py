@@ -188,15 +188,24 @@ EXTEND_OPS = (
 
 
 class Unary:
-    """ NOT and NEG: dest = op dest. NEG leaves CC_OP_SUB as gen_NEG does,
-    with cc_srcT 0; NOT leaves the flags alone. """
+    """ NOT, NEG, INC and DEC: dest = op dest, a64 being the AArch64
+    instruction that computes {r} from {a}. NEG leaves CC_OP_SUB as gen_NEG
+    does, with cc_srcT 0; NOT leaves the flags alone. INC and DEC leave
+    CC_OP_INC and CC_OP_DEC with cc_dst the result, and keep CF, which
+    gen_INC and gen_DEC put in cc_src: see Spec.cf. """
 
-    def __init__(self, name, cc):
+    def __init__(self, name, a64, cc):
         self.name = name
+        self.a64 = a64
         self.cc = cc
 
 
-UNARY_OPS = (Unary("not", None), Unary("neg", "SUB"))
+UNARY_OPS = (
+    Unary("not", "mvn {r}, {a}",     None),
+    Unary("neg", "neg {r}, {a}",     "SUB"),
+    Unary("inc", "add {r}, {a}, #1", "INC"),
+    Unary("dec", "sub {r}, {a}, #1", "DEC"),
+)
 
 
 class Shift:
@@ -564,19 +573,35 @@ class Spec:
         return words
 
     @property
+    def cf(self):
+        """ Where the translator puts CF from before the instruction, which
+        it takes from the flags state and a gadget cannot, as RCG_CF_<this>:
+        "SRC2" before the gadget, which reads it (ADC and SBB, as gen_ADC
+        and gen_SBB leave it); "SRC" after the gadget, which leaves cc_src
+        alone (INC and DEC, which keep it, as gen_INC and gen_DEC do); or
+        "NONE". """
+        if self.kind == "alu" and self.op.cc in ("ADC", "SBB"):
+            return "SRC2"
+        if self.kind == "unary" and self.op.cc in ("INC", "DEC"):
+            return "SRC"
+        return "NONE"
+
+    @property
     def cc_writes(self):
         """ Which of cc_dst, cc_src and cc_src2 the gadget writes, as TCG's
         decode.cc_dst, cc_src and cc_src2 say for the instruction, except
-        that the translator writes ADC's and SBB's cc_src2 before the
-        gadget. After a "SUB" one, the translator must also keep cc_srcT =
-        cc_dst + cc_src, the original first operand, as TCG's gen_SUB does
-        (0 after NEG, which is the same sum). """
+        for what cf says the translator writes. After a "SUB" one, the
+        translator must also keep cc_srcT = cc_dst + cc_src, the original
+        first operand, as TCG's gen_SUB does (0 after NEG, which is the same
+        sum). """
         if self.kind == "zero":
             return ("cc_src",)
         if self.kind == "alu":
             if self.op.cc == "LOGIC":
                 return ("cc_dst",)
             return ("cc_dst", "cc_src")
+        if self.cf == "SRC":
+            return ("cc_dst",)
         if (self.kind in ("unary", "shift") and self.op.cc or
                 self.kind in ("mul", "imul3")):
             return ("cc_dst", "cc_src")
@@ -1188,7 +1213,7 @@ def alu_body(g, spec):
     g.emit(f"{op.a64} {R}, {A}, {B}")
     # ADC and SBB then add or subtract CF, which the translator has put in
     # cc_src2.
-    if op.cc in ("ADC", "SBB"):
+    if spec.cf == "SRC2":
         g.emit(f"ldr {T}, [{g.env}, %[cc_src2]]",
                f"{op.a64} {R}, {R}, {T}")
     g.define(R)
@@ -1371,21 +1396,23 @@ def extend_body(g, spec):
 
 
 def unary_body(g, spec):
-    # gen_NOT and gen_NEG: on the whole register, written at the operand
-    # size.
+    # gen_NOT, gen_NEG, gen_INC and gen_DEC: on the whole register, written
+    # at the operand size. INC's and DEC's cc_src is the translator's.
     op, width = spec.op, spec.width
     if spec.form == "m":
         g.ea(ADDR)
         g.load(A, ADDR, width)
     else:
         g.read_reg(A, "d")
-    g.emit(f"{'mvn' if op.name == 'not' else 'neg'} {R}, {A}")
+    g.emit(op.a64.format(r=R, a=A))
     g.define(R)
     if spec.form == "m":
         g.store(R, ADDR, width)
     else:
         g.write_reg(R, "d", width)
-    if op.cc:
+    if spec.cf == "SRC":
+        g.write_cc(dst=R)
+    elif op.cc:
         g.write_cc(dst=R, src=A)
 
 
@@ -1840,10 +1867,10 @@ class TctiHarness(Harness):
 # The ops and forms as the translator names them, in the table's order.
 OP_NAMES = ("add", "sub", "and", "or", "xor", "cmp", "test", "adc", "sbb",
             "zero", "mov", "lea", "push", "pop", "movzxb", "movzxw", "movsxb",
-            "movsxw", "movsxd", "not", "neg", "shl", "shr", "sar", "ror",
-            "mul", "imul", "imul3", "bt", "bts", "btr", "btc", "cbw", "cwd",
-            "xchg", "leave", "call", "jmp", "ret", "movdqa", "movdqu", "movsd",
-            "movss")
+            "movsxw", "movsxd", "not", "neg", "inc", "dec", "shl", "shr",
+            "sar", "ror", "mul", "imul", "imul3", "bt", "bts", "btr", "btc",
+            "cbw", "cwd", "xchg", "leave", "call", "jmp", "ret", "movdqa",
+            "movdqu", "movsd", "movss")
 FORM_NAMES = ("rr", "rm", "mr", "ri", "mi", "r", "i", "m", "rri", "rmi",
               "xx", "xm", "mx")
 KIND_NAMES = ("alu", "zero", "mov", "lea", "push", "pop", "extend", "unary",
@@ -2065,6 +2092,12 @@ def write_table(all_specs, out):
     p("    RCG_SRCT_SUM,   /* cc_dst + cc_src, the original first operand */")
     p("    RCG_SRCT_ZERO,")
     p("};\n")
+    p("/* Where the translator puts CF from before an op. */")
+    p("typedef enum RCGCF {")
+    p("    RCG_CF_NONE,")
+    p("    RCG_CF_SRC2,    /* cc_src2, before: ADC and SBB read it there */")
+    p("    RCG_CF_SRC,     /* cc_src, after: INC and DEC keep it there */")
+    p("} RCGCF;\n")
     p("/*")
     p(" * What the translator needs to know of an op. stack: it moves RSP.")
     p(" * branch: it ends the TB. Its gadget sets eip, except CALL rel's,")
@@ -2077,7 +2110,8 @@ def write_table(all_specs, out):
     p(" * translator records CC_OP_DYNAMIC instead, and after BT, which keeps")
     p(" * cc_dst, it adds the earlier state's MemOp. srcT: what the")
     p(" * translator puts in cc_srcT after it, as gen_SUB and gen_NEG do. dst,")
-    p(" * src: whether it writes cc_dst and cc_src.")
+    p(" * src: whether it writes cc_dst and cc_src. cf: where the translator")
+    p(" * puts CF from before it.")
     p(" */")
     p("typedef struct RCGFacts {")
     p("    RCGKind kind;")
@@ -2087,6 +2121,7 @@ def write_table(all_specs, out):
     p("    bool by_width;")
     p("    uint8_t srcT;")
     p("    bool dst, src;")
+    p("    RCGCF cf;")
     p("} RCGFacts;\n")
 
     for spec in all_specs:
@@ -2138,7 +2173,8 @@ def write_table(all_specs, out):
         elif spec.kind == "zero":
             flags = ["CC_OP_EFLAGS", False, "RCG_SRCT_NONE"]
         elif spec.kind == "unary" and spec.op.cc:
-            flags = [f"CC_OP_{spec.op.cc}B", True, "RCG_SRCT_ZERO"]
+            flags = [f"CC_OP_{spec.op.cc}B", True,
+                     "RCG_SRCT_NONE" if spec.cf == "SRC" else "RCG_SRCT_ZERO"]
         elif spec.kind == "shift" and spec.op.cc:
             flags = [f"CC_OP_{spec.op.cc}B", True, "RCG_SRCT_NONE"]
         elif spec.kind in ("mul", "imul3"):
@@ -2148,13 +2184,14 @@ def write_table(all_specs, out):
             flags = ["CC_OP_SARB", False, "RCG_SRCT_NONE"]
         else:
             flags = [-1, False, "RCG_SRCT_NONE"]
-        flags += ["cc_dst" in spec.cc_writes, "cc_src" in spec.cc_writes]
+        flags += ["cc_dst" in spec.cc_writes, "cc_src" in spec.cc_writes,
+                  f"RCG_CF_{spec.cf}"]
         facts = [f"RCG_KIND_{spec.kind.upper()}",
                  spec.kind in ("push", "pop", "call", "ret", "leave"),
                  spec.kind in ("call", "jmp", "ret"),
                  MO[spec.op.src] if spec.kind == "extend" else -1] + flags
         fields = ("kind", "stack", "branch", "src_ot", "cc_op", "by_width",
-                  "srcT", "dst", "src")
+                  "srcT", "dst", "src", "cf")
         p(f"    [RCG_OP_{name.upper()}] = {{")
         for k, f in zip(fields, facts):
             p(f"        .{k} = " +
@@ -3067,26 +3104,34 @@ def bt_cases(op, width):
 
 
 def carry_cases():
-    """ ADC and SBB with CF from each lazy-flags state of
+    """ ADC, SBB, INC and DEC with CF from each lazy-flags state of
     flag_setters(), from SHL, MUL, ADC and SBB, and from CLC, STC, CMC and
     SAHF, which stay with TCG. A memory form follows ADC, whose state uses
-    cc_src2, and CMP, whose state does not; after ADC it stays with TCG,
-    as the translator writes cc_src2 before a gadget that may fault.
-    alu_cases() covers the forms themselves. """
+    cc_src2, and CMP, whose state does not; after ADC, ADC and SBB stay with
+    TCG, as the translator writes cc_src2 before a gadget that may fault.
+    INC and DEC also follow a shift by CL, whose state only env has, and
+    SBB of a register from itself, each state gen_compute_eflags_c() handles
+    its own way. alu_cases() and unary_cases() cover the forms themselves. """
     text, base, _, bv, _ = memory_operand(64, "b", None)
-    for name in ("adc", "sbb"):
+    for name in ("adc", "sbb", "inc", "dec"):
+        unary = name in ("inc", "dec")
         for width in (8, 64):
             ra, rb = reg_name(0, width), reg_name(3, width)
+            insn = f"{name} {rb}" if unary else f"{name} {rb}, {ra}"
             setters = [s[0] for s in flag_setters(width).values()]
             setters += [f"shl {ra}, 1", f"mul {rb}", f"adc {ra}, {rb}",
                         f"sbb {ra}, {rb}"]
+            if unary:
+                setters += [f"shl {ra}, cl", f"sbb {ra}, {ra}"]
             for setter in setters:
-                yield Case(f"{setter}; {name} {rb}, {ra}", width, a=0, b=3)
+                yield Case(f"{setter}; {insn}", width, a=0, b=3)
         for flag in ("clc", "stc", "cmc", "mov ah, 0xd5; sahf"):
-            yield Case(f"{flag}; {name} rbx, rax", 64, a=0, b=3)
+            insn = f"{name} rbx" if unary else f"{name} rbx, rax"
+            yield Case(f"{flag}; {insn}", 64, a=0, b=3)
         for setter in ("adc rax, rcx", "cmp rax, rcx"):
-            yield Case(f"{setter}; {name} rdx, {text}", 64, a=0, mem=True,
-                       base=base, base_value=bv)
+            insn = f"{name} {text}" if unary else f"{name} rdx, {text}"
+            yield Case(f"{setter}; {insn}", 64, a=0, mem=True, base=base,
+                       base_value=bv, writes=unary)
 
 
 def move_cases():
