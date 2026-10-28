@@ -228,8 +228,9 @@ def cc_name(cls, width):
 class CondSpec:
     """ One gadget that reads a condition from the lazy-flags state cls at
     width, left by an instruction before it in the TB: kind "jcc" (stores
-    CC_OP, then branches), "setcc" (an 8-bit register) or "cmov" (register
-    to register at width cmov_width). """
+    CC_OP, then branches), "jccgoto" (the same, then the jump either way
+    as TCTI's addi_env_goto_tb makes it), "setcc" (an 8-bit register) or
+    "cmov" (register to register at width cmov_width). """
 
     def __init__(self, kind, cls, cc_width, cond, cmov_width=None):
         self.kind = kind
@@ -251,7 +252,7 @@ class CondSpec:
 
     @property
     def words(self):
-        if self.kind == "jcc":
+        if self.kind in ("jcc", "jccgoto"):
             return ["ccop"]
         if self.kind == "setcc":
             return ["d"]
@@ -265,6 +266,7 @@ def cond_specs():
             if cond >> 1 == 5 and cls != "eflags":
                 continue
             yield CondSpec("jcc", cls, width, cond)
+            yield CondSpec("jccgoto", cls, width, cond)
             yield CondSpec("setcc", cls, width, cond)
             for cmov_width in CMOV_WIDTHS:
                 yield CondSpec("cmov", cls, width, cond, cmov_width)
@@ -537,6 +539,12 @@ class Harness:
         the host's condition arm holds. """
         raise NotImplementedError
 
+    def jumps(self, arm):
+        """ The lines on the way through and the slow-path lines of a branch
+        if arm holds that also makes the jump to the next TB each way, for
+        jccgoto (see tcg_gen_rich_br()). """
+        raise NotImplementedError
+
     def assemble(self, words, hot, cold):
         """ The whole gadget, from the words' registers, the body's lines on
         the way through and its slow paths. """
@@ -798,6 +806,12 @@ class Body:
         """ The harness's branch to the gadget's target if arm holds. """
         self.emit(*self.h.branch(arm))
 
+    def jumps(self, arm):
+        """ The harness's branch if arm holds, then the jump each way. """
+        hot, cold = self.h.jumps(arm)
+        self.emit(*hot)
+        self.cold += cold
+
     def write_cc(self, dst=None, src=None):
         """ The lazy-flags state: cc_dst and cc_src, whichever are given, from
         registers. """
@@ -1036,6 +1050,13 @@ def jcc_body(g, spec):
     g.branch(g.cond(spec.cls, spec.cc_width, spec.cond))
 
 
+def jccgoto_body(g, spec):
+    # jcc_body's work, then the jump to the next TB that each way starts
+    # with, in the same dispatch.
+    g.emit(f"str {w(g.word('ccop'))}, [{g.env}, %[cc_op]]")
+    g.jumps(g.cond(spec.cls, spec.cc_width, spec.cond))
+
+
 def setcc_body(g, spec):
     # gen_SETcc to a register.
     arm = g.cond(spec.cls, spec.cc_width, spec.cond)
@@ -1056,6 +1077,7 @@ def cmov_body(g, spec):
 
 BODIES = {
     "jcc": jcc_body,
+    "jccgoto": jccgoto_body,
     "setcc": setcc_body,
     "cmov": cmov_body,
     "extend": extend_body,
@@ -1077,7 +1099,7 @@ BODIES = {
 # tcti_memory.tlb_operands()), with two changes: the CPUTLBDescFast's offset
 # is a word instead, and the comparator is two operands, one to read and one
 # to write, as a gadget may do both. Then come those the bodies use
-# directly.
+# directly, and the exit request's offset for TctiHarness.jumps().
 BODY_OPERANDS = {
     "tlb_shift": "TCTI_TLB_INDEX_SHIFT",
     "tlb_cmp_read": "offsetof(CPUTLBEntry, addr_read)",
@@ -1097,6 +1119,7 @@ BODY_OPERANDS = {
     "eflags_3": "CC_Z | CC_C",
     "eflags_4": "CC_S",
     "eflags_5": "CC_P",
+    "exit_ofs": "TCTI_EXIT_REQUEST_OFS",
 }
 
 # What the bodies take for granted of QEMU's definitions, beyond what their
@@ -1123,6 +1146,9 @@ class CheckHarness(Harness):
 
     def branch(self, arm):
         return [f"// branch if {arm}"]
+
+    def jumps(self, arm):
+        return [f"// jumps if {arm}"], []
 
 
 def check():
@@ -1183,6 +1209,33 @@ class TctiHarness(Harness):
         return ["ldr x27, [x28], #8", f"b.{ARM_INVERT[arm]} 1f",
                 "mov x28, x27", "1:"]
 
+    def jumps(self, arm):
+        # tcti_join_rich_br() swaps this gadget in for the jcc gadget when
+        # the code at the target and the code after the target word in the
+        # stream both start with an addi_env_goto_tb gadget. This one skips
+        # that gadget's address and does its work for the way it goes, and
+        # each way leaves by a separate branch.
+        hot = ["ldr x27, [x28], #8", f"b.{arm} 9f",
+               "add x28, x28, #8", *self._goto_tb(8)]
+        cold = ["9:", "add x28, x27, #8", *self._goto_tb(7), *self.leave()]
+        return hot, cold
+
+    def _goto_tb(self, label):
+        """ What tcti-gadget-gen.py's addi_env_goto_tb does after its
+        address: add the immediate to the env slot, then go on at the target
+        word unless an exit is requested, in which case at the exit_tb after
+        it. """
+        env = self.env
+        return ["ldp x1, x2, [x28], #16",
+                f"ldr x3, [{env}, x1]",
+                "add x3, x3, x2",
+                f"str x3, [{env}, x1]",
+                f"ldr w4, [{env}, %[exit_ofs]]",
+                "ldr x27, [x28], #8",
+                f"tbnz w4, #31, {label}f",
+                "mov x28, x27",
+                f"{label}:"]
+
     def assemble(self, words, hot, cold):
         # A body with no slow path that leaves x27 and x28 alone loads the
         # next gadget's address before its body, as tcti-gadget-gen.py's
@@ -1217,7 +1270,7 @@ def op_name(spec):
 
 def gadget_file(spec):
     if isinstance(spec, CondSpec):
-        return spec.kind
+        return "jcc" if spec.kind == "jccgoto" else spec.kind
     name = op_name(spec)
     if spec.kind == "shift":
         return "shift"
@@ -1298,6 +1351,12 @@ def write_cond_table(conds, out):
     p("static const void *const rcg_jcc[RCG_NB_CC][16] = {")
     for spec in conds:
         if spec.kind == "jcc":
+            p(f"    [{index[(spec.cls, spec.cc_width)]}][{spec.cond}] = "
+              f"{entry(spec)},")
+    p("};\n")
+    p("static const void *const rcg_jccgoto[RCG_NB_CC][16] = {")
+    for spec in conds:
+        if spec.kind == "jccgoto":
             p(f"    [{index[(spec.cls, spec.cc_width)]}][{spec.cond}] = "
               f"{entry(spec)},")
     p("};\n")
@@ -2086,8 +2145,9 @@ def write_cases(cases, out, prefix):
 def check_coverage(order, nm, traces):
     """ Checks that the rcg_insn trace events in traces, from runs of
     QEMU's x86_64 system emulator, took every gadget the translator can
-    pick under order: "ordered" where tcg_ldst_ordered() holds, which
-    picks the ordered twins, else "plain". nm is nm's listing of that
+    pick under order, but the jccgoto ones: "ordered" where
+    tcg_ldst_ordered() holds, which picks the ordered twins, else "plain".
+    nm is nm's listing of that
     QEMU, from which each trace's ASLR slide is found. Returns whether
     every gadget ran. """
     names = {}
@@ -2115,9 +2175,12 @@ def check_coverage(order, nm, traces):
             return False
         taken |= {names[g - slides[0]] for g in seen}
 
+    # TCTI swaps the jccgoto gadgets in after translation, where the trace
+    # does not see them.
     want = {spec.name for spec in list(specs()) + list(cond_specs())
-            if spec.ordered == (order == "ordered") or
-            not getattr(spec, "accesses_memory", False)}
+            if (spec.ordered == (order == "ordered") or
+                not getattr(spec, "accesses_memory", False)) and
+            spec.kind != "jccgoto"}
     missed = sorted(want - taken)
     for name in missed:
         print(f"never taken: rcg_gadget_{name}", file=sys.stderr)

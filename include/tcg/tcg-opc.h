@@ -43,8 +43,8 @@ DEF(call, 0, 0, 3, TCG_OPF_CALL_CLOBBER | TCG_OPF_NOT_PRESENT)
 DEF(rich, 0, 0, 4, TCG_OPF_CALL_CLOBBER | TCG_OPF_NOT_PRESENT |
     TCG_OPF_SIDE_EFFECTS)
 /*
- * As rich, then the label the gadget branches to if its condition holds;
- * see tcg_gen_rich_br().
+ * As rich, with the jumps gadget in place of the flags, then the label the
+ * gadget branches to if its condition holds; see tcg_gen_rich_br().
  */
 DEF(rich_br, 0, 0, 5, TCG_OPF_BB_END | TCG_OPF_COND_BRANCH |
     TCG_OPF_CALL_CLOBBER | TCG_OPF_NOT_PRESENT | TCG_OPF_SIDE_EFFECTS)

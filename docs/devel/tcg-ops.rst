@@ -240,11 +240,14 @@ Function call
          writes nothing before its last access that may fault. See
          ``tcg_gen_rich()``.
 
-   * - rich_br gadget, words, nb_words, 0, label, *<outs>*, *<ins>*
+   * - rich_br gadget, words, nb_words, jumps, label, *<outs>*, *<ins>*
 
-     - | As rich with no flags, then 'label', where the gadget branches if
-         its condition holds. It ends a basic block, as brcond does, and
-         raises no exception. See ``tcg_gen_rich_br()``.
+     - | As rich, with 'jumps' in place of the flags, then 'label', where
+         the gadget branches if its condition holds. It ends a basic block,
+         as brcond does, and raises no exception. 'jumps', if not 0, is a
+         gadget that takes the same words and also does the
+         addi_env_goto_tb that starts each way, which TCTI may use in its
+         place. See ``tcg_gen_rich_br()``.
 
 Jumps/Labels
 ------------

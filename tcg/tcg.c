@@ -124,7 +124,7 @@ static void tcg_out_rich(TCGContext *s, const void *gadget,
                          const uint64_t *words, unsigned nb_words);
 static void tcg_out_rich_br(TCGContext *s, const void *gadget,
                             const uint64_t *words, unsigned nb_words,
-                            TCGLabel *l);
+                            const void *jumps, TCGLabel *l);
 #endif
 
 #if !TCG_TARGET_MAYBE_vec
@@ -6210,7 +6210,7 @@ static void tcg_reg_alloc_rich(TCGContext *s, TCGOp *op)
     if (op->opc == INDEX_op_rich_br) {
         tcg_out_rich_br(s, (const void *)op->args[0],
                         (const uint64_t *)op->args[1], op->args[2],
-                        arg_label(op->args[4]));
+                        (const void *)op->args[3], arg_label(op->args[4]));
     } else {
         tcg_out_rich(s, (const void *)op->args[0],
                      (const uint64_t *)op->args[1], op->args[2]);

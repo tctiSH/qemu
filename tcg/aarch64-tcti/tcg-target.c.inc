@@ -778,13 +778,33 @@ static void tcg_out_rich(TCGContext *s, const void *gadget,
     }
 }
 
-/* The same, then the label it branches to, as a brcond gadget takes it. */
+/*
+ * The last rich_br emitted, for tcti_join_rich_br(): where its gadget
+ * address is, where it ends (after the label), or NULL with no jumps
+ * gadget, its label, and its jumps gadget.
+ */
+static __thread struct {
+    tcg_insn_unit *start, *end;
+    TCGLabel *label;
+    const void *jumps;
+} tcti_last_rich_br;
+
+/*
+ * The same, then the label it branches to, as a brcond gadget takes it.
+ * Notes it for tcti_join_rich_br().
+ */
 static void tcg_out_rich_br(TCGContext *s, const void *gadget,
                             const uint64_t *words, unsigned nb_words,
-                            TCGLabel *l)
+                            const void *jumps, TCGLabel *l)
 {
+    tcg_insn_unit *start = s->code_ptr;
+
     tcg_out_rich(s, gadget, words, nb_words);
     tcti_out_label(s, l);
+    tcti_last_rich_br.start = start;
+    tcti_last_rich_br.end = jumps ? s->code_ptr : NULL;
+    tcti_last_rich_br.label = l;
+    tcti_last_rich_br.jumps = jumps;
 }
 #endif
 
@@ -994,13 +1014,19 @@ static __thread struct {
  * rewind forgets them all; fusing is never needed for correctness. A 32-bit
  * constant stored just before the rewound code stays: what it notes is
  * untouched, and the addi_env that a goto_tb joins it with is itself made
- * by rewinding.
+ * by rewinding. So does a rich_br that ends at or before it, for the same
+ * reason.
  */
 static void tcti_rewind(TCGContext *s, tcg_insn_unit *to)
 {
     if (tcti_last_sti32.end != to) {
         tcti_last_sti32.end = NULL;
     }
+#ifdef TCG_HAVE_RCG
+    if (tcti_last_rich_br.end > to) {
+        tcti_last_rich_br.end = NULL;
+    }
+#endif
     s->code_ptr = to;
     tcti_env_args.n = 0;
     tcti_last_env_ld32.end = NULL;
@@ -1108,6 +1134,26 @@ static void tcg_out_exit_tb(TCGContext *s, uintptr_t arg)
     tcg_out_imm64_gadget(s, gadget_exit_tb, arg);
 }
 
+#ifdef TCG_HAVE_RCG
+/*
+ * An addi_env_goto_tb gadget has just been written at start. If the last
+ * rich_br branches here and the code after it starts with one too, swap in
+ * its jumps gadget, which does the work of both. The two addi_env_goto_tb
+ * gadgets stay: the jumps gadget skips their addresses and reads their
+ * words, and goto_tb patching still writes to them.
+ */
+static void tcti_join_rich_br(TCGContext *s, tcg_insn_unit *start)
+{
+    typeof(tcti_last_rich_br) *br = &tcti_last_rich_br;
+
+    if (br->end && br->label->has_value && br->label->u.value_ptr == start &&
+        *(uint64_t *)br->end == (uintptr_t)gadget_addi_env_goto_tb) {
+        *(uint64_t *)br->start = (uintptr_t)br->jumps;
+        br->end = NULL;
+    }
+}
+#endif
+
 static void tcg_out_goto_tb(TCGContext *s, int which)
 {
     typeof(tcti_last_addi_env) *add = &tcti_last_addi_env;
@@ -1138,6 +1184,9 @@ static void tcg_out_goto_tb(TCGContext *s, int which)
         } else {
             tcti_rewind(s, add->start);
             tcg_out_gadget(s, gadget_addi_env_goto_tb);
+#ifdef TCG_HAVE_RCG
+            tcti_join_rich_br(s, add->start);
+#endif
         }
         tcg_out64(s, offset);
         tcg_out64(s, imm);
@@ -2794,6 +2843,9 @@ static inline void tcg_target_qemu_prologue(TCGContext *s)
 static void tcg_out_tb_start(TCGContext *s)
 {
     /* Nothing from a previous (or restarted) translation may be fused. */
+#ifdef TCG_HAVE_RCG
+    tcti_last_rich_br.end = NULL;
+#endif
     tcti_env_args.n = 0;
     tcti_last_env_ld32.end = NULL;
     tcti_last_env_ldst64.end = NULL;

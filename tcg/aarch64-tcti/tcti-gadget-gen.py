@@ -775,7 +775,8 @@ simple("br",
 # returns to the main loop. A linked target is entered past its own exit
 # check, so every goto_tb has to make it. The check reads the same word as
 # tb_exit_check, but branches: an exit is rarely requested, so the dispatch
-# need not wait for the load.
+# need not wait for the load. rcg-gen.py's TctiHarness._goto_tb() makes the
+# same check, after the same add as addi_env_goto_tb.
 GOTO_TB = (
     "ldr w24, [x14, %[exit_ofs]]",
     "ldr x27, [x28], #8",

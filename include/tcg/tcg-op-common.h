@@ -93,6 +93,7 @@ bool tcg_gen_rich_mo(TCGBar type);
  * @words: its operand words, which are copied
  * @nb_words: how many
  * @l: the label it branches to if its condition holds
+ * @jumps: the jumps gadget, which also jumps each way, or NULL
  * @outs: the globals it writes, as for tcg_gen_rich()
  * @nb_outs: how many
  * @ins: the globals it reads, as for tcg_gen_rich()
@@ -101,9 +102,14 @@ bool tcg_gen_rich_mo(TCGBar type);
  * As tcg_gen_rich() with no flags, but the gadget may branch to @l, so it
  * ends a basic block as brcond does: every global is synced before it. It
  * must not raise an exception.
+ *
+ * TCTI may emit @jumps instead when the code at @l and the code after this
+ * op both start with an addi_env_goto_tb gadget: an add of a constant to a
+ * global, then a goto_tb. @jumps takes the same words, and does the branch
+ * and that gadget's work for the way it goes in one dispatch.
  */
 void tcg_gen_rich_br(const void *gadget, const uint64_t *words,
-                     unsigned nb_words, TCGLabel *l,
+                     unsigned nb_words, TCGLabel *l, const void *jumps,
                      TCGTemp **outs, unsigned nb_outs,
                      TCGTemp **ins, unsigned nb_ins);
 #endif

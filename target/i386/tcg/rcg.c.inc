@@ -195,7 +195,8 @@ static const void *rcg_translate_cond(DisasContext *s,
          */
         taken = gen_new_label();
         gen_bnd_jmp(s);
-        tcg_gen_rich_br(gadget, &word, 1, taken, &out, 1, flags_in, 2);
+        tcg_gen_rich_br(gadget, &word, 1, taken, rcg_jccgoto[cc][cond],
+                        &out, 1, flags_in, 2);
         s->cc_op_dirty = false;
         gen_conditional_jump_labels(s, decode->immediate, NULL, taken);
         return gadget;

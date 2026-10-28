@@ -306,7 +306,10 @@ void tcg_gen_mb(TCGBar mb_type)
 }
 
 #ifdef TCG_HAVE_RCG
-/* Emits rich or rich_br; tcg_gen_rich_br() then adds the label. */
+/*
+ * Emits rich or rich_br; tcg_gen_rich_br() then puts the jumps gadget in
+ * place of the flags, and adds the label.
+ */
 static TCGOp *tcg_gen_rich_op(TCGOpcode opc, const void *gadget,
                               const uint64_t *words, unsigned nb_words,
                               unsigned flags, TCGTemp **outs, unsigned nb_outs,
@@ -345,13 +348,14 @@ void tcg_gen_rich(const void *gadget, const uint64_t *words,
 }
 
 void tcg_gen_rich_br(const void *gadget, const uint64_t *words,
-                     unsigned nb_words, TCGLabel *l,
+                     unsigned nb_words, TCGLabel *l, const void *jumps,
                      TCGTemp **outs, unsigned nb_outs,
                      TCGTemp **ins, unsigned nb_ins)
 {
     TCGOp *op = tcg_gen_rich_op(INDEX_op_rich_br, gadget, words, nb_words, 0,
                                 outs, nb_outs, ins, nb_ins);
 
+    op->args[3] = (uintptr_t)jumps;
     op->args[4] = label_arg(l);
     add_as_label_use(l, op);
 }
