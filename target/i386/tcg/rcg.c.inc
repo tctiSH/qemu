@@ -48,6 +48,8 @@ static const struct {
     { gen_POP,    RCG_OP_POP,   0, -1, -1 },
     { gen_NOT,    RCG_OP_NOT,   0, -1, X86_SPECIAL_HasLock },
     { gen_NEG,    RCG_OP_NEG,   0, -1, X86_SPECIAL_HasLock },
+    { gen_INC,    RCG_OP_INC,   0, -1, X86_SPECIAL_HasLock },
+    { gen_DEC,    RCG_OP_DEC,   0, -1, X86_SPECIAL_HasLock },
     /* The second operand of a shift or rotate is its count. */
     { gen_SHL,    RCG_OP_SHL,   0,  2, -1 },
     { gen_SHR,    RCG_OP_SHR,   0,  2, -1 },
@@ -472,6 +474,7 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     const RCGGadget *g;
     uint64_t words[RCG_MAX_WORDS];
     TCGTemp *outs[RCG_MAX_WORDS], *ins[RCG_MAX_WORDS];
+    TCGv cf = NULL;
     unsigned n, nb_outs = 0, nb_ins = 0;
 
     if (!CODE64(s) || s->aflag != MO_64 || (s->prefix & PREFIX_LOCK)) {
@@ -618,8 +621,20 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
             g_assert_not_reached();
         }
     }
+    /*
+     * INC and DEC keep CF, which gen_INC and gen_DEC put in cc_src: take it
+     * from the flags state the gadget replaces, and store it after the
+     * gadget, so that a fault in the gadget finds that state as it was.
+     */
+    if (facts->cf) {
+        cf = tcg_temp_new();
+        gen_compute_eflags_c(s, cf);
+    }
     tcg_gen_rich(g->gadget, words, n, slot->access ? TCG_RICH_MAY_FAULT : 0,
                  outs, nb_outs, ins, nb_ins);
+    if (facts->cf) {
+        tcg_gen_mov_tl(cpu_cc_src, cf);
+    }
 
     if (op == RCG_OP_ROR) {
         rcg_rotate_flags(s, ot, first->n, rotate_left, imm);

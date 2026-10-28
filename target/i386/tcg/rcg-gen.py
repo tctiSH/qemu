@@ -161,15 +161,29 @@ EXTEND_OPS = (
 
 
 class Unary:
-    """ NOT and NEG: dest = op dest. NEG leaves CC_OP_SUB as gen_NEG does,
-    with cc_srcT 0; NOT leaves the flags alone. """
+    """ NOT, NEG, INC and DEC: dest = op dest, a64 being the AArch64
+    instruction that computes {r} from {a}. NEG leaves CC_OP_SUB as gen_NEG
+    does, with cc_srcT 0; NOT leaves the flags alone. INC and DEC leave
+    CC_OP_INC and CC_OP_DEC with cc_dst the result, and keep CF, which
+    gen_INC and gen_DEC put in cc_src: the gadget leaves cc_src alone, and
+    the translator must put CF from before the instruction in it. """
 
-    def __init__(self, name, cc):
+    def __init__(self, name, a64, cc):
         self.name = name
+        self.a64 = a64
         self.cc = cc
 
+    @property
+    def keeps_cf(self):
+        return self.cc in ("INC", "DEC")
 
-UNARY_OPS = (Unary("not", None), Unary("neg", "SUB"))
+
+UNARY_OPS = (
+    Unary("not", "mvn {r}, {a}",     None),
+    Unary("neg", "neg {r}, {a}",     "SUB"),
+    Unary("inc", "add {r}, {a}, #1", "INC"),
+    Unary("dec", "sub {r}, {a}, #1", "DEC"),
+)
 
 
 class Shift:
@@ -397,13 +411,15 @@ class Spec:
         decode.cc_dst, cc_src and cc_src2 say for the instruction. After a
         "SUB" one, the translator must also keep cc_srcT = cc_dst + cc_src,
         the original first operand, as TCG's gen_SUB does (0 after NEG,
-        which is the same sum). """
+        which is the same sum). INC and DEC write cc_dst alone; see Unary. """
         if self.kind == "zero":
             return ("cc_src",)
         if self.kind == "alu":
             if self.op.cc == "LOGIC":
                 return ("cc_dst",)
             return ("cc_dst", "cc_src")
+        if self.kind == "unary" and self.op.keeps_cf:
+            return ("cc_dst",)
         if self.kind in ("unary", "shift") and self.op.cc:
             return ("cc_dst", "cc_src")
         return ()
@@ -977,21 +993,23 @@ def extend_body(g, spec):
 
 
 def unary_body(g, spec):
-    # gen_NOT and gen_NEG: on the whole register, written at the operand
-    # size.
+    # gen_NOT, gen_NEG, gen_INC and gen_DEC: on the whole register, written
+    # at the operand size. INC's and DEC's cc_src is the translator's.
     op, width = spec.op, spec.width
     if spec.form == "m":
         g.ea(ADDR)
         g.load(A, ADDR, width)
     else:
         g.read_reg(A, "d")
-    g.emit(f"{'mvn' if op.name == 'not' else 'neg'} {R}, {A}")
+    g.emit(op.a64.format(r=R, a=A))
     g.define(R)
     if spec.form == "m":
         g.store(R, ADDR, width)
     else:
         g.write_reg(R, "d", width)
-    if op.cc:
+    if op.keeps_cf:
+        g.write_cc(dst=R)
+    elif op.cc:
         g.write_cc(dst=R, src=A)
 
 
@@ -1195,8 +1213,8 @@ class TctiHarness(Harness):
 # The ops and forms as the translator names them, in the table's order.
 OP_NAMES = ("add", "sub", "and", "or", "xor", "cmp", "test", "zero", "mov",
             "lea", "push", "pop", "movzxb", "movzxw", "movsxb", "movsxw",
-            "movsxd", "not", "neg", "shl", "shr", "sar", "ror", "call", "jmp",
-            "ret")
+            "movsxd", "not", "neg", "inc", "dec", "shl", "shr", "sar", "ror",
+            "call", "jmp", "ret")
 FORM_NAMES = ("rr", "rm", "mr", "ri", "mi", "r", "i", "m")
 KIND_NAMES = ("alu", "zero", "mov", "lea", "push", "pop", "extend", "unary",
               "shift", "call", "jmp", "ret")
@@ -1385,7 +1403,8 @@ def write_table(all_specs, out):
     p(" * if by_width; -1 if none, and for ROR, whose CF and OF the")
     p(" * translator computes. srcT: what the translator puts in cc_srcT")
     p(" * after it, as gen_SUB and gen_NEG do. dst, src: whether it writes")
-    p(" * cc_dst and cc_src.")
+    p(" * cc_dst and cc_src. cf: whether the translator puts CF from before")
+    p(" * it in cc_src, as gen_INC and gen_DEC do.")
     p(" */")
     p("typedef struct RCGFacts {")
     p("    RCGKind kind;")
@@ -1395,7 +1414,7 @@ def write_table(all_specs, out):
     p("    int cc_op;")
     p("    bool by_width;")
     p("    uint8_t srcT;")
-    p("    bool dst, src;")
+    p("    bool dst, src, cf;")
     p("} RCGFacts;\n")
 
     for spec in all_specs:
@@ -1442,19 +1461,21 @@ def write_table(all_specs, out):
         elif spec.kind == "zero":
             flags = ["CC_OP_EFLAGS", False, "RCG_SRCT_NONE"]
         elif spec.kind == "unary" and spec.op.cc:
-            flags = [f"CC_OP_{spec.op.cc}B", True, "RCG_SRCT_ZERO"]
+            flags = [f"CC_OP_{spec.op.cc}B", True,
+                     "RCG_SRCT_NONE" if spec.op.keeps_cf else "RCG_SRCT_ZERO"]
         elif spec.kind == "shift" and spec.op.cc:
             flags = [f"CC_OP_{spec.op.cc}B", True, "RCG_SRCT_NONE"]
         else:
             flags = [-1, False, "RCG_SRCT_NONE"]
-        flags += ["cc_dst" in spec.cc_writes, "cc_src" in spec.cc_writes]
+        flags += ["cc_dst" in spec.cc_writes, "cc_src" in spec.cc_writes,
+                  spec.kind == "unary" and spec.op.keeps_cf]
         facts = [f"RCG_KIND_{spec.kind.upper()}",
                  spec.kind in ("push", "pop", "call", "ret"),
                  spec.kind in ("call", "jmp", "ret"),
                  MO[spec.op.src] if spec.kind == "extend" else -1,
                  spec.reads_d] + flags
         fields = ("kind", "stack", "branch", "src_ot", "reads_d", "cc_op",
-                  "by_width", "srcT", "dst", "src")
+                  "by_width", "srcT", "dst", "src", "cf")
         p(f"    [RCG_OP_{name.upper()}] = {{")
         for k, f in zip(fields, facts):
             p(f"        .{k} = " +
