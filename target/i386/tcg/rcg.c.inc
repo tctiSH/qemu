@@ -21,9 +21,9 @@ QEMU_BUILD_BUG_ON(TARGET_PAGE_BITS != TCTI_TLB_PAGE_BITS);
 /*
  * The instructions with gadgets, by decode-new's gen function: the op, and
  * which of decode->op[] are its first and second operands, the ones a
- * form's two letters describe, destination first (-1 for none). special is
- * what decode-new's special must be if it is not X86_SPECIAL_None, or -1
- * for anything.
+ * form's first two letters describe, destination first (-1 for none).
+ * special is what decode-new's special must be if it is not
+ * X86_SPECIAL_None, or -1 for anything.
  *
  * SUB and AND that write nothing are CMP and TEST, XOR of a register with
  * itself is the zero idiom, and MOV with ZExtT0 or SExtT0 is MOVZX, MOVSX
@@ -55,6 +55,14 @@ static const struct {
     /* ROL runs as ROR by the width less the count; see rcg_emit(). */
     { gen_ROL,    RCG_OP_ROR,   0,  2, -1 },
     { gen_ROR,    RCG_OP_ROR,   0,  2, -1 },
+    /*
+     * MUL and IMUL with one operand multiply RAX by it; decode-new puts it
+     * in op[1] and RAX in op[2]. With two or three, IMUL's third operand
+     * is the destination again or an immediate; see rcg_operands().
+     */
+    { gen_MUL,    RCG_OP_MUL,  -1,  1, X86_SPECIAL_ZExtT0 },
+    { gen_IMUL,   RCG_OP_IMUL, -1,  1, X86_SPECIAL_SExtT0 },
+    { gen_IMUL3,  RCG_OP_IMUL3, 0,  1, X86_SPECIAL_SExtT0 },
     { gen_CALL,   RCG_OP_CALL, -1, -1, -1 },
     { gen_CALL_m, RCG_OP_CALL, -1,  1, -1 },
     { gen_JMP_m,  RCG_OP_JMP,  -1,  1, -1 },
@@ -90,11 +98,13 @@ static int rcg_form(char a, char b)
     static const char *const names[RCG_NB_FORMS] = {
         [RCG_FORM_RR] = "rr", [RCG_FORM_RM] = "rm", [RCG_FORM_MR] = "mr",
         [RCG_FORM_RI] = "ri", [RCG_FORM_MI] = "mi", [RCG_FORM_R] = "r",
-        [RCG_FORM_I] = "i", [RCG_FORM_M] = "m",
+        [RCG_FORM_I] = "i", [RCG_FORM_M] = "m", [RCG_FORM_RRI] = "rri",
+        [RCG_FORM_RMI] = "rmi",
     };
+    const char want[] = { a, b, 0 };
 
     for (int i = 0; i < RCG_NB_FORMS; i++) {
-        if (names[i][0] == a && names[i][1] == b) {
+        if (!strcmp(names[i], want)) {
             return i;
         }
     }
@@ -399,6 +409,22 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
     case RCG_KIND_UNARY:
         *ot = first->ot;
         return rcg_form(rcg_kind(s, first), 0);
+    case RCG_KIND_MUL:
+        *ot = second->ot;
+        return rcg_form(rcg_kind(s, second), 0);
+    case RCG_KIND_IMUL3: {
+        char a = rcg_kind(s, first), b = rcg_kind(s, second);
+
+        *ot = first->ot;
+        if (a != 'r' || !b) {
+            return -1;
+        }
+        if (decode->op[2].unit != X86_OP_IMM) {
+            return rcg_form(a, b);
+        }
+        *imm = decode->op[2].imm;
+        return b == 'r' ? RCG_FORM_RRI : RCG_FORM_RMI;
+    }
     case RCG_KIND_SHIFT: {
         /*
          * By an immediate count, or 1; a count in CL is left to TCG. So is
@@ -545,13 +571,27 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
         /* For the return address. CALL rel's jump is gen_JMP's, after. */
         rcg_note(ins, &nb_ins, cpu_eip);
     }
+    if (facts->kind == RCG_KIND_MUL) {
+        /*
+         * It reads RAX, and writes it and, above 8 bits, RDX. DX at 16 bits
+         * keeps the rest of RDX.
+         */
+        rcg_note(outs, &nb_outs, cpu_regs[R_EAX]);
+        rcg_note(ins, &nb_ins, cpu_regs[R_EAX]);
+        if (ot > MO_8) {
+            rcg_note(outs, &nb_outs, cpu_regs[R_EDX]);
+        }
+        if (ot == MO_16) {
+            rcg_note(ins, &nb_ins, cpu_regs[R_EDX]);
+        }
+    }
     if (facts->branch && !(op == RCG_OP_CALL && form == RCG_FORM_I)) {
         rcg_note(outs, &nb_outs, cpu_eip);
     }
     for (n = 0; n < RCG_MAX_WORDS && g->words[n] != RCG_W_END; n++) {
         if (g->words[n] == RCG_W_D) {
             rcg_note(outs, &nb_outs, cpu_regs[first->n]);
-            if (facts->reads_d || ot < MO_32) {
+            if (slot->reads_d || ot < MO_32) {
                 rcg_note(ins, &nb_ins, cpu_regs[first->n]);
             }
         }

@@ -208,6 +208,26 @@ ROTATE_OP = Shift("ror", "ror", None)
 ROTATE_WIDTHS = (32, 64)
 
 
+class Mul:
+    """ MUL and IMUL with one operand: RAX times the source, both zero-
+    (MUL) or sign-extended (IMUL) from the operand size, to AX at 8 bits,
+    else to RDX:RAX at the operand size. With two or three operands (IMUL3,
+    as decode-new names it), IMUL is dest = dest * src or dest = src * imm,
+    signed, at 16, 32 or 64 bits. Each leaves CC_OP_MULB plus the width's
+    MemOp, with cc_dst and cc_src as TCG's gen_MUL, gen_IMUL and gen_IMUL3
+    leave them. """
+
+    def __init__(self, name, signed):
+        self.name = name
+        self.signed = signed
+
+
+MUL_OPS = (Mul("mul", False), Mul("imul", True))
+IMUL3_OP = Mul("imul3", True)
+IMUL3_FORMS = ("rr", "rm", "rri", "rmi")
+IMUL3_WIDTHS = (16, 32, 64)
+
+
 # The lazy-flags states a condition can be read from without a helper, as
 # TCG's CC_OP_<class>B + the width's MemOp, or CC_OP_EFLAGS alone.
 CC_CLASSES = ([(cls, width) for cls in ("sub", "add", "logic", "inc", "dec")
@@ -276,11 +296,13 @@ class Spec:
     """ One gadget: what it does and the words it takes.
 
     kind is "alu", "zero" (XOR of a register with itself), "mov", "lea",
-    "push", "pop", "extend", "unary", "shift", "call", "jmp" or "ret".
-    form is the destination's kind then the source's (r, m or i); for CALL
-    and JMP it is the target's (i for CALL rel32), and for RET i. shape and
-    seg are the memory operand's, if any. ordered is for the twin that keeps
-    the guest's memory order (tcg_ldst_ordered()).
+    "push", "pop", "extend", "unary", "shift", "mul", "imul3", "call",
+    "jmp" or "ret". form is the destination's kind then the source's (r, m
+    or i), then for IMUL3 an i if it takes an immediate too; for MUL and
+    IMUL with one operand it is the source's, for CALL and JMP the
+    target's (i for CALL rel32), and for RET i. shape and seg are the
+    memory operand's, if any. ordered is for the twin that keeps the
+    guest's memory order (tcg_ldst_ordered()).
     """
 
     def __init__(self, kind, op, form, width, shape=None, seg=False,
@@ -312,6 +334,8 @@ class Spec:
     def reads_d(self):
         """ Whether the gadget reads its "d" register as well as writing
         it. """
+        if self.kind == "imul3":
+            return self.form in ("rr", "rm")
         return self.kind in ("alu", "unary", "shift")
 
     @property
@@ -351,7 +375,8 @@ class Spec:
         is its value, sign-extended as decode-new extends it.
 
         CALL's imm is the return address less env's eip, and RET's how far
-        it moves RSP. """
+        it moves RSP. MUL and IMUL with one operand take no words for RAX
+        and RDX, whose offsets are fixed. """
         if self.kind in ("call", "jmp", "ret"):
             words = (ea_words(self.shape, self.seg) if self.form == "m"
                      else ["s"] if self.form == "r" else [])
@@ -360,8 +385,11 @@ class Spec:
             if self.accesses_memory:
                 words += ["oi", "tlb"]
             return words
-        if self.kind == "push":
+        if self.kind in ("push", "mul"):
             operands = ["s" if self.form == "r" else self.form]
+        elif self.kind == "imul3":
+            operands = ["d", "s" if self.form[1] == "r" else "m",
+                        *self.form[2:]]
         elif self.kind in ("pop", "unary"):
             operands = ["d" if self.form == "r" else self.form]
         else:
@@ -391,6 +419,8 @@ class Spec:
             return "CC_OP_EFLAGS"
         if self.kind in ("alu", "unary", "shift") and self.op.cc:
             return f"CC_OP_{self.op.cc}B + {MO[self.width]}"
+        if self.kind in ("mul", "imul3"):
+            return f"CC_OP_MULB + {MO[self.width]}"
         return None
 
     @property
@@ -406,7 +436,8 @@ class Spec:
             if self.op.cc == "LOGIC":
                 return ("cc_dst",)
             return ("cc_dst", "cc_src")
-        if self.kind in ("unary", "shift") and self.op.cc:
+        if (self.kind in ("unary", "shift") and self.op.cc or
+                self.kind in ("mul", "imul3")):
             return ("cc_dst", "cc_src")
         return ()
 
@@ -442,6 +473,13 @@ def specs():
                 yield from with_memory(Spec("shift", op, form, width))
     for width in ROTATE_WIDTHS:
         yield Spec("shift", ROTATE_OP, "ri", width)
+    for op in MUL_OPS:
+        for form in ("r", "m"):
+            for width in WIDTHS:
+                yield from with_memory(Spec("mul", op, form, width))
+    for form in IMUL3_FORMS:
+        for width in IMUL3_WIDTHS:
+            yield from with_memory(Spec("imul3", IMUL3_OP, form, width))
     for form in ("i", "r", "m"):
         yield from with_memory(Spec("call", None, form, 64))
     for form in ("r", "m"):
@@ -1042,6 +1080,92 @@ def shift_body(g, spec):
     g.write_cc(dst=R, src=B)
 
 
+def mul_body(g, spec):
+    # gen_MUL and gen_IMUL: RAX times the source, both extended from the
+    # operand size, so that below 64 bits one MUL makes the whole product.
+    op, width, env = spec.op, spec.width, g.env
+    if spec.form == "m":
+        g.ea(ADDR)
+        g.load(B, ADDR, width)
+    else:
+        g.read_reg(B, "s")
+    g.emit(f"ldr {A}, [{env}, %[rax]]")
+    g.define(A)
+    g.extend(A, width, op.signed)
+    g.extend(B, width, op.signed)
+    g.emit(f"mul {R}, {A}, {B}")
+    g.define(R)
+    if width == 64:
+        # RDX the high half, and for IMUL cc_src the low half's sign less
+        # the high half.
+        g.emit(f"{'smulh' if op.signed else 'umulh'} {T}, {A}, {B}",
+               f"str {R}, [{env}, %[rax]]",
+               f"str {T}, [{env}, %[rdx]]")
+        if op.signed:
+            g.emit(f"asr {B}, {R}, #63",
+                   f"sub {B}, {B}, {T}")
+            g.write_cc(dst=R, src=B)
+        else:
+            g.write_cc(dst=R, src=T)
+        return
+    # AX at 8 bits; AX and DX at 16; EAX and EDX, zero-extended, at 32.
+    if width == 32:
+        g.emit(f"mov {w(A)}, {w(R)}",
+               f"lsr {T}, {R}, #32",
+               f"str {A}, [{env}, %[rax]]",
+               f"str {T}, [{env}, %[rdx]]")
+    else:
+        g.emit(f"strh {w(R)}, [{env}, %[rax]]")
+        if width == 16:
+            g.emit(f"lsr {T}, {R}, #16",
+                   f"strh {w(T)}, [{env}, %[rdx]]")
+    if op.signed:
+        # cc_src: the product truncated and sign-extended, less the product.
+        g.emit(f"sxt{ {8: 'b', 16: 'h', 32: 'w'}[width] } {B}, {w(R)}",
+               f"sub {B}, {B}, {R}")
+        g.write_cc(dst=R, src=B)
+    elif width == 8:
+        g.emit(f"and {B}, {R}, #0xff00")
+        g.write_cc(dst=R, src=B)
+    elif width == 16:
+        g.write_cc(dst=R, src=T)
+    else:
+        # cc_dst and cc_src: EAX and EDX as written, as gen_MUL leaves
+        # them.
+        g.write_cc(dst=A, src=T)
+
+
+def imul3_body(g, spec):
+    # gen_IMUL3: both operands sign-extended from the operand size, so that
+    # below 64 bits one MUL makes the whole product, which TCG keeps in
+    # cc_dst.
+    width, form = spec.width, spec.form
+    if spec.has_mem:
+        g.ea(ADDR)
+        g.load(A, ADDR, width)
+    else:
+        g.read_reg(A, "s")
+    if form.endswith("i"):
+        g.emit(f"mov {B}, {g.word('imm')}")
+        g.define(B)
+    else:
+        g.read_reg(B, "d")
+    g.extend(A, width, True)
+    g.extend(B, width, True)
+    g.emit(f"mul {R}, {A}, {B}")
+    g.define(R)
+    if width == 64:
+        # cc_src: the low half's sign less the high half.
+        g.emit(f"smulh {T}, {A}, {B}",
+               f"asr {B}, {R}, #63",
+               f"sub {B}, {B}, {T}")
+    else:
+        g.emit(f"sxt{ {16: 'h', 32: 'w'}[width] } {B}, {w(R)}",
+               f"sub {B}, {B}, {R}")
+    g.write_reg(R, "d", width)
+    g.write_cc(dst=R, src=B)
+
+
 def jcc_body(g, spec):
     # gen_Jcc's condition and branch; the translator must emit the jumps on
     # either side. The gadget always stores CC_OP first, as gen_jcc() does
@@ -1080,6 +1204,8 @@ BODIES = {
     "jccgoto": jccgoto_body,
     "setcc": setcc_body,
     "cmov": cmov_body,
+    "mul": mul_body,
+    "imul3": imul3_body,
     "extend": extend_body,
     "unary": unary_body,
     "shift": shift_body,
@@ -1108,6 +1234,8 @@ BODY_OPERANDS = {
     "tlb_page_mask": "TCTI_TLB_PAGE_MASK",
     "cc_dst": "offsetof(CPUX86State, cc_dst)",
     "cc_src": "offsetof(CPUX86State, cc_src)",
+    "rax": "offsetof(CPUX86State, regs[R_EAX])",
+    "rdx": "offsetof(CPUX86State, regs[R_EDX])",
     "rsp": f"offsetof(CPUX86State, regs[{R_ESP}])",
     "eip": "offsetof(CPUX86State, eip)",
     "cc_z_p": "CC_Z | CC_P",
@@ -1248,20 +1376,20 @@ class TctiHarness(Harness):
 # The ops and forms as the translator names them, in the table's order.
 OP_NAMES = ("add", "sub", "and", "or", "xor", "cmp", "test", "zero", "mov",
             "lea", "push", "pop", "movzxb", "movzxw", "movsxb", "movsxw",
-            "movsxd", "not", "neg", "shl", "shr", "sar", "ror", "call", "jmp",
-            "ret")
-FORM_NAMES = ("rr", "rm", "mr", "ri", "mi", "r", "i", "m")
+            "movsxd", "not", "neg", "shl", "shr", "sar", "ror", "mul", "imul",
+            "imul3", "call", "jmp", "ret")
+FORM_NAMES = ("rr", "rm", "mr", "ri", "mi", "r", "i", "m", "rri", "rmi")
 KIND_NAMES = ("alu", "zero", "mov", "lea", "push", "pop", "extend", "unary",
-              "shift", "call", "jmp", "ret")
+              "shift", "mul", "imul3", "call", "jmp", "ret")
 WORD_NAMES = ("d", "s", "s1", "base", "index", "disp", "seg", "imm", "oi",
               "tlb", "ccop")
 MAX_WORDS = len(WORD_REGS)
 
-# The gadget source files, split by op so they compile in parallel; "other"
-# takes the ops with no file.
+# The gadget source files, split by op or kind so they compile in parallel;
+# "other" takes the ops with no file.
 # Must match target/i386/tcg/meson.build.
 GADGET_FILES = ("add", "sub", "and", "or", "xor", "cmp", "test", "mov",
-                "other", "shift", "jcc", "setcc", "cmov")
+                "other", "shift", "mul", "jcc", "setcc", "cmov")
 
 
 def op_name(spec):
@@ -1272,8 +1400,10 @@ def gadget_file(spec):
     if isinstance(spec, CondSpec):
         return "jcc" if spec.kind == "jccgoto" else spec.kind
     name = op_name(spec)
-    if spec.kind == "shift":
-        return "shift"
+    if spec.kind in ("shift", "mul"):
+        return spec.kind
+    if spec.kind == "imul3":
+        return "mul"
     return name if name in GADGET_FILES else "other"
 
 
@@ -1415,12 +1545,14 @@ def write_table(all_specs, out):
     p("/*")
     p(" * An op and form's gadgets, indexed [width][shape][seg][ordered], the")
     p(" * width as a MemOp; one shape where there is no memory operand.")
-    p(" * access: RCG_LOAD, RCG_STORE or both; 0 if none.")
+    p(" * access: RCG_LOAD, RCG_STORE or both; 0 if none. reads_d: they read")
+    p(" * the destination register as well as writing it.")
     p(" */")
     p("typedef struct RCGSlot {")
     p("    const RCGGadget *gadgets;")
     p("    uint8_t nb_shapes;")
     p("    uint8_t access;")
+    p("    bool reads_d;")
     p("} RCGSlot;\n")
     p("/* An op's kind: rcg-gen.py's Spec.kind. */")
     p("typedef enum RCGKind {")
@@ -1437,8 +1569,7 @@ def write_table(all_specs, out):
     p(" * What the translator needs to know of an op. stack: it moves RSP.")
     p(" * branch: it ends the TB. Its gadget sets eip, except CALL rel's,")
     p(" * whose jump TCG emits. src_ot: the source's MemOp where it is not")
-    p(" * the op's (MOVZX, MOVSX and MOVSXD), else -1. reads_d: its gadget")
-    p(" * reads the destination register as well as writing it.")
+    p(" * the op's (MOVZX, MOVSX and MOVSXD), else -1.")
     p(" *")
     p(" * Its lazy flags. cc_op: the CC_OP it leaves, plus the width's MemOp")
     p(" * if by_width; -1 if none, and for ROR, whose CF and OF the")
@@ -1450,7 +1581,6 @@ def write_table(all_specs, out):
     p("    RCGKind kind;")
     p("    bool stack, branch;")
     p("    int8_t src_ot;")
-    p("    bool reads_d;")
     p("    int cc_op;")
     p("    bool by_width;")
     p("    uint8_t srcT;")
@@ -1464,7 +1594,7 @@ def write_table(all_specs, out):
     slots = {}
     for spec in all_specs:
         slots.setdefault((op_name(spec), spec.form), []).append(spec)
-    access = {}
+    access, reads_d = {}, {}
     for (op, form), group in slots.items():
         nb_shapes = len(EA_SHAPES) if group[0].has_mem else 1
         entries = [None] * (len(WIDTHS) * nb_shapes * 4)
@@ -1478,6 +1608,9 @@ def write_table(all_specs, out):
         access[op, form] = (" | ".join((["RCG_LOAD"] if loads else []) +
                                        (["RCG_STORE"] if stores else []))
                             or "0")
+        reads = {spec.reads_d for spec in group}
+        assert len(reads) == 1, (op, form)
+        reads_d[op, form] = str(reads.pop()).lower()
         p(f"static const RCGGadget rcg_{op}_{form}[{len(entries)}] = {{")
         for i, spec in enumerate(entries):
             if spec:
@@ -1489,7 +1622,8 @@ def write_table(all_specs, out):
     for (op, form), group in slots.items():
         nb_shapes = len(EA_SHAPES) if group[0].has_mem else 1
         p(f"    [RCG_OP_{op.upper()}][RCG_FORM_{form.upper()}] = "
-          f"{{ rcg_{op}_{form}, {nb_shapes}, {access[op, form]} }},")
+          f"{{ rcg_{op}_{form}, {nb_shapes}, {access[op, form]}, "
+          f"{reads_d[op, form]} }},")
     p("};\n")
 
     p("static const RCGFacts rcg_facts[RCG_NB_OPS] = {")
@@ -1504,16 +1638,17 @@ def write_table(all_specs, out):
             flags = [f"CC_OP_{spec.op.cc}B", True, "RCG_SRCT_ZERO"]
         elif spec.kind == "shift" and spec.op.cc:
             flags = [f"CC_OP_{spec.op.cc}B", True, "RCG_SRCT_NONE"]
+        elif spec.kind in ("mul", "imul3"):
+            flags = ["CC_OP_MULB", True, "RCG_SRCT_NONE"]
         else:
             flags = [-1, False, "RCG_SRCT_NONE"]
         flags += ["cc_dst" in spec.cc_writes, "cc_src" in spec.cc_writes]
         facts = [f"RCG_KIND_{spec.kind.upper()}",
                  spec.kind in ("push", "pop", "call", "ret"),
                  spec.kind in ("call", "jmp", "ret"),
-                 MO[spec.op.src] if spec.kind == "extend" else -1,
-                 spec.reads_d] + flags
-        fields = ("kind", "stack", "branch", "src_ot", "reads_d", "cc_op",
-                  "by_width", "srcT", "dst", "src")
+                 MO[spec.op.src] if spec.kind == "extend" else -1] + flags
+        fields = ("kind", "stack", "branch", "src_ot", "cc_op", "by_width",
+                  "srcT", "dst", "src")
         p(f"    [RCG_OP_{name.upper()}] = {{")
         for k, f in zip(fields, facts):
             p(f"        .{k} = " +
@@ -1700,6 +1835,11 @@ def insn_cases():
             yield from shift_cases(op, width)
     for width in WIDTHS:
         yield from rotate_cases(width)
+    for op in MUL_OPS:
+        for width in WIDTHS:
+            yield from mul_cases(op, width)
+    for width in IMUL3_WIDTHS:
+        yield from imul3_cases(width)
     yield from cond_cases()
     yield from branch_cases()
     yield from chain_cases()
@@ -1715,8 +1855,13 @@ def chain_cases():
                 "mov eax, ebx", "mov rax, rbx", "xor eax, eax", "pop rax"):
         yield Case(f"bswap rax; {use}", 64, a=0, b=3,
                    stack=use.startswith("pop"))
+    # MUL reads RAX, keeps part of it at 8 bits and of RDX at 16, and
+    # writes RDX above 8 bits.
+    for reg in ("rax", "rdx"):
+        for use in ("mul bl", "mul bx", "imul ebx", "mul rbx"):
+            yield Case(f"bswap {reg}; {use}", 64, a=0, b=3)
     for setter in ("ror eax, 5", "rol rax, 3", "shl rax, cl", "imul rax, rbx",
-                   "bswap rax"):
+                   "mul rbx", "bswap rax"):
         for use in ("add rax, rbx", "cmp rbx, rax", "xor ebx, ebx",
                     "sub ebx, eax; setb cl"):
             yield Case(f"{setter}; {use}", 64, a=0, b=3)
@@ -2075,6 +2220,13 @@ def fault_cases():
             for count in (1, 3):
                 yield mem(f"{op.name} {PTR[width]} ptr [rbx], {count}", width,
                           writes=True)
+    for op in MUL_OPS:
+        for width in WIDTHS:
+            yield mem(f"{op.name} {PTR[width]} ptr [rbx]", width, a=0)
+    for width in IMUL3_WIDTHS:
+        m = f"{PTR[width]} ptr [rbx]"
+        yield mem(f"imul {reg_name(0, width)}, {m}", width, a=0)
+        yield mem(f"imul {reg_name(0, width)}, {m}, 0x55", width, a=0)
     yield mem("push qword ptr [rbx]", 64, stack=True)
     yield mem("call qword ptr [rbx]", 64, stack=True, target=RCG_TARGET_MEM)
     yield mem("jmp qword ptr [rbx]", 64, target=RCG_TARGET_MEM)
@@ -2119,6 +2271,73 @@ def rotate_cases(width):
         for cond in range(16):
             yield Case(f"{name} {reg}, 1; j{CONDS[cond]} 1f; mov ecx, 1; 1:",
                        width, a=0)
+
+
+def mul_cases(op, width):
+    """ MUL or IMUL with one operand: RAX times a register (RAX itself and
+    RDX among them) or memory, then the flags they leave as a condition
+    reads them, which is TCG's. """
+    for n in (3, 9, 0, 2):
+        yield Case(f"{op.name} {reg_name(n, width)}", width, a=0,
+                   b=n if n else -1)
+    if width == 8:
+        yield Case(f"{op.name} sil", 8, a=0, b=6)
+        yield Case(f"{op.name} ah", 8, a=0)
+    for shape in EA_SHAPES:
+        for seg in SEGS:
+            text, base, index, bv, iv = memory_operand(width, shape, seg)
+            yield Case(f"{op.name} {text}", width, a=0, mem=True, base=base,
+                       index=index, base_value=bv, index_value=iv)
+    if width > 8:
+        for target in MISALIGNED:
+            text, base, _, bv, _ = memory_operand(width, "b", None,
+                                                  target=target)
+            yield Case(f"{op.name} {text}", width, a=0, mem=True, base=base,
+                       base_value=bv, operand=target)
+    if width >= 32:
+        yield Case(f"{op.name} {PTR[width]} ptr [ebx+8]", width, a=0,
+                   mem=True, base=3, base_value=ADDR32_BASE)
+    yield Case(f"{op.name} {rip_relative(width)}", width, a=0, mem=True)
+    # The address in RAX, which it reads, or RDX, which it writes.
+    for base, a in ((0, -1), (2, 0)):
+        text, _, _, bv, _ = memory_operand(width, "b", None, base=base)
+        yield Case(f"{op.name} {text}", width, a=a, mem=True, base=base,
+                   base_value=bv)
+    for cond in range(16):
+        yield Case(f"{op.name} {reg_name(3, width)}; j{CONDS[cond]} 1f; "
+                   f"mov ecx, 1; 1:", width, a=0, b=3)
+
+
+def imul3_cases(width):
+    """ IMUL with two or three operands, then the flags it leaves as a
+    condition reads them, which is TCG's. """
+    yield from memory_cases("imul", width, ("rm",), False)
+    text, base, _, bv, _ = memory_operand(width, "b", None)
+    pairs = reg_pairs(width)
+    for ra, a, rb, b in pairs:
+        yield Case(f"imul {ra}, {rb}", width, a=a, b=b if b != a else -1)
+    for imm in IMMS[width]:
+        for ra, a, rb, b in pairs:
+            yield Case(f"imul {ra}, {rb}, {imm}", width, a=a,
+                       b=b if b != a else -1)
+        yield Case(f"imul {reg_name(0, width)}, {text}, {imm}", width, a=0,
+                   mem=True, base=base, base_value=bv)
+    # The base register as the destination.
+    yield Case(f"imul {reg_name(3, width)}, {text}", width, mem=True,
+               base=base, base_value=bv)
+    for shape in EA_SHAPES:
+        for seg in SEGS:
+            if shape == "b" and seg is None:
+                continue
+            text, base, index, bv, iv = memory_operand(width, shape, seg)
+            yield Case(f"imul {reg_name(0, width)}, {text}, {-0x80}", width,
+                       a=0, mem=True, base=base, index=index, base_value=bv,
+                       index_value=iv)
+    yield Case(f"imul {reg_name(2, width)}, {rip_relative(width)}, 3", width,
+               a=2, mem=True)
+    for cond in range(16):
+        yield Case(f"imul {reg_name(0, width)}, {reg_name(3, width)}; "
+                   f"j{CONDS[cond]} 1f; mov ecx, 1; 1:", width, a=0, b=3)
 
 
 def write_cases(cases, out, prefix):
