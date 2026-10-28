@@ -72,6 +72,7 @@ static inline TCGTBCPUState tb_cpu_state(CPUState *cpu)
 #include "tb-context.h"
 #include "tb-internal.h"
 #include "internal-common.h"
+#include "tcg/lookup-key.h"
 #if !defined(CONFIG_USER_ONLY)
 #include "accel/tcg/iommu.h"
 #endif
@@ -265,7 +266,8 @@ tb_lookup_slow(CPUState *cpu, TCGTBCPUState s, uint32_t hash)
  *
  * Always inlined, with misses out of line: helper_lookup_tb_ptr() calls
  * this on every indirect branch the guest takes, and as a call it passed
- * @s through memory.
+ * @s through memory. TCTI's lookup_tb gadget copies its probe and its
+ * comparison: see tcg_lookup_key.
  *
  * Returns: an existing translation block or NULL.
  */
@@ -401,12 +403,43 @@ static bool check_for_breakpoints_slow(CPUState *cpu, vaddr pc,
     return false;
 }
 
+/* TCTI's lookup_tb gadget copies this test: see tcg_lookup_key. */
 static inline bool check_for_breakpoints(CPUState *cpu, vaddr pc,
                                          uint32_t *cflags)
 {
     return unlikely(!QTAILQ_EMPTY(&cpu->breakpoints)) &&
         check_for_breakpoints_slow(cpu, pc, cflags);
 }
+
+/*
+ * What helper_lookup_tb_ptr() does in its common case, as data, for a back
+ * end that does it itself (include/tcg/lookup-key.h). The target sets its
+ * part; the rest is here, beside what it describes.
+ */
+TCGLookupKey tcg_lookup_key = {
+    .cflags_ofs = offsetof(CPUState, tcg_cflags) - sizeof(CPUState),
+    .jc_ofs = offsetof(CPUState, tb_jmp_cache) - sizeof(CPUState),
+    .sstep_ofs = offsetof(CPUState, singlestep_flags) - sizeof(CPUState),
+    .bp_ofs = offsetof(CPUState, breakpoints.tqh_first) - sizeof(CPUState),
+    .io_ofs = offsetof(CPUState, neg.can_do_io) - sizeof(CPUState),
+    .one_insn_per_tb = &one_insn_per_tb,
+    .loglevel = &qemu_loglevel,
+    .log_mask = TB_LOOKUP_LOG_MASK,
+};
+
+/* The shape of the jump cache, and the hash, that the key's users assume. */
+QEMU_BUILD_BUG_ON(TB_JMP_CACHE_BITS != TCG_LOOKUP_JC_BITS);
+#ifdef CONFIG_SOFTMMU
+QEMU_BUILD_BUG_ON(TB_JMP_PAGE_BITS != TCG_LOOKUP_JC_BITS / 2);
+#endif
+QEMU_BUILD_BUG_ON(offsetof(CPUJumpCache, array) != TCG_LOOKUP_JC_ARRAY_OFS);
+QEMU_BUILD_BUG_ON(sizeof(((CPUJumpCache *)0)->array[0]) != 16);
+QEMU_BUILD_BUG_ON(offsetof(CPUJumpCache, array[0].pc) !=
+                  TCG_LOOKUP_JC_ARRAY_OFS + 8);
+QEMU_BUILD_BUG_ON(sizeof_field(CPUState, tcg_cflags) != 4);
+QEMU_BUILD_BUG_ON(sizeof_field(CPUState, singlestep_flags) != 4);
+QEMU_BUILD_BUG_ON(SSTEP_ENABLE != 1);
+QEMU_BUILD_BUG_ON(sizeof_field(CPUState, neg.can_do_io) != 1);
 
 /**
  * helper_lookup_tb_ptr: quick check for next tb
@@ -442,6 +475,7 @@ const void *HELPER(lookup_tb_ptr)(CPUArchState *env)
         return tcg_code_gen_epilogue;
     }
 
+    /* The rest of TB_LOOKUP_LOG_MASK is curr_cflags()'s. */
     if (qemu_loglevel_mask(CPU_LOG_TB_CPU | CPU_LOG_EXEC)) {
         log_cpu_exec(s.pc, cpu, tb);
     }

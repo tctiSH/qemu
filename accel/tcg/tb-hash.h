@@ -43,6 +43,7 @@ static inline unsigned int tb_jmp_cache_hash_page(vaddr pc)
     return (tmp >> (TARGET_PAGE_BITS - TB_JMP_PAGE_BITS)) & TB_JMP_PAGE_MASK;
 }
 
+/* TCTI's lookup_tb gadget computes this too: see tcg_lookup_key. */
 static inline unsigned int tb_jmp_cache_hash_func(vaddr pc)
 {
     vaddr tmp;
