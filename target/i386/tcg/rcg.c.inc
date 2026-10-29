@@ -71,6 +71,14 @@ static const struct {
     { gen_BTS,    RCG_OP_BTS,   0,  2, -1 },
     { gen_BTR,    RCG_OP_BTR,   0,  2, -1 },
     { gen_BTC,    RCG_OP_BTC,   0,  2, -1 },
+    { gen_CBW,    RCG_OP_CBW,   0, -1, -1 },
+    { gen_CWD,    RCG_OP_CWD,   0,  1, -1 },
+    /*
+     * XCHG with memory is locked: decode-new sets PREFIX_LOCK, which
+     * rcg_emit() refuses.
+     */
+    { gen_XCHG,   RCG_OP_XCHG,  0,  2, -1 },
+    { gen_LEAVE,  RCG_OP_LEAVE, -1, -1, -1 },
     { gen_CALL,   RCG_OP_CALL, -1, -1, -1 },
     { gen_CALL_m, RCG_OP_CALL, -1,  1, -1 },
     { gen_JMP_m,  RCG_OP_JMP,  -1,  1, -1 },
@@ -89,10 +97,7 @@ static char rcg_kind(DisasContext *s, X86DecodedOp *op)
     }
     switch (op->unit) {
     case X86_OP_INT:
-        /* AH, CH, DH and BH are left to TCG. */
-        if (op->ot == MO_8 && byte_reg_is_xH(s, op->n)) {
-            return 0;
-        }
+        /* AH to BH too, though most ops refuse them; see rcg_is_xh(). */
         return 'r';
     case X86_OP_IMM:
         return 'i';
@@ -167,6 +172,50 @@ static void rcg_note(TCGTemp **list, unsigned *n, TCGv v)
     rcg_note_temp(list, n, tcgv_tl_temp(v));
 }
 
+/*
+ * Whether op is AH, CH, DH or BH. TCG reads these shifted down to bit 0
+ * (gen_op_mov_v_reg()), but most gadgets work on the whole register, as
+ * TCG does with the other registers, so their results would differ. A
+ * gadget that uses only the low byte of an 8-bit register can take one as
+ * the second byte of RAX to RBX (see rcg_reg_op()): those of the ops that
+ * rcg_takes_xh() lists, and SETcc's.
+ */
+static bool rcg_is_xh(DisasContext *s, X86DecodedOp *op)
+{
+    return op->unit == X86_OP_INT && !op->has_ea && op->ot == MO_8 &&
+           byte_reg_is_xH(s, op->n);
+}
+
+/* Whether op's gadgets take AH to BH; see rcg_is_xh(). */
+static bool rcg_takes_xh(RCGOp op)
+{
+    switch (op) {
+    case RCG_OP_MOV:
+    case RCG_OP_MOVZXB:
+    case RCG_OP_MOVSXB:
+    case RCG_OP_XCHG:
+    case RCG_OP_MUL:
+    case RCG_OP_IMUL:
+        return true;
+    default:
+        return false;
+    }
+}
+
+/*
+ * A register operand's env offset, as a gadget takes it, and *v, the
+ * global it is in: AH to BH are the second byte of RAX to RBX.
+ */
+static uint64_t rcg_reg_op(DisasContext *s, X86DecodedOp *op, TCGv *v)
+{
+    if (rcg_is_xh(s, op)) {
+        *v = cpu_regs[op->n - 4];
+        return rcg_reg(op->n - 4) + 1;
+    }
+    *v = cpu_regs[op->n];
+    return rcg_reg(op->n);
+}
+
 /* The RCG_CC_* index of lazy-flags state cc_op, or -1 if no gadget reads it. */
 static int rcg_cc_index(CCOp cc_op)
 {
@@ -230,13 +279,14 @@ static const void *rcg_translate_cond(DisasContext *s,
         const void *gadget = rcg_setcc[cc][cond];
         uint64_t word;
         TCGTemp *out, *ins[3] = { flags_in[0], flags_in[1] };
+        TCGv reg;
 
         if (!gadget || rcg_kind(s, d) != 'r') {
             return NULL;
         }
-        word = rcg_reg(d->n);
+        word = rcg_reg_op(s, d, &reg);
         /* It writes the low byte, so it reads the rest of the register. */
-        out = ins[2] = tcgv_tl_temp(cpu_regs[d->n]);
+        out = ins[2] = tcgv_tl_temp(reg);
         tcg_gen_rich(gadget, &word, 1, 0, &out, 1, ins, 3);
         return gadget;
     }
@@ -426,6 +476,13 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
     case RCG_KIND_MUL:
         *ot = second->ot;
         return rcg_form(rcg_kind(s, second), 0);
+    case RCG_KIND_CBW:
+        *ot = first->ot;
+        return rcg_form(rcg_kind(s, first), 0);
+    case RCG_KIND_LEAVE:
+        /* Only a 64-bit RBP. */
+        *ot = mo_pushpop(s, s->dflag);
+        return *ot == MO_64 ? RCG_FORM_R : -1;
     case RCG_KIND_BT: {
         char a = rcg_kind(s, first), b = rcg_kind(s, second);
 
@@ -537,6 +594,7 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     uint64_t words[RCG_MAX_WORDS];
     TCGTemp *outs[RCG_MAX_WORDS], *ins[RCG_MAX_WORDS];
     unsigned n, nb_outs = 0, nb_ins = 0;
+    TCGv reg;
 
     if (!CODE64(s) || s->aflag != MO_64 || (s->prefix & PREFIX_LOCK)) {
         return NULL;
@@ -552,6 +610,10 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     form = rcg_operands(s, decode, op, first, second, &ot, &imm,
                         &rotate_left);
     if (form < 0) {
+        return NULL;
+    }
+    if (((first && rcg_is_xh(s, first)) || (second && rcg_is_xh(s, second))) &&
+        !rcg_takes_xh(op)) {
         return NULL;
     }
     /* A shift by CL leaves a flags state only the gadget knows. */
@@ -629,11 +691,21 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     }
     for (n = 0; n < RCG_MAX_WORDS && g->words[n] != RCG_W_END; n++) {
         if (g->words[n] == RCG_W_D) {
-            rcg_note(outs, &nb_outs, cpu_regs[first->n]);
+            rcg_reg_op(s, first, &reg);
+            rcg_note(outs, &nb_outs, reg);
             if (slot->reads_d || ot < MO_32) {
-                rcg_note(ins, &nb_ins, cpu_regs[first->n]);
+                rcg_note(ins, &nb_ins, reg);
             }
         }
+    }
+    if (op == RCG_OP_XCHG) {
+        /* It writes its source too. */
+        rcg_reg_op(s, second, &reg);
+        rcg_note(outs, &nb_outs, reg);
+    }
+    if (op == RCG_OP_LEAVE) {
+        rcg_note(outs, &nb_outs, cpu_regs[R_EBP]);
+        rcg_note(ins, &nb_ins, cpu_regs[R_EBP]);
     }
     if (facts->dst) {
         rcg_note(outs, &nb_outs, cpu_cc_dst);
@@ -655,15 +727,15 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
 
         switch (g->words[n]) {
         case RCG_W_D:
-            words[n] = rcg_reg(first->n);
+            words[n] = rcg_reg_op(s, first, &reg);
             break;
         case RCG_W_S1:
-            words[n] = rcg_reg(first->n);
-            rcg_note(ins, &nb_ins, cpu_regs[first->n]);
+            words[n] = rcg_reg_op(s, first, &reg);
+            rcg_note(ins, &nb_ins, reg);
             break;
         case RCG_W_S:
-            words[n] = rcg_reg(second->n);
-            rcg_note(ins, &nb_ins, cpu_regs[second->n]);
+            words[n] = rcg_reg_op(s, second, &reg);
+            rcg_note(ins, &nb_ins, reg);
             break;
         case RCG_W_BASE:
             if (a->base == -2) {

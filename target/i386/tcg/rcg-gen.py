@@ -269,6 +269,15 @@ BT_FORMS = ("rr", "ri", "mi")
 BT_WIDTHS = (16, 32, 64)
 
 
+# Moves among registers without flags, by decode-new's names: CBW (also
+# CWDE and CDQE) sign-extends the low half of RAX at the operand size, CWD
+# (also CDQ and CQO) fills RDX with the sign of RAX at the operand size, and
+# XCHG swaps two registers (with memory it is locked, which is TCG's). These
+# are their widths.
+CBW_WIDTHS = (16, 32, 64)
+XCHG_WIDTHS = WIDTHS
+
+
 # The lazy-flags states a condition can be read from without a helper, as
 # TCG's CC_OP_<class>B + the width's MemOp, or CC_OP_EFLAGS alone.
 CC_CLASSES = ([(cls, width)
@@ -338,11 +347,12 @@ class Spec:
     """ One gadget: what it does and the words it takes.
 
     kind is "alu", "zero" (XOR of a register with itself), "mov", "lea",
-    "push", "pop", "extend", "unary", "shift", "mul", "imul3", "bt",
-    "call", "jmp" or "ret". form is the destination's kind then the
-    source's (r, m or i), then for IMUL3 an i if it takes an immediate too;
-    for MUL and IMUL with one operand it is the source's, for CALL and JMP
-    the target's (i for CALL rel32), and for RET i. shape and seg are the
+    "push", "pop", "extend", "unary", "shift", "mul", "imul3", "bt", "cbw",
+    "cwd", "xchg", "leave", "call", "jmp" or "ret". form is the
+    destination's kind then the source's (r, m or i), then for IMUL3 an i
+    if it takes an immediate too; for MUL and IMUL with one operand it is
+    the source's, for CBW the destination's, for CALL and JMP the target's
+    (i for CALL rel32), for RET i and for LEAVE r. shape and seg are the
     memory operand's, if any. ordered is for the twin that keeps the
     guest's memory order (tcg_ldst_ordered()).
     """
@@ -378,19 +388,19 @@ class Spec:
         it. """
         if self.kind == "imul3":
             return self.form in ("rr", "rm")
-        return self.kind in ("alu", "unary", "shift", "bt")
+        return self.kind in ("alu", "unary", "shift", "bt", "cbw", "xchg")
 
     @property
     def accesses_memory(self):
         # LEA's memory operand is only an address.
         return (self.has_mem and self.kind != "lea"
-                or self.kind in ("push", "pop", "call", "ret"))
+                or self.kind in ("push", "pop", "call", "ret", "leave"))
 
     @property
     def loads(self):
         """ Whether the gadget loads from guest memory: MOV to memory only
         stores. """
-        if self.kind in ("pop", "ret"):
+        if self.kind in ("pop", "ret", "leave"):
             return True
         return (self.has_mem and self.kind != "lea" and
                 not (self.kind == "mov" and self.form[0] == "m"))
@@ -411,14 +421,16 @@ class Spec:
         them: the destination's, then the source's, then for a memory access
         the MemOpIdx and the env offset of the MMU index's CPUTLBDescFast
         (what TCTI_TLB_FAST_OFS() gives). A register operand is its env
-        offset in CPUX86State.regs[]: "d" if it is written, "s" if only read,
-        and "s1" for CMP's and TEST's first operand, which is only read. A
-        memory operand is the words of its shape (ea_words()). An immediate
-        is its value, sign-extended as decode-new extends it.
+        offset in CPUX86State.regs[]: "d" if it is written, "s" if only read
+        (or XCHG's source, which it writes too), and "s1" for CMP's, TEST's
+        and BT's first
+        operand, which is only read. A memory operand is the words of its
+        shape (ea_words()). An immediate is its value, sign-extended as
+        decode-new extends it.
 
         CALL's imm is the return address less env's eip, and RET's how far
         it moves RSP. MUL and IMUL with one operand take no words for RAX
-        and RDX, whose offsets are fixed. """
+        and RDX, whose offsets are fixed, nor LEAVE for RBP and RSP. """
         if self.kind in ("call", "jmp", "ret"):
             words = (ea_words(self.shape, self.seg) if self.form == "m"
                      else ["s"] if self.form == "r" else [])
@@ -427,12 +439,14 @@ class Spec:
             if self.accesses_memory:
                 words += ["oi", "tlb"]
             return words
-        if self.kind in ("push", "mul"):
+        if self.kind == "leave":
+            operands = []
+        elif self.kind in ("push", "mul"):
             operands = ["s" if self.form == "r" else self.form]
         elif self.kind == "imul3":
             operands = ["d", "s" if self.form[1] == "r" else "m",
                         *self.form[2:]]
-        elif self.kind in ("pop", "unary"):
+        elif self.kind in ("pop", "unary", "cbw"):
             operands = ["d" if self.form == "r" else self.form]
         else:
             operands = ["d" if self.form[0] == "r" else self.form[0]]
@@ -522,6 +536,12 @@ def specs():
         for form in BT_FORMS:
             for width in BT_WIDTHS:
                 yield from with_memory(Spec("bt", op, form, width))
+    for width in CBW_WIDTHS:
+        yield Spec("cbw", None, "r", width)
+        yield Spec("cwd", None, "rr", width)
+    for width in XCHG_WIDTHS:
+        yield Spec("xchg", None, "rr", width)
+    yield from with_memory(Spec("leave", None, "r", 64))
     for form in ("i", "r", "m"):
         yield from with_memory(Spec("call", None, form, 64))
     for form in ("r", "m"):
@@ -761,8 +781,11 @@ class Body:
 
     def read_reg(self, dest, word):
         """ dest = the whole register whose env offset is in word, as TCG's
-        gen_op_mov_v_reg() reads it for any width (the high-byte registers
-        AH to BH are left to TCG). """
+        gen_op_mov_v_reg() reads it for any width but AH to BH. For those
+        the word is the offset of RAX to RBX plus 1 (see rcg_reg_op() in
+        rcg.c.inc), so that dest's low byte is the register and the rest
+        reaches into the next one: a gadget the translator gives them to
+        uses no more of dest than its low byte. """
         self.emit(f"ldr {dest}, [{self.env}, {self.word(word)}]")
         self.define(dest)
         self.reads.add(word)
@@ -1308,6 +1331,44 @@ def bt_body(g, spec):
     g.write_cc(src=T)
 
 
+def cbw_body(g, spec):
+    # gen_CBW: RAX's low half sign-extended, at the operand size.
+    width = spec.width
+    g.read_reg(A, "d")
+    g.extend(A, width // 2, True)
+    g.write_reg(A, "d", width)
+
+
+def cwd_body(g, spec):
+    # gen_CWD: RDX filled with the sign of RAX at the operand size.
+    width = spec.width
+    g.read_reg(A, "s")
+    g.emit(f"sbfx {A}, {A}, #{width - 1}, #1")
+    g.write_reg(A, "d", width)
+
+
+def xchg_body(g, spec):
+    # gen_XCHG of two registers: each gets the other's value, written at
+    # the operand size.
+    width = spec.width
+    g.read_reg(A, "d")
+    g.read_reg(B, "s")
+    g.write_reg(B, "d", width)
+    g.write_reg(A, "s", width)
+
+
+def leave_body(g, spec):
+    # gen_leave() for 64-bit code: RBP from the stack at RBP, and RSP just
+    # above it. The load comes first, as it may fault.
+    env = g.env
+    g.emit(f"ldr {B}, [{env}, %[rbp]]")
+    g.define(B)
+    g.load(A, B, 64)
+    g.emit(f"add {B}, {B}, #8",
+           f"str {A}, [{env}, %[rbp]]",
+           f"str {B}, [{env}, %[rsp]]")
+
+
 def jcc_body(g, spec):
     # gen_Jcc's condition and branch; the translator must emit the jumps on
     # either side. The gadget always stores CC_OP first, as gen_jcc() does
@@ -1349,6 +1410,10 @@ BODIES = {
     "mul": mul_body,
     "imul3": imul3_body,
     "bt": bt_body,
+    "cbw": cbw_body,
+    "cwd": cwd_body,
+    "xchg": xchg_body,
+    "leave": leave_body,
     "extend": extend_body,
     "unary": unary_body,
     "shift": shift_body,
@@ -1380,6 +1445,7 @@ BODY_OPERANDS = {
     "rax": "offsetof(CPUX86State, regs[R_EAX])",
     "rdx": "offsetof(CPUX86State, regs[R_EDX])",
     "rsp": f"offsetof(CPUX86State, regs[{R_ESP}])",
+    "rbp": "offsetof(CPUX86State, regs[R_EBP])",
     "eip": "offsetof(CPUX86State, eip)",
     "cc_z_p": "CC_Z | CC_P",
     "cc_op": "offsetof(CPUX86State, cc_op)",
@@ -1523,10 +1589,12 @@ class TctiHarness(Harness):
 OP_NAMES = ("add", "sub", "and", "or", "xor", "cmp", "test", "zero", "mov",
             "lea", "push", "pop", "movzxb", "movzxw", "movsxb", "movsxw",
             "movsxd", "not", "neg", "shl", "shr", "sar", "ror", "mul", "imul",
-            "imul3", "bt", "bts", "btr", "btc", "call", "jmp", "ret")
+            "imul3", "bt", "bts", "btr", "btc", "cbw", "cwd", "xchg", "leave",
+            "call", "jmp", "ret")
 FORM_NAMES = ("rr", "rm", "mr", "ri", "mi", "r", "i", "m", "rri", "rmi")
 KIND_NAMES = ("alu", "zero", "mov", "lea", "push", "pop", "extend", "unary",
-              "shift", "mul", "imul3", "bt", "call", "jmp", "ret")
+              "shift", "mul", "imul3", "bt", "cbw", "cwd", "xchg", "leave",
+              "call", "jmp", "ret")
 WORD_NAMES = ("d", "s", "s1", "base", "index", "disp", "seg", "imm", "oi",
               "tlb", "ccop")
 MAX_WORDS = len(WORD_REGS)
@@ -1795,7 +1863,7 @@ def write_table(all_specs, out):
             flags = [-1, False, "RCG_SRCT_NONE"]
         flags += ["cc_dst" in spec.cc_writes, "cc_src" in spec.cc_writes]
         facts = [f"RCG_KIND_{spec.kind.upper()}",
-                 spec.kind in ("push", "pop", "call", "ret"),
+                 spec.kind in ("push", "pop", "call", "ret", "leave"),
                  spec.kind in ("call", "jmp", "ret"),
                  MO[spec.op.src] if spec.kind == "extend" else -1] + flags
         fields = ("kind", "stack", "branch", "src_ot", "cc_op", "by_width",
@@ -1994,6 +2062,8 @@ def insn_cases():
     for op in BT_OPS:
         for width in BT_WIDTHS:
             yield from bt_cases(op, width)
+    yield from move_cases()
+    yield from high_byte_cases()
     yield from cond_cases()
     yield from branch_cases()
     yield from chain_cases()
@@ -2163,7 +2233,7 @@ def extend_cases(op, width):
         yield Case(f"{mnemonic} {reg_name(a, width)}, {reg_name(b, op.src)}",
                    width, a=a, b=b if b != a else -1)
     if op.src == 8 and width < 64:
-        # AH as the source is TCG's (and cannot go with REX.W).
+        # AH as the source, which cannot go with REX.W.
         yield Case(f"{mnemonic} {reg_name(3, width)}, ah", width, a=3, b=0)
     for shape in EA_SHAPES:
         for seg in SEGS:
@@ -2341,6 +2411,11 @@ def stack_cases():
     # copy frame pointers from RBP, which holds no address here.
     yield Case("enter 8, 0", 64, stack=True)
     yield Case("enter 0x8000, 0", 64, stack=True)
+    for rsp in (STACK, *MISALIGNED_STACKS):
+        yield Case("mov rbp, rsp; leave", 64, stack=True, rsp=rsp)
+    yield Case("lea rbp, [rsp+8]; leave", 64, stack=True)
+    # A 16-bit LEAVE: TCG's.
+    yield Case("mov rbp, rsp; leavew", 16, stack=True)
 
 
 def branch_cases():
@@ -2396,6 +2471,9 @@ def fault_cases():
         yield mem(f"mov {reg_name(0, width)}, {m}", width, a=0)
         yield mem(f"mov {m}, {reg_name(2, width)}", width, a=2, writes=True)
         yield mem(f"mov {m}, 0x55", width, writes=True)
+    # AH to BH with memory.
+    yield mem("mov ah, byte ptr [rbx]", 8, a=0)
+    yield mem("mov byte ptr [rbx], ch", 8, a=1, writes=True)
     for op in EXTEND_OPS:
         for width in op.widths:
             # The case's width is the access's, the source's here.
@@ -2443,6 +2521,7 @@ def fault_cases():
     yield stack("push rax", a=0, writes=True)
     yield stack("push 0x55", writes=True)
     yield stack("pop rax", a=0)
+    yield Case("leave", 64, mem=True, base=5, moved=5)
     yield stack("call 1f; 1:", writes=True)
     yield stack("call rdx", writes=True, target=2)
     yield stack("ret", target=RCG_TARGET_STACK)
@@ -2604,6 +2683,52 @@ def bt_cases(op, width):
     for cond in range(16):
         yield Case(f"cmp {ra}, {rb}; {name} {rb}, 3; j{CONDS[cond]} 1f; "
                    f"mov ecx, 1; 1:", width, a=0, b=3)
+
+
+def move_cases():
+    """ CBW and CWD and their wider forms, and XCHG of registers (with
+    memory, it is locked, which is TCG's). """
+    for name, width in (("cbw", 16), ("cwde", 32), ("cdqe", 64)):
+        yield Case(name, width, a=0)
+    for name, width in (("cwd", 16), ("cdq", 32), ("cqo", 64)):
+        yield Case(name, width, a=0, b=2)
+    for width in XCHG_WIDTHS:
+        # RAX with another register has a short encoding.
+        for ra, a, rb, b in reg_pairs(width):
+            yield Case(f"xchg {ra}, {rb}", width, a=a, b=b if b != a else -1)
+        text, base, _, bv, _ = memory_operand(width, "b", None)
+        yield Case(f"xchg {text}, {reg_name(2, width)}", width, a=2, mem=True,
+                   base=base, base_value=bv, writes=True)
+    # Not a NOP, as 0x90 is: 87 C0, which zero-extends RAX.
+    yield Case("xchg eax, eax", 32, a=0)
+    # 0x90 with REX.B: the short encoding with R8.
+    yield Case("xchg rax, r8", 64, a=0, b=8)
+
+
+def high_byte_cases():
+    """ AH, CH, DH and BH with the instructions whose gadgets take them,
+    which use no more of an 8-bit register than its low byte: MOV, MOVZX,
+    MOVSX, XCHG, MUL, IMUL and SETcc. Those left to TCG are in
+    alu_cases(), shift_cases() and so on. Some share RAX with an operand
+    the instruction reads or writes without naming it. """
+    text, base, _, bv, _ = memory_operand(8, "b", None)
+    for insn, a, b in (("mov ah, bh", 0, 3), ("mov ch, al", 1, 0),
+                       ("mov dh, 0x7f", 2, -1), ("xchg ah, al", 0, -1),
+                       ("xchg ah, ah", 0, -1), ("xchg ch, bl", 1, 3),
+                       ("xchg bh, dh", 3, 2), ("movzx eax, ah", 0, -1),
+                       ("movzx ecx, bh", 1, 3), ("movzx dx, ch", 2, 1),
+                       ("movsx eax, dh", 0, 2), ("movsx ebx, ah", 3, 0),
+                       ("movsx cx, bh", 1, 3), ("mul ch", 0, 1),
+                       ("mul ah", 0, -1), ("imul bh", 0, 3),
+                       ("imul ah", 0, -1)):
+        yield Case(insn, 8, a=a, b=b)
+    for insn, a, writes in ((f"mov ah, {text}", 0, False),
+                            (f"mov {text}, ch", 1, True)):
+        yield Case(insn, 8, a=a, mem=True, base=base, base_value=bv,
+                   writes=writes)
+    for cond in range(16):
+        yield Case(f"cmp eax, ebx; set{CONDS[cond]} bh", 32, a=0, b=3)
+        yield Case(f"cmp eax, ebx; set{CONDS[cond]} ah", 32, a=0, b=3)
 
 
 def write_cases(cases, out, prefix):

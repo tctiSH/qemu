@@ -4224,6 +4224,11 @@ push qword ptr [rsp+8]: bbabcc3310608030
 pop qword ptr [rsp+8]: 8581e891ed5fa1dd
 enter 8, 0: fb0e06cc43e24a50
 enter 0x8000, 0: e183b43af325cb50
+mov rbp, rsp; leave: de468bc10b0646c1
+mov rbp, rsp; leave: a4c820f300075c75
+mov rbp, rsp; leave: 16b44beb9e1d1935
+lea rbp, [rsp+8]; leave: 553af2c1314a6ba8
+mov rbp, rsp; leavew: 13a63d9116a00313
 movzx ax, bl: fa02a774f944810d
 movzx cx, cl: a6fa94eb04092c85
 movzx r8w, r15b: 2b537c288d5dadfd
@@ -8841,6 +8846,84 @@ cmp rax, rbx; btc rbx, 3; jl 1f; mov ecx, 1; 1:: f2ad70121a156ae1
 cmp rax, rbx; btc rbx, 3; jge 1f; mov ecx, 1; 1:: eef45db013a3b881
 cmp rax, rbx; btc rbx, 3; jle 1f; mov ecx, 1; 1:: dc7a242047e65f45
 cmp rax, rbx; btc rbx, 3; jg 1f; mov ecx, 1; 1:: 82bedfe73d59e80d
+cbw: 5fdfa01fd388c638
+cwde: 4abcef7f29f066e4
+cdqe: 191189985d0fb900
+cwd: 5a748bb211877a95
+cdq: 5b607b5a8b8e9565
+cqo: 55dda4f72add8465
+xchg al, bl: 6480c784cf48784d
+xchg cl, cl: 4f505291b2a03c8
+xchg r8b, r15b: fcc2007efbd3c10d
+xchg sil, dil: 9d2b7bb98bf9a9ad
+xchg ah, bl: ea9743e786b2fb45
+xchg bl, ch: 47e87530d6c982ed
+xchg byte ptr [rbx+8], dl: cf99fb72c47973cd
+xchg ax, bx: 13624934da82d655
+xchg cx, cx: 4f505291b2a03c8
+xchg r8w, r15w: d550c1b89522c3ed
+xchg word ptr [rbx+8], dx: c054d42458b1a9c5
+xchg eax, ebx: 6dbb1e10f7b38ae5
+xchg ecx, ecx: f5bb873041603030
+xchg r8d, r15d: 25f7b200dd0cb54d
+xchg dword ptr [rbx+8], edx: 96380c0034b470f5
+xchg rax, rbx: 5c3839a576ea2e55
+xchg rcx, rcx: 4f505291b2a03c8
+xchg r8, r15: e938efdc6a72f7a5
+xchg qword ptr [rbx+8], rdx: 8c34d283fab02b85
+xchg eax, eax: 98424a6e80edff04
+xchg rax, r8: f695c1ef19e92b55
+mov ah, bh: 2d078b32642f423d
+mov ch, al: 45d68087de304581
+mov dh, 0x7f: 6ee4ec409d403dfd
+xchg ah, al: f91ca0761324b21e
+xchg ah, ah: 60ba7305e8707f7c
+xchg ch, bl: 2634fa4918d698cd
+xchg bh, dh: 61329ca438550ca5
+movzx eax, ah: f7c0a84c717c9a06
+movzx ecx, bh: 82318230e08762e5
+movzx dx, ch: 9e738ef65306aad1
+movsx eax, dh: 87e0316babc2cee5
+movsx ebx, ah: fedf8bfe2d80b225
+movsx cx, bh: a0fadb4ff93c4d6d
+mul ch: 7db0bb49aa1bf43f
+mul ah: 6164f7ddb5dad136
+imul bh: 8570668c91708fa9
+imul ah: 619ec68ba61048d3
+mov ah, byte ptr [rbx+8]: e81779f731ae4d01
+mov byte ptr [rbx+8], ch: e54c51552598ebd
+cmp eax, ebx; seto bh: fa90206bbe3a0b4c
+cmp eax, ebx; seto ah: b1583d442aca66a0
+cmp eax, ebx; setno bh: 2ee4cf5e6e92780
+cmp eax, ebx; setno ah: d95315f2e839297c
+cmp eax, ebx; setb bh: 6983722138fe1677
+cmp eax, ebx; setb ah: 63a8af20886cd9b7
+cmp eax, ebx; setae bh: ad912c2bdf04f743
+cmp eax, ebx; setae ah: 13967fbe8b6b5f3b
+cmp eax, ebx; sete bh: 671a30f24ee9a727
+cmp eax, ebx; sete ah: f860e2fc717645db
+cmp eax, ebx; setne bh: 30e3a0520876a2eb
+cmp eax, ebx; setne ah: 691ca66804720c87
+cmp eax, ebx; setbe bh: b14979b2a9defd33
+cmp eax, ebx; setbe ah: 9aa5848c7b855f97
+cmp eax, ebx; seta bh: 88479c68f6cc3c67
+cmp eax, ebx; seta ah: a723d651c33aa6e3
+cmp eax, ebx; sets bh: a8d2f610a8c0a5a0
+cmp eax, ebx; sets ah: e330dfd8cee86c8
+cmp eax, ebx; setns bh: 350df6b101ad13a4
+cmp eax, ebx; setns ah: 5802a76c6f97e87c
+cmp eax, ebx; setp bh: 8bd7b950042402a8
+cmp eax, ebx; setp ah: 1d5cfef1c6a4f610
+cmp eax, ebx; setnp bh: 64104ad6bf88ba84
+cmp eax, ebx; setnp ah: d3d7d462f74d865c
+cmp eax, ebx; setl bh: 26518608faa10fb7
+cmp eax, ebx; setl ah: 27e1ea5dba8878ab
+cmp eax, ebx; setge bh: 4115ba8e41b2e993
+cmp eax, ebx; setge ah: 3eedd84c59f5a407
+cmp eax, ebx; setle bh: 159507e4913910c3
+cmp eax, ebx; setle ah: dfc31315d7a1bc83
+cmp eax, ebx; setg bh: d70aa86537fab057
+cmp eax, ebx; setg ah: bfc5fd98c32d737
 cmp al, bl; jo 1f; mov ecx, 1; 1:: 8bf6fb4cf2bcad6e
 cmp al, bl; seto cl: 1d143dd354a95689
 cmp al, bl; cmovo cx, dx: fef8a12223b69bf6
