@@ -207,7 +207,7 @@ SHIFT_OPS = (
 )
 
 # ROR of a register by an immediate count, at 32 and 64 bits, which also does
-# ROL as ROR by the width less the count. Its cc_op is None because the
+# ROL as ROR by the width less the count. Its cc is None because the
 # gadget leaves the flags state alone, not because the instruction does: the
 # translator must have TCG compute the CF and OF the instruction leaves, by
 # ROL's rule for a ROL (CF the result's bit 0) and ROR's for a ROR (CF its
@@ -237,9 +237,42 @@ IMUL3_FORMS = ("rr", "rm", "rri", "rmi")
 IMUL3_WIDTHS = (16, 32, 64)
 
 
+class BitTest:
+    """ BT, BTS, BTR and BTC: CF = bit n of dest, n being the source (a
+    register or an immediate) masked to the operand size; BTS, BTR and BTC
+    then set, clear or flip that bit. a64 is the AArch64 instruction that
+    does so, taking the mask 1 << n as its second operand. A register
+    operand is read whole, as TCG reads it. With a register for n, a
+    memory operand is a bit string that can reach beyond the operand, so
+    that form is left to TCG.
+
+    ZF is kept and the other flags are undefined, so the flags state TCG
+    leaves depends on the one before (see gen_bt_flags()). After
+    CC_OP_DYNAMIC or a state with EFLAGS in cc_src, TCG computes the flags
+    in full, and the instruction is left to TCG. After any other state,
+    the gadget writes cc_src as dest shifted right by n and keeps cc_dst,
+    and the translator records CC_OP_SARB plus the earlier state's MemOp.
+    """
+
+    def __init__(self, name, a64):
+        self.name = name
+        self.a64 = a64
+
+    @property
+    def writes(self):
+        return self.a64 is not None
+
+
+BT_OPS = (BitTest("bt", None), BitTest("bts", "orr"), BitTest("btr", "bic"),
+          BitTest("btc", "eor"))
+BT_FORMS = ("rr", "ri", "mi")
+BT_WIDTHS = (16, 32, 64)
+
+
 # The lazy-flags states a condition can be read from without a helper, as
 # TCG's CC_OP_<class>B + the width's MemOp, or CC_OP_EFLAGS alone.
-CC_CLASSES = ([(cls, width) for cls in ("sub", "add", "logic", "inc", "dec")
+CC_CLASSES = ([(cls, width)
+               for cls in ("sub", "add", "logic", "inc", "dec", "sar")
                for width in WIDTHS] + [("eflags", None)])
 
 # x86 conditions by the low four bits of Jcc's, SETcc's and CMOVcc's opcode.
@@ -305,11 +338,11 @@ class Spec:
     """ One gadget: what it does and the words it takes.
 
     kind is "alu", "zero" (XOR of a register with itself), "mov", "lea",
-    "push", "pop", "extend", "unary", "shift", "mul", "imul3", "call",
-    "jmp" or "ret". form is the destination's kind then the source's (r, m
-    or i), then for IMUL3 an i if it takes an immediate too; for MUL and
-    IMUL with one operand it is the source's, for CALL and JMP the
-    target's (i for CALL rel32), and for RET i. shape and seg are the
+    "push", "pop", "extend", "unary", "shift", "mul", "imul3", "bt",
+    "call", "jmp" or "ret". form is the destination's kind then the
+    source's (r, m or i), then for IMUL3 an i if it takes an immediate too;
+    for MUL and IMUL with one operand it is the source's, for CALL and JMP
+    the target's (i for CALL rel32), and for RET i. shape and seg are the
     memory operand's, if any. ordered is for the twin that keeps the
     guest's memory order (tcg_ldst_ordered()).
     """
@@ -345,7 +378,7 @@ class Spec:
         it. """
         if self.kind == "imul3":
             return self.form in ("rr", "rm")
-        return self.kind in ("alu", "unary", "shift")
+        return self.kind in ("alu", "unary", "shift", "bt")
 
     @property
     def accesses_memory(self):
@@ -370,7 +403,7 @@ class Spec:
             return True
         return (self.has_mem and self.form[0] == "m" and
                 (self.kind in ("mov", "unary", "shift") or
-                 self.kind == "alu" and self.op.writes))
+                 self.kind in ("alu", "bt") and self.op.writes))
 
     @property
     def words(self):
@@ -405,7 +438,8 @@ class Spec:
             operands = ["d" if self.form[0] == "r" else self.form[0]]
             if self.kind != "zero":
                 operands.append("s" if self.form[1] == "r" else self.form[1])
-            if self.kind == "alu" and not self.op.writes and operands[0] == "d":
+            if (self.kind in ("alu", "bt") and not self.op.writes and
+                    operands[0] == "d"):
                 operands[0] = "s1"
         words = []
         for operand in operands:
@@ -420,22 +454,6 @@ class Spec:
         if self.accesses_memory:
             words += ["oi", "tlb"]
         return words
-
-    @property
-    def cc_op(self):
-        """ The CC_OP the gadget leaves, as a C expression, or None if the
-        gadget leaves the flags state alone. For ROR the instruction still
-        changes the flags; see ROTATE_OP. A shift by CL leaves a state the
-        translator cannot know; see Shift. """
-        if self.kind == "zero":
-            return "CC_OP_EFLAGS"
-        if self.kind == "shift" and self.form[1] == "r":
-            return "CC_OP_DYNAMIC"
-        if self.kind in ("alu", "unary", "shift") and self.op.cc:
-            return f"CC_OP_{self.op.cc}B + {MO[self.width]}"
-        if self.kind in ("mul", "imul3"):
-            return f"CC_OP_MULB + {MO[self.width]}"
-        return None
 
     @property
     def cc_writes(self):
@@ -453,6 +471,8 @@ class Spec:
         if (self.kind in ("unary", "shift") and self.op.cc or
                 self.kind in ("mul", "imul3")):
             return ("cc_dst", "cc_src")
+        if self.kind == "bt":
+            return ("cc_src",)
         return ()
 
 
@@ -498,6 +518,10 @@ def specs():
     for form in IMUL3_FORMS:
         for width in IMUL3_WIDTHS:
             yield from with_memory(Spec("imul3", IMUL3_OP, form, width))
+    for op in BT_OPS:
+        for form in BT_FORMS:
+            for width in BT_WIDTHS:
+                yield from with_memory(Spec("bt", op, form, width))
     for form in ("i", "r", "m"):
         yield from with_memory(Spec("call", None, form, 64))
     for form in ("r", "m"):
@@ -805,6 +829,50 @@ class Body:
         elif cls == "logic" and jcc_op in (0, 1):
             # OF and CF are 0.
             never = True
+        elif cls == "sar":
+            # As compute_aco_sar() reads it: CF is cc_src's bit 0, OF is the
+            # top bit at the width of cc_src ^ cc_dst, and ZF and SF come
+            # from cc_dst, so that SF ^ OF is cc_src's top bit.
+            self.emit(f"ldp {A}, {B}, [{env}, %[cc_dst]]")
+            if jcc_op == 0:
+                self.emit(f"eor {T}, {A}, {B}")
+                top(T)
+                self.emit(f"tst {T}, {T}")
+                arm = "mi"
+            elif jcc_op == 1:
+                self.emit(f"tst {B}, #1")
+                arm = "ne"
+            elif jcc_op == 2:
+                top(A)
+                self.emit(f"tst {A}, {A}")
+                arm = "eq"
+            elif jcc_op == 3:
+                # CF or ZF: 1 if Z, else C.
+                top(A)
+                self.emit(f"and {T}, {B}, #1",
+                          f"cmp {A}, #0",
+                          f"csinc {T}, {T}, xzr, ne",
+                          f"cmp {T}, #0")
+                arm = "ne"
+            elif jcc_op == 4:
+                top(A)
+                self.emit(f"tst {A}, {A}")
+                arm = "mi"
+            elif jcc_op == 6:
+                top(B)
+                self.emit(f"tst {B}, {B}")
+                arm = "mi"
+            else:
+                # SF ^ OF, or ZF: 1 if Z, else cc_src's top bit. P is read
+                # from CC_OP_EFLAGS only (see cond_specs()).
+                assert jcc_op == 7
+                top(A)
+                top(B)
+                self.emit(f"lsr {T}, {B}, #63",
+                          f"cmp {A}, #0",
+                          f"csinc {T}, {T}, xzr, ne",
+                          f"cmp {T}, #0")
+                arm = "ne"
         else:
             self.emit(f"ldp {A}, {B}, [{env}, %[cc_dst]]")
             if cls in ("sub", "add"):
@@ -1210,6 +1278,36 @@ def imul3_body(g, spec):
     g.write_cc(dst=R, src=B)
 
 
+def bt_body(g, spec):
+    # gen_BT, gen_BTS, gen_BTR and gen_BTC, after any state except those
+    # BitTest excludes, leaving CC_OP_SARB plus that state's MemOp: the
+    # operand is written back first, as it may fault, then cc_src.
+    op, width = spec.op, spec.width
+    if spec.has_mem:
+        g.ea(ADDR)
+        g.load(A, ADDR, width)
+    else:
+        g.read_reg(A, "d" if op.writes else "s1")
+    if spec.form[1] == "r":
+        g.read_reg(B, "s")
+        g.emit(f"and {B}, {B}, #{width - 1}")
+        bit = B
+    else:
+        # The translator masks it.
+        bit = g.word("imm")
+    if op.writes:
+        g.emit(f"mov {R}, #1",
+               f"lsl {R}, {R}, {bit}",
+               f"{op.a64} {R}, {A}, {R}")
+        g.define(R)
+        if spec.has_mem:
+            g.store(R, ADDR, width)
+        else:
+            g.write_reg(R, "d", width)
+    g.emit(f"lsr {T}, {A}, {bit}")
+    g.write_cc(src=T)
+
+
 def jcc_body(g, spec):
     # gen_Jcc's condition and branch; the translator must emit the jumps on
     # either side. The gadget always stores CC_OP first, as gen_jcc() does
@@ -1250,6 +1348,7 @@ BODIES = {
     "cmov": cmov_body,
     "mul": mul_body,
     "imul3": imul3_body,
+    "bt": bt_body,
     "extend": extend_body,
     "unary": unary_body,
     "shift": shift_body,
@@ -1424,10 +1523,10 @@ class TctiHarness(Harness):
 OP_NAMES = ("add", "sub", "and", "or", "xor", "cmp", "test", "zero", "mov",
             "lea", "push", "pop", "movzxb", "movzxw", "movsxb", "movsxw",
             "movsxd", "not", "neg", "shl", "shr", "sar", "ror", "mul", "imul",
-            "imul3", "call", "jmp", "ret")
+            "imul3", "bt", "bts", "btr", "btc", "call", "jmp", "ret")
 FORM_NAMES = ("rr", "rm", "mr", "ri", "mi", "r", "i", "m", "rri", "rmi")
 KIND_NAMES = ("alu", "zero", "mov", "lea", "push", "pop", "extend", "unary",
-              "shift", "mul", "imul3", "call", "jmp", "ret")
+              "shift", "mul", "imul3", "bt", "call", "jmp", "ret")
 WORD_NAMES = ("d", "s", "s1", "base", "index", "disp", "seg", "imm", "oi",
               "tlb", "ccop")
 MAX_WORDS = len(WORD_REGS)
@@ -1436,7 +1535,7 @@ MAX_WORDS = len(WORD_REGS)
 # "other" takes the ops with no file.
 # Must match target/i386/tcg/meson.build.
 GADGET_FILES = ("add", "sub", "and", "or", "xor", "cmp", "test", "mov",
-                "other", "shift", "mul", "jcc", "setcc", "cmov")
+                "other", "shift", "mul", "bt", "jcc", "setcc", "cmov")
 
 
 def op_name(spec):
@@ -1447,7 +1546,7 @@ def gadget_file(spec):
     if isinstance(spec, CondSpec):
         return "jcc" if spec.kind == "jccgoto" else spec.kind
     name = op_name(spec)
-    if spec.kind in ("shift", "mul"):
+    if spec.kind in ("shift", "mul", "bt"):
         return spec.kind
     if spec.kind == "imul3":
         return "mul"
@@ -1621,9 +1720,10 @@ def write_table(all_specs, out):
     p(" * Its lazy flags. cc_op: the CC_OP it leaves, plus the width's MemOp")
     p(" * if by_width; -1 if none, and for ROR, whose CF and OF the")
     p(" * translator computes. After a shift by CL, which writes cc_op, the")
-    p(" * translator records CC_OP_DYNAMIC instead. srcT: what the translator")
-    p(" * puts in cc_srcT after it, as gen_SUB and gen_NEG do. dst, src:")
-    p(" * whether it writes cc_dst and cc_src.")
+    p(" * translator records CC_OP_DYNAMIC instead, and after BT, which keeps")
+    p(" * cc_dst, it adds the earlier state's MemOp. srcT: what the")
+    p(" * translator puts in cc_srcT after it, as gen_SUB and gen_NEG do. dst,")
+    p(" * src: whether it writes cc_dst and cc_src.")
     p(" */")
     p("typedef struct RCGFacts {")
     p("    RCGKind kind;")
@@ -1688,6 +1788,9 @@ def write_table(all_specs, out):
             flags = [f"CC_OP_{spec.op.cc}B", True, "RCG_SRCT_NONE"]
         elif spec.kind in ("mul", "imul3"):
             flags = ["CC_OP_MULB", True, "RCG_SRCT_NONE"]
+        elif spec.kind == "bt":
+            # Plus the earlier state's MemOp, which the translator adds.
+            flags = ["CC_OP_SARB", False, "RCG_SRCT_NONE"]
         else:
             flags = [-1, False, "RCG_SRCT_NONE"]
         flags += ["cc_dst" in spec.cc_writes, "cc_src" in spec.cc_writes]
@@ -1888,6 +1991,9 @@ def insn_cases():
             yield from mul_cases(op, width)
     for width in IMUL3_WIDTHS:
         yield from imul3_cases(width)
+    for op in BT_OPS:
+        for width in BT_WIDTHS:
+            yield from bt_cases(op, width)
     yield from cond_cases()
     yield from branch_cases()
     yield from chain_cases()
@@ -2170,6 +2276,7 @@ def flag_setters(width):
         "logic": [f"test {ra}, {rb}", f"and {ra}, {rb}"],
         "inc": [f"inc {ra}"],
         "dec": [f"dec {ra}"],
+        "sar": [f"shr {ra}, 3", f"sar {ra}, 1"],
     }
 
 
@@ -2311,6 +2418,14 @@ def fault_cases():
                       writes=True)
             yield Case(f"{op.name} {PTR[width]} ptr [rcx], cl", width,
                        mem=True, base=1, moved=1, writes=True)
+    # BT and friends set CF and keep ZF, and the other flags are undefined:
+    # TCG leaves them differently when it translates the instruction at a
+    # TB's start, as it does for the run after the fault. CF and ZF go to
+    # CL and CH, then TEST defines every flag.
+    for op in BT_OPS:
+        for width in BT_WIDTHS:
+            yield mem(f"{op.name} {PTR[width]} ptr [rbx], 5; setc cl; "
+                      f"setz ch; test ecx, ecx", width, writes=op.writes)
     for op in MUL_OPS:
         for width in WIDTHS:
             yield mem(f"{op.name} {PTR[width]} ptr [rbx]", width, a=0)
@@ -2429,6 +2544,66 @@ def imul3_cases(width):
     for cond in range(16):
         yield Case(f"imul {reg_name(0, width)}, {reg_name(3, width)}; "
                    f"j{CONDS[cond]} 1f; mov ecx, 1; 1:", width, a=0, b=3)
+
+
+# Bit numbers for BT and friends: as the encoding takes them, before the
+# mask to the operand size.
+BT_BITS = (0, 1, 7, 8, 15, 16, 31, 32, 63, 64, 255)
+
+
+def bt_cases(op, width):
+    """ BT, BTS, BTR or BTC by a register and by an immediate, on registers
+    and memory, after each lazy-flags state, and then the flags it leaves
+    as a condition reads them. After CC_OP_EFLAGS (SAHF's) and with a
+    register bit number on memory, they are TCG's. """
+    name = op.name
+    for ra, a, rb, b in reg_pairs(width):
+        yield Case(f"{name} {ra}, {rb}", width, a=a, b=b if b != a else -1)
+    for n in (0, 9):
+        for bit in BT_BITS:
+            yield Case(f"{name} {reg_name(n, width)}, {bit}", width, a=n)
+    for bit in BT_BITS:
+        yield Case(f"mov edx, {bit}; {name} {reg_name(3, width)}, "
+                   f"{reg_name(2, width)}", width, b=3)
+    for shape in EA_SHAPES:
+        for seg in SEGS:
+            text, base, index, bv, iv = memory_operand(width, shape, seg)
+            yield Case(f"{name} {text}, 5", width, mem=True, base=base,
+                       index=index, base_value=bv, index_value=iv,
+                       writes=op.writes)
+    text, base, _, bv, _ = memory_operand(width, "b", None)
+    for bit in BT_BITS:
+        yield Case(f"{name} {text}, {bit}", width, mem=True, base=base,
+                   base_value=bv, writes=op.writes)
+    for target in MISALIGNED:
+        text, base, _, bv, _ = memory_operand(width, "b", None, target=target)
+        yield Case(f"{name} {text}, 9", width, mem=True, base=base,
+                   base_value=bv, operand=target, writes=op.writes)
+    yield Case(f"{name} {rip_relative(width)}, 3", width, mem=True,
+               writes=op.writes)
+    # A bit string in memory, by a register: TCG's. The bit number moves
+    # the access, so it is kept within the operand.
+    text, base, _, bv, _ = memory_operand(width, "b", None)
+    yield Case(f"mov edx, 5; {name} {text}, {reg_name(2, width)}", width,
+               mem=True, base=base, base_value=bv, writes=op.writes)
+    ra, rb = reg_name(0, width), reg_name(3, width)
+    for setters in flag_setters(width).values():
+        yield Case(f"{setters[0]}; {name} {rb}, {ra}", width, a=0, b=3)
+    yield Case(f"mov ah, 0xd5; sahf; {name} {rb}, {ra}", width, a=0, b=3)
+    # After states the condition gadgets do not read. SBB of a register from
+    # itself leaves a state at TCG's word width, whatever the operand's.
+    for setter in (f"imul {ra}, {rb}", f"shl {ra}, 3", f"stc; adc {ra}, {rb}",
+                   f"stc; sbb {ra}, {rb}", f"stc; sbb {ra}, {ra}"):
+        yield Case(f"{setter}; {name} {rb}, {ra}; jle 1f; mov ecx, 1; 1:",
+                   width, a=0, b=3)
+    # After a state of another width, whose width the SAR state takes, with
+    # bits above it in cc_dst and cc_src.
+    for cond in range(16):
+        yield Case(f"cmp al, bl; {name} {rb}, 3; j{CONDS[cond]} 1f; "
+                   f"mov ecx, 1; 1:", width, a=0, b=3)
+    for cond in range(16):
+        yield Case(f"cmp {ra}, {rb}; {name} {rb}, 3; j{CONDS[cond]} 1f; "
+                   f"mov ecx, 1; 1:", width, a=0, b=3)
 
 
 def write_cases(cases, out, prefix):

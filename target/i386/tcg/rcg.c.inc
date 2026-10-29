@@ -63,6 +63,14 @@ static const struct {
     { gen_MUL,    RCG_OP_MUL,  -1,  1, X86_SPECIAL_ZExtT0 },
     { gen_IMUL,   RCG_OP_IMUL, -1,  1, X86_SPECIAL_SExtT0 },
     { gen_IMUL3,  RCG_OP_IMUL3, 0,  1, X86_SPECIAL_SExtT0 },
+    /*
+     * The bit number is op[2]. BT writes nothing, so its operand is op[1];
+     * BTS, BTR and BTC write op[0], and op[1] is the same operand.
+     */
+    { gen_BT,     RCG_OP_BT,    1,  2, -1 },
+    { gen_BTS,    RCG_OP_BTS,   0,  2, -1 },
+    { gen_BTR,    RCG_OP_BTR,   0,  2, -1 },
+    { gen_BTC,    RCG_OP_BTC,   0,  2, -1 },
     { gen_CALL,   RCG_OP_CALL, -1, -1, -1 },
     { gen_CALL_m, RCG_OP_CALL, -1,  1, -1 },
     { gen_JMP_m,  RCG_OP_JMP,  -1,  1, -1 },
@@ -172,6 +180,8 @@ static int rcg_cc_index(CCOp cc_op)
         return RCG_CC_INC8 + (cc_op - CC_OP_INCB);
     } else if (cc_op >= CC_OP_DECB && cc_op <= CC_OP_DECQ) {
         return RCG_CC_DEC8 + (cc_op - CC_OP_DECB);
+    } else if (cc_op >= CC_OP_SARB && cc_op <= CC_OP_SARQ) {
+        return RCG_CC_SAR8 + (cc_op - CC_OP_SARB);
     } else if (cc_op == CC_OP_EFLAGS) {
         return RCG_CC_EFLAGS;
     }
@@ -416,6 +426,25 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
     case RCG_KIND_MUL:
         *ot = second->ot;
         return rcg_form(rcg_kind(s, second), 0);
+    case RCG_KIND_BT: {
+        char a = rcg_kind(s, first), b = rcg_kind(s, second);
+
+        /*
+         * After CC_OP_DYNAMIC or a state with EFLAGS in cc_src, TCG
+         * computes the flags in full; see gen_bt_flags(). With the bit
+         * number in a register, a memory operand is a bit string that can
+         * reach beyond the operand, so that is left to TCG too.
+         */
+        *ot = first->ot;
+        if (s->cc_op == CC_OP_DYNAMIC || CC_OP_HAS_EFLAGS(s->cc_op) ||
+            !a || !b || (a == 'm' && b == 'r')) {
+            return -1;
+        }
+        if (b == 'i') {
+            *imm = second->imm & ((8 << *ot) - 1);
+        }
+        return rcg_form(a, b);
+    }
     case RCG_KIND_IMUL3: {
         char a = rcg_kind(s, first), b = rcg_kind(s, second);
 
@@ -705,6 +734,9 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
      */
     if (by_cl) {
         assume_cc_op(s, CC_OP_DYNAMIC);
+    } else if (facts->kind == RCG_KIND_BT) {
+        /* cc_dst is kept, so the width is the earlier state's. */
+        set_cc_op(s, CC_OP_SARB + cc_op_size(s->cc_op));
     } else if (facts->cc_op >= 0) {
         set_cc_op(s, facts->cc_op + (facts->by_width ? ot : 0));
         if (facts->srcT == RCG_SRCT_SUM) {

@@ -5001,6 +5001,7 @@ add al, bl; shl al, cl: efacd99576e54515
 test al, bl; shl al, cl: dac2c8b97d013c4e
 inc al; shl al, cl: bacda308f4197f78
 dec al; shl al, cl: c5cb2a7c8b54f061
+shr al, 3; shl al, cl: ab1165207c0131d1
 mov ah, 0xd5; sahf; shl al, cl: 465eecda486df3bb
 imul rax, rbx; shl al, cl: fc2de486aff76bbd
 shl cl, cl: a919abe43ee23eda
@@ -5110,6 +5111,7 @@ add ax, bx; shl ax, cl: 2c9aa979385b8b8f
 test ax, bx; shl ax, cl: c6b848516bd2d8a9
 inc ax; shl ax, cl: 390728c26deb8c4a
 dec ax; shl ax, cl: 42ce021d6196f780
+shr ax, 3; shl ax, cl: eb0c81abd3ce5121
 mov ah, 0xd5; sahf; shl ax, cl: de114248ca2223f1
 imul rax, rbx; shl ax, cl: de89b448c97ffc19
 shl cx, cl: baf57fd7fb20f6c2
@@ -5219,6 +5221,7 @@ add eax, ebx; shl eax, cl: e0fe8c554d076b66
 test eax, ebx; shl eax, cl: 4ff1c060fc2eb709
 inc eax; shl eax, cl: 1e91ea93ef0c62fb
 dec eax; shl eax, cl: 356519a3949996a
+shr eax, 3; shl eax, cl: 7db33c590ee6c33
 mov ah, 0xd5; sahf; shl eax, cl: 124823923977052b
 imul rax, rbx; shl eax, cl: 4d014f1538e710d7
 shl ecx, cl: 10632b4349a1e4d
@@ -5328,6 +5331,7 @@ add rax, rbx; shl rax, cl: b9473371c967f3c7
 test rax, rbx; shl rax, cl: cd41a45a0654ea9
 inc rax; shl rax, cl: 750a72f955b7b5dd
 dec rax; shl rax, cl: d2a9e0b197273c63
+shr rax, 3; shl rax, cl: 181c4c0d754fc895
 mov ah, 0xd5; sahf; shl rax, cl: 317e973bf8b3a490
 imul rax, rbx; shl rax, cl: b1d80f65ebbb168f
 shl rcx, cl: eeda0a0245c76609
@@ -5434,6 +5438,7 @@ add al, bl; shr al, cl: 5cbb1c806b3fd628
 test al, bl; shr al, cl: bcd62737ffe66e00
 inc al; shr al, cl: afb08e2a61eb0e0c
 dec al; shr al, cl: 2640cf4b247b9a02
+shr al, 3; shr al, cl: 46627b0b15c667d3
 mov ah, 0xd5; sahf; shr al, cl: fa4b444e3fde8693
 imul rax, rbx; shr al, cl: e904c47a288444c9
 shr cl, cl: 75808b144ef32193
@@ -5543,6 +5548,7 @@ add ax, bx; shr ax, cl: 12573a1e943b1614
 test ax, bx; shr ax, cl: 57930cc5f0becc1b
 inc ax; shr ax, cl: 2ea0d6f4b8039e04
 dec ax; shr ax, cl: 377b986e297fd8f7
+shr ax, 3; shr ax, cl: 5d77f91cee2bd29
 mov ah, 0xd5; sahf; shr ax, cl: 6741db1b4b0d69c9
 imul rax, rbx; shr ax, cl: ef2837dbe0c27235
 shr cx, cl: f16098302823790e
@@ -5652,6 +5658,7 @@ add eax, ebx; shr eax, cl: 88e962a42f2dbd68
 test eax, ebx; shr eax, cl: dde9b6ac1b1d7f0f
 inc eax; shr eax, cl: ff420c406c2128bc
 dec eax; shr eax, cl: 89da57741969fda7
+shr eax, 3; shr eax, cl: c04dc51760d139e5
 mov ah, 0xd5; sahf; shr eax, cl: 9a1a2101fb361091
 imul rax, rbx; shr eax, cl: f5584870d4f397a6
 shr ecx, cl: b267fe1a2650f81b
@@ -5761,6 +5768,7 @@ add rax, rbx; shr rax, cl: 1779aef8d4d09f54
 test rax, rbx; shr rax, cl: e35e82fc813c9335
 inc rax; shr rax, cl: eb8c30157a585b18
 dec rax; shr rax, cl: f25e0c1cc9757b33
+shr rax, 3; shr rax, cl: d74392f7dc89a983
 mov ah, 0xd5; sahf; shr rax, cl: c0787b41ba71040
 imul rax, rbx; shr rax, cl: b55f508336b8b4f2
 shr rcx, cl: 1626b24c5d80759c
@@ -5867,6 +5875,7 @@ add al, bl; sar al, cl: d62351a008ee1c34
 test al, bl; sar al, cl: 5f90973e491b41c6
 inc al; sar al, cl: d08440ebedd6c6e
 dec al; sar al, cl: 2c31864ffd29b38a
+shr al, 3; sar al, cl: 46627b0b15c667d3
 mov ah, 0xd5; sahf; sar al, cl: fa4b444e3fde8693
 imul rax, rbx; sar al, cl: e904c47a288444c9
 sar cl, cl: fa563a3d85a962ff
@@ -5976,6 +5985,7 @@ add ax, bx; sar ax, cl: 8b5c0bf1a442a608
 test ax, bx; sar ax, cl: 1534516159675278
 inc ax; sar ax, cl: 802b672fe837df9f
 dec ax; sar ax, cl: ddbfdc779b3898a0
+shr ax, 3; sar ax, cl: 5d77f91cee2bd29
 mov ah, 0xd5; sahf; sar ax, cl: 59b4722b28c85252
 imul rax, rbx; sar ax, cl: 5f577609074aef1a
 sar cx, cl: af1188241e1262aa
@@ -6085,6 +6095,7 @@ add eax, ebx; sar eax, cl: 9db9b54d736bcfc
 test eax, ebx; sar eax, cl: a297741153516442
 inc eax; sar eax, cl: d7ae5db0c65e35a5
 dec eax; sar eax, cl: 3a3c234758f11c7b
+shr eax, 3; sar eax, cl: c04dc51760d139e5
 mov ah, 0xd5; sahf; sar eax, cl: 9a1a2101fb361091
 imul rax, rbx; sar eax, cl: f5584870d4f397a6
 sar ecx, cl: 4b0f75ba2d15310b
@@ -6194,6 +6205,7 @@ add rax, rbx; sar rax, cl: 2021978b074bfa74
 test rax, rbx; sar rax, cl: bdf66b46ad42b968
 inc rax; sar rax, cl: e18af4f19617d245
 dec rax; sar rax, cl: 33e4a5c87d948a32
+shr rax, 3; sar rax, cl: d74392f7dc89a983
 mov ah, 0xd5; sahf; sar rax, cl: 9977f209a8bfb379
 imul rax, rbx; sar rax, cl: 5fef29b99461a2f
 sar rcx, cl: 8a5e79fd815a17f1
@@ -6362,6 +6374,7 @@ add eax, ebx; rol eax, 5: a2169ec517a70dbc
 test eax, ebx; rol eax, 5: 6ca3ec4001cb3579
 inc eax; rol eax, 5: c6cceb4ee65d8505
 dec eax; rol eax, 5: 586a3855428fd739
+shr eax, 3; rol eax, 5: b1cbebe71c2cc185
 rol eax, 1; jo 1f; mov ecx, 1; 1:: c9f5b86aaa77f4fe
 rol eax, 1; jno 1f; mov ecx, 1; 1:: ea86770a2130a6c6
 rol eax, 1; jb 1f; mov ecx, 1; 1:: e8fe962e2b3d5138
@@ -6415,6 +6428,7 @@ add eax, ebx; ror eax, 5: 966f03409a79ac78
 test eax, ebx; ror eax, 5: 6b6f8d3a4dec1d49
 inc eax; ror eax, 5: a510d45b218d27c9
 dec eax; ror eax, 5: b798acfa07dd78ed
+shr eax, 3; ror eax, 5: 531994ea3d4e4bb5
 ror eax, 1; jo 1f; mov ecx, 1; 1:: 463470b99ba92291
 ror eax, 1; jno 1f; mov ecx, 1; 1:: 807f2cccbff269e9
 ror eax, 1; jb 1f; mov ecx, 1; 1:: f4a51551ec4799ef
@@ -6468,6 +6482,7 @@ add rax, rbx; rol rax, 5: 4e79248c11eb6b8e
 test rax, rbx; rol rax, 5: a4c80421c03554b7
 inc rax; rol rax, 5: 22b4f0ad1ddad65
 dec rax; rol rax, 5: 2a9642e96cca6215
+shr rax, 3; rol rax, 5: d06dc3e18c9cd3d1
 rol rax, 1; jo 1f; mov ecx, 1; 1:: 14dfc7aaf35a5e4e
 rol rax, 1; jno 1f; mov ecx, 1; 1:: 4ec2a849c3dc112
 rol rax, 1; jb 1f; mov ecx, 1; 1:: 4b50f511858e4a6c
@@ -6521,6 +6536,7 @@ add rax, rbx; ror rax, 5: 85b0521ab732f526
 test rax, rbx; ror rax, 5: c09e5001b95b5b0f
 inc rax; ror rax, 5: e632757f1a39d939
 dec rax; ror rax, 5: b56c66aab426444d
+shr rax, 3; ror rax, 5: f76e27580be087c1
 ror rax, 1; jo 1f; mov ecx, 1; 1:: 27ceb194fe608011
 ror rax, 1; jno 1f; mov ecx, 1; 1:: 294f5139b0646f25
 ror rax, 1; jb 1f; mov ecx, 1; 1:: 2e6c30e202130477
@@ -7325,6 +7341,1506 @@ imul rax, rbx; jl 1f; mov ecx, 1; 1:: ebc3dd4aa3c35773
 imul rax, rbx; jge 1f; mov ecx, 1; 1:: 3258634e3014af0b
 imul rax, rbx; jle 1f; mov ecx, 1; 1:: 4baf99a6a2321aa9
 imul rax, rbx; jg 1f; mov ecx, 1; 1:: fceff5a93e7f0a01
+bt ax, bx: 645bbb421936bac1
+bt cx, cx: fcd4e69263cef19c
+bt r8w, r15w: b7d79a38f48651d1
+bt ax, 0: c5443064bfaf0c68
+bt ax, 1: 123dbee5e8e74d89
+bt ax, 7: 25dac675abc24fd1
+bt ax, 8: f7a1c8b10a4a23f9
+bt ax, 15: 5c2107f9f65fcb31
+bt ax, 16: c5443064bfaf0c68
+bt ax, 31: 5c2107f9f65fcb31
+bt ax, 32: c5443064bfaf0c68
+bt ax, 63: 5c2107f9f65fcb31
+bt ax, 64: c5443064bfaf0c68
+bt ax, 255: 5c2107f9f65fcb31
+bt r9w, 0: 336e2c0949658c10
+bt r9w, 1: b4ff13a6b75f7051
+bt r9w, 7: d4b244fd63e5a391
+bt r9w, 8: b78545631aa8d8c1
+bt r9w, 15: dd5bfbedf99bfa31
+bt r9w, 16: 336e2c0949658c10
+bt r9w, 31: dd5bfbedf99bfa31
+bt r9w, 32: 336e2c0949658c10
+bt r9w, 63: dd5bfbedf99bfa31
+bt r9w, 64: 336e2c0949658c10
+bt r9w, 255: dd5bfbedf99bfa31
+mov edx, 0; bt bx, dx: 3ab13e71fb612080
+mov edx, 1; bt bx, dx: f8c2bbb11d19b3f1
+mov edx, 7; bt bx, dx: 160fe3a76e4fd47d
+mov edx, 8; bt bx, dx: 954187242402b961
+mov edx, 15; bt bx, dx: ba72c2b6ed12037d
+mov edx, 16; bt bx, dx: daa6205856c08340
+mov edx, 31; bt bx, dx: 19c9f1b99b03e67d
+mov edx, 32; bt bx, dx: 58e53e9b44c30580
+mov edx, 63; bt bx, dx: 2edfaa4a1aa01abd
+mov edx, 64; bt bx, dx: d7c0e15d3fb75880
+mov edx, 255; bt bx, dx: 9f827eacde196cbd
+bt word ptr [rbx+8], 5: b1256b8586f00cf1
+bt word ptr fs:[rbx+8], 5: da196ee4fbe9d5d9
+bt word ptr gs:[rbx+8], 5: 1c4554a9cc267cd9
+bt word ptr [rbx+rcx*1+8], 5: 1b6ca7a66b0aabc5
+bt word ptr fs:[rbx+rcx*1+8], 5: 830f35bebced82f5
+bt word ptr gs:[rbx+rcx*1+8], 5: 94692465eeab6a95
+bt word ptr [rbx+rcx*2+8], 5: 6707fea65a6455c5
+bt word ptr fs:[rbx+rcx*2+8], 5: 20439170f0aa68dd
+bt word ptr gs:[rbx+rcx*2+8], 5: 182e936f3bfe967d
+bt word ptr [rbx+rcx*4+8], 5: 3c0950093232b5a5
+bt word ptr fs:[rbx+rcx*4+8], 5: c389d4263a3f371d
+bt word ptr gs:[rbx+rcx*4+8], 5: fe9f0a75e854c2bd
+bt word ptr [rbx+rcx*8+8], 5: e154432110195255
+bt word ptr fs:[rbx+rcx*8+8], 5: d75f83a5b7eab93d
+bt word ptr gs:[rbx+rcx*8+8], 5: d9e595cf5c5a53d
+bt word ptr [rcx*1+0x8], 5: 1352370889bf4cf9
+bt word ptr fs:[rcx*1+0x8], 5: 6073e39589979ab1
+bt word ptr gs:[rcx*1+0x8], 5: 64200026ffa396b1
+bt word ptr [rcx*2+0x8], 5: fc2cf9c5b6ff04a9
+bt word ptr fs:[rcx*2+0x8], 5: c0343dea221aa669
+bt word ptr gs:[rcx*2+0x8], 5: 9dfc23b1a3e90869
+bt word ptr [rcx*4+0x8], 5: 6fca9cde3fcd94b9
+bt word ptr fs:[rcx*4+0x8], 5: 4064abb14ec45d91
+bt word ptr gs:[rcx*4+0x8], 5: 93d9db5b492d44f1
+bt word ptr [rcx*8+0x8], 5: 605e0780027264f9
+bt word ptr fs:[rcx*8+0x8], 5: f2f85a8f1f97d3fd
+bt word ptr gs:[rcx*8+0x8], 5: afa6ff4a194bee49
+bt word ptr [0x1800010], 5: 68c1b1032006f4b5
+bt word ptr fs:[0x17ff010], 5: 68c1b1032006f4b5
+bt word ptr gs:[0x17fe010], 5: 68c1b1032006f4b5
+bt word ptr [rbx+8], 0: 403c17572e1a8de8
+bt word ptr [rbx+8], 1: b1256b8586f00cf1
+bt word ptr [rbx+8], 7: 21d92d48662e2bc1
+bt word ptr [rbx+8], 8: 6c4150be4de56c51
+bt word ptr [rbx+8], 15: fff86626ce870501
+bt word ptr [rbx+8], 16: 403c17572e1a8de8
+bt word ptr [rbx+8], 31: fff86626ce870501
+bt word ptr [rbx+8], 32: 403c17572e1a8de8
+bt word ptr [rbx+8], 63: fff86626ce870501
+bt word ptr [rbx+8], 64: 403c17572e1a8de8
+bt word ptr [rbx+8], 255: fff86626ce870501
+bt word ptr [rbx+8], 9: 933a30590913554b
+bt word ptr [rbx+8], 9: e95b43ebbbef7d5f
+bt word ptr [rip+rcg_mem+16], 3: 68c1b1032006f4b5
+mov edx, 5; bt word ptr [rbx+8], dx: a7c85a556f6a851d
+cmp ax, bx; bt bx, ax: 78fe04403b642239
+add ax, bx; bt bx, ax: c7f4ff1d648cdef2
+test ax, bx; bt bx, ax: cb8c376ba6107c19
+inc ax; bt bx, ax: 2959a0db901b85ae
+dec ax; bt bx, ax: fbd231c4d33559ee
+shr ax, 3; bt bx, ax: 7ceb992e00045845
+mov ah, 0xd5; sahf; bt bx, ax: 97664f6c085a6b21
+imul ax, bx; bt bx, ax; jle 1f; mov ecx, 1; 1:: 8fa52aa6686c7725
+shl ax, 3; bt bx, ax; jle 1f; mov ecx, 1; 1:: f0a495efa37928d9
+stc; adc ax, bx; bt bx, ax; jle 1f; mov ecx, 1; 1:: bf3242d60f34166f
+stc; sbb ax, bx; bt bx, ax; jle 1f; mov ecx, 1; 1:: 929cf645024dfd81
+stc; sbb ax, ax; bt bx, ax; jle 1f; mov ecx, 1; 1:: 6132cc206f2bcd95
+cmp al, bl; bt bx, 3; jo 1f; mov ecx, 1; 1:: 74ce3293213c254f
+cmp al, bl; bt bx, 3; jno 1f; mov ecx, 1; 1:: 33bf5eae32f3908f
+cmp al, bl; bt bx, 3; jb 1f; mov ecx, 1; 1:: 493756daaf726bdb
+cmp al, bl; bt bx, 3; jae 1f; mov ecx, 1; 1:: e0f0c99714eccc4b
+cmp al, bl; bt bx, 3; je 1f; mov ecx, 1; 1:: b26e72e1b36caee7
+cmp al, bl; bt bx, 3; jne 1f; mov ecx, 1; 1:: 2820ce4923184aff
+cmp al, bl; bt bx, 3; jbe 1f; mov ecx, 1; 1:: f48572b63694d4c9
+cmp al, bl; bt bx, 3; ja 1f; mov ecx, 1; 1:: 1a98fa46cf975821
+cmp al, bl; bt bx, 3; js 1f; mov ecx, 1; 1:: dac05f891609d033
+cmp al, bl; bt bx, 3; jns 1f; mov ecx, 1; 1:: 649c037c40c3ca83
+cmp al, bl; bt bx, 3; jp 1f; mov ecx, 1; 1:: 2fae7faf91bf3625
+cmp al, bl; bt bx, 3; jnp 1f; mov ecx, 1; 1:: 3804fed058c201bd
+cmp al, bl; bt bx, 3; jl 1f; mov ecx, 1; 1:: ea168ce3a0e6a3e3
+cmp al, bl; bt bx, 3; jge 1f; mov ecx, 1; 1:: 4761306582e3d823
+cmp al, bl; bt bx, 3; jle 1f; mov ecx, 1; 1:: 4b9afefc15ef7f7d
+cmp al, bl; bt bx, 3; jg 1f; mov ecx, 1; 1:: cb784b6aa3b7b915
+cmp ax, bx; bt bx, 3; jo 1f; mov ecx, 1; 1:: e9a0b65fc381e851
+cmp ax, bx; bt bx, 3; jno 1f; mov ecx, 1; 1:: 9752bc487237781
+cmp ax, bx; bt bx, 3; jb 1f; mov ecx, 1; 1:: f1827ecb2b7afc43
+cmp ax, bx; bt bx, 3; jae 1f; mov ecx, 1; 1:: 81aae3000440cf13
+cmp ax, bx; bt bx, 3; je 1f; mov ecx, 1; 1:: 51e3e56a656ba89f
+cmp ax, bx; bt bx, 3; jne 1f; mov ecx, 1; 1:: d8ec3f72c5df28ff
+cmp ax, bx; bt bx, 3; jbe 1f; mov ecx, 1; 1:: 7e1c68632fb22d55
+cmp ax, bx; bt bx, 3; ja 1f; mov ecx, 1; 1:: 467199dca851b0e5
+cmp ax, bx; bt bx, 3; js 1f; mov ecx, 1; 1:: 873ef54cde6e5719
+cmp ax, bx; bt bx, 3; jns 1f; mov ecx, 1; 1:: c76798276d611bc1
+cmp ax, bx; bt bx, 3; jp 1f; mov ecx, 1; 1:: 80531f92f58072e1
+cmp ax, bx; bt bx, 3; jnp 1f; mov ecx, 1; 1:: 1a0365941df07749
+cmp ax, bx; bt bx, 3; jl 1f; mov ecx, 1; 1:: ab1fb3e161d7fba7
+cmp ax, bx; bt bx, 3; jge 1f; mov ecx, 1; 1:: d8e0a34c796f320f
+cmp ax, bx; bt bx, 3; jle 1f; mov ecx, 1; 1:: b5b916d4e5e085f1
+cmp ax, bx; bt bx, 3; jg 1f; mov ecx, 1; 1:: f595db0e9010a779
+bt eax, ebx: 565a0e85ee402c0c
+bt ecx, ecx: 46ec19a090020494
+bt r8d, r15d: c04f05e71c55a78c
+bt eax, 0: c5443064bfaf0c68
+bt eax, 1: 123dbee5e8e74d89
+bt eax, 7: 25dac675abc24fd1
+bt eax, 8: f7a1c8b10a4a23f9
+bt eax, 15: 5c2107f9f65fcb31
+bt eax, 16: 616ba3ec1710f359
+bt eax, 31: a6c3292e59986221
+bt eax, 32: c5443064bfaf0c68
+bt eax, 63: a6c3292e59986221
+bt eax, 64: c5443064bfaf0c68
+bt eax, 255: a6c3292e59986221
+bt r9d, 0: 336e2c0949658c10
+bt r9d, 1: b4ff13a6b75f7051
+bt r9d, 7: d4b244fd63e5a391
+bt r9d, 8: b78545631aa8d8c1
+bt r9d, 15: dd5bfbedf99bfa31
+bt r9d, 16: 2854d34e051bcba1
+bt r9d, 31: 887b5abaa9cafd01
+bt r9d, 32: 336e2c0949658c10
+bt r9d, 63: 887b5abaa9cafd01
+bt r9d, 64: 336e2c0949658c10
+bt r9d, 255: 887b5abaa9cafd01
+mov edx, 0; bt ebx, edx: 3ab13e71fb612080
+mov edx, 1; bt ebx, edx: f8c2bbb11d19b3f1
+mov edx, 7; bt ebx, edx: 160fe3a76e4fd47d
+mov edx, 8; bt ebx, edx: 954187242402b961
+mov edx, 15; bt ebx, edx: ba72c2b6ed12037d
+mov edx, 16; bt ebx, edx: 65d63b8f1c66c419
+mov edx, 31; bt ebx, edx: 9131761189d949e5
+mov edx, 32; bt ebx, edx: 58e53e9b44c30580
+mov edx, 63; bt ebx, edx: 61a3e8246ff0b3e5
+mov edx, 64; bt ebx, edx: d7c0e15d3fb75880
+mov edx, 255; bt ebx, edx: 91ab7d8d030b0c65
+bt dword ptr [rbx+8], 5: b1256b8586f00cf1
+bt dword ptr fs:[rbx+8], 5: da196ee4fbe9d5d9
+bt dword ptr gs:[rbx+8], 5: 1c4554a9cc267cd9
+bt dword ptr [rbx+rcx*1+8], 5: 1b6ca7a66b0aabc5
+bt dword ptr fs:[rbx+rcx*1+8], 5: 830f35bebced82f5
+bt dword ptr gs:[rbx+rcx*1+8], 5: 94692465eeab6a95
+bt dword ptr [rbx+rcx*2+8], 5: 6707fea65a6455c5
+bt dword ptr fs:[rbx+rcx*2+8], 5: 20439170f0aa68dd
+bt dword ptr gs:[rbx+rcx*2+8], 5: 182e936f3bfe967d
+bt dword ptr [rbx+rcx*4+8], 5: 3c0950093232b5a5
+bt dword ptr fs:[rbx+rcx*4+8], 5: c389d4263a3f371d
+bt dword ptr gs:[rbx+rcx*4+8], 5: fe9f0a75e854c2bd
+bt dword ptr [rbx+rcx*8+8], 5: e154432110195255
+bt dword ptr fs:[rbx+rcx*8+8], 5: d75f83a5b7eab93d
+bt dword ptr gs:[rbx+rcx*8+8], 5: d9e595cf5c5a53d
+bt dword ptr [rcx*1+0x8], 5: 1352370889bf4cf9
+bt dword ptr fs:[rcx*1+0x8], 5: 6073e39589979ab1
+bt dword ptr gs:[rcx*1+0x8], 5: 64200026ffa396b1
+bt dword ptr [rcx*2+0x8], 5: fc2cf9c5b6ff04a9
+bt dword ptr fs:[rcx*2+0x8], 5: c0343dea221aa669
+bt dword ptr gs:[rcx*2+0x8], 5: 9dfc23b1a3e90869
+bt dword ptr [rcx*4+0x8], 5: 6fca9cde3fcd94b9
+bt dword ptr fs:[rcx*4+0x8], 5: 4064abb14ec45d91
+bt dword ptr gs:[rcx*4+0x8], 5: 93d9db5b492d44f1
+bt dword ptr [rcx*8+0x8], 5: 605e0780027264f9
+bt dword ptr fs:[rcx*8+0x8], 5: f2f85a8f1f97d3fd
+bt dword ptr gs:[rcx*8+0x8], 5: afa6ff4a194bee49
+bt dword ptr [0x1800010], 5: 68c1b1032006f4b5
+bt dword ptr fs:[0x17ff010], 5: 68c1b1032006f4b5
+bt dword ptr gs:[0x17fe010], 5: 68c1b1032006f4b5
+bt dword ptr [rbx+8], 0: 403c17572e1a8de8
+bt dword ptr [rbx+8], 1: b1256b8586f00cf1
+bt dword ptr [rbx+8], 7: 21d92d48662e2bc1
+bt dword ptr [rbx+8], 8: 6c4150be4de56c51
+bt dword ptr [rbx+8], 15: fff86626ce870501
+bt dword ptr [rbx+8], 16: 9dc97b1bccc61a61
+bt dword ptr [rbx+8], 31: 8b8ed52dfc9d4331
+bt dword ptr [rbx+8], 32: 403c17572e1a8de8
+bt dword ptr [rbx+8], 63: 8b8ed52dfc9d4331
+bt dword ptr [rbx+8], 64: 403c17572e1a8de8
+bt dword ptr [rbx+8], 255: 8b8ed52dfc9d4331
+bt dword ptr [rbx+8], 9: 933a30590913554b
+bt dword ptr [rbx+8], 9: e95b43ebbbef7d5f
+bt dword ptr [rip+rcg_mem+16], 3: 68c1b1032006f4b5
+mov edx, 5; bt dword ptr [rbx+8], edx: a7c85a556f6a851d
+cmp eax, ebx; bt ebx, eax: cc19d8f0b22996c0
+add eax, ebx; bt ebx, eax: bc0fd45af0841762
+test eax, ebx; bt ebx, eax: 752391ec436d4c1a
+inc eax; bt ebx, eax: df7b13f2367d24d7
+dec eax; bt ebx, eax: 71d9cc7a1c673016
+shr eax, 3; bt ebx, eax: 25fdfad4c647047e
+mov ah, 0xd5; sahf; bt ebx, eax: 3dda9ddbbf66e32
+imul eax, ebx; bt ebx, eax; jle 1f; mov ecx, 1; 1:: f3a107823284bd15
+shl eax, 3; bt ebx, eax; jle 1f; mov ecx, 1; 1:: fc9806005a8313c1
+stc; adc eax, ebx; bt ebx, eax; jle 1f; mov ecx, 1; 1:: 2dba38674110be7a
+stc; sbb eax, ebx; bt ebx, eax; jle 1f; mov ecx, 1; 1:: b6585180421a5e5a
+stc; sbb eax, eax; bt ebx, eax; jle 1f; mov ecx, 1; 1:: 733ce4b10d4e5765
+cmp al, bl; bt ebx, 3; jo 1f; mov ecx, 1; 1:: 74ce3293213c254f
+cmp al, bl; bt ebx, 3; jno 1f; mov ecx, 1; 1:: 33bf5eae32f3908f
+cmp al, bl; bt ebx, 3; jb 1f; mov ecx, 1; 1:: 493756daaf726bdb
+cmp al, bl; bt ebx, 3; jae 1f; mov ecx, 1; 1:: e0f0c99714eccc4b
+cmp al, bl; bt ebx, 3; je 1f; mov ecx, 1; 1:: b26e72e1b36caee7
+cmp al, bl; bt ebx, 3; jne 1f; mov ecx, 1; 1:: 2820ce4923184aff
+cmp al, bl; bt ebx, 3; jbe 1f; mov ecx, 1; 1:: f48572b63694d4c9
+cmp al, bl; bt ebx, 3; ja 1f; mov ecx, 1; 1:: 1a98fa46cf975821
+cmp al, bl; bt ebx, 3; js 1f; mov ecx, 1; 1:: dac05f891609d033
+cmp al, bl; bt ebx, 3; jns 1f; mov ecx, 1; 1:: 649c037c40c3ca83
+cmp al, bl; bt ebx, 3; jp 1f; mov ecx, 1; 1:: 2fae7faf91bf3625
+cmp al, bl; bt ebx, 3; jnp 1f; mov ecx, 1; 1:: 3804fed058c201bd
+cmp al, bl; bt ebx, 3; jl 1f; mov ecx, 1; 1:: ea168ce3a0e6a3e3
+cmp al, bl; bt ebx, 3; jge 1f; mov ecx, 1; 1:: 4761306582e3d823
+cmp al, bl; bt ebx, 3; jle 1f; mov ecx, 1; 1:: 4b9afefc15ef7f7d
+cmp al, bl; bt ebx, 3; jg 1f; mov ecx, 1; 1:: cb784b6aa3b7b915
+cmp eax, ebx; bt ebx, 3; jo 1f; mov ecx, 1; 1:: eac1d793183b612d
+cmp eax, ebx; bt ebx, 3; jno 1f; mov ecx, 1; 1:: eae8c9a6ec8bf691
+cmp eax, ebx; bt ebx, 3; jb 1f; mov ecx, 1; 1:: 68356e105b77f557
+cmp eax, ebx; bt ebx, 3; jae 1f; mov ecx, 1; 1:: 123ca02ac979cacb
+cmp eax, ebx; bt ebx, 3; je 1f; mov ecx, 1; 1:: e874d01db954be1b
+cmp eax, ebx; bt ebx, 3; jne 1f; mov ecx, 1; 1:: aafd1f221680890f
+cmp eax, ebx; bt ebx, 3; jbe 1f; mov ecx, 1; 1:: f52de902533cb501
+cmp eax, ebx; bt ebx, 3; ja 1f; mov ecx, 1; 1:: 2a4d97a7471737ad
+cmp eax, ebx; bt ebx, 3; js 1f; mov ecx, 1; 1:: a63b2388b77af815
+cmp eax, ebx; bt ebx, 3; jns 1f; mov ecx, 1; 1:: eb6637ef4e045621
+cmp eax, ebx; bt ebx, 3; jp 1f; mov ecx, 1; 1:: 33ba48a29e869cf1
+cmp eax, ebx; bt ebx, 3; jnp 1f; mov ecx, 1; 1:: 426085be56dd7105
+cmp eax, ebx; bt ebx, 3; jl 1f; mov ecx, 1; 1:: 99990fdf1d41f8cf
+cmp eax, ebx; bt ebx, 3; jge 1f; mov ecx, 1; 1:: 9d352e7d19019173
+cmp eax, ebx; bt ebx, 3; jle 1f; mov ecx, 1; 1:: b45eead26596d721
+cmp eax, ebx; bt ebx, 3; jg 1f; mov ecx, 1; 1:: 69553f81363d8d95
+bt rax, rbx: 4df797aaf324298c
+bt rcx, rcx: 46527d863e044621
+bt r8, r15: f9999f18011be594
+bt rax, 0: c5443064bfaf0c68
+bt rax, 1: 123dbee5e8e74d89
+bt rax, 7: 25dac675abc24fd1
+bt rax, 8: f7a1c8b10a4a23f9
+bt rax, 15: 5c2107f9f65fcb31
+bt rax, 16: 616ba3ec1710f359
+bt rax, 31: a6c3292e59986221
+bt rax, 32: 2e3a1198c3163749
+bt rax, 63: 9c36c23a0c068869
+bt rax, 64: c5443064bfaf0c68
+bt rax, 255: 9c36c23a0c068869
+bt r9, 0: 336e2c0949658c10
+bt r9, 1: b4ff13a6b75f7051
+bt r9, 7: d4b244fd63e5a391
+bt r9, 8: b78545631aa8d8c1
+bt r9, 15: dd5bfbedf99bfa31
+bt r9, 16: 2854d34e051bcba1
+bt r9, 31: 887b5abaa9cafd01
+bt r9, 32: 6a24b2192d085691
+bt r9, 63: 205ac456b45f7fd1
+bt r9, 64: 336e2c0949658c10
+bt r9, 255: 205ac456b45f7fd1
+mov edx, 0; bt rbx, rdx: 3ab13e71fb612080
+mov edx, 1; bt rbx, rdx: f8c2bbb11d19b3f1
+mov edx, 7; bt rbx, rdx: 160fe3a76e4fd47d
+mov edx, 8; bt rbx, rdx: 954187242402b961
+mov edx, 15; bt rbx, rdx: ba72c2b6ed12037d
+mov edx, 16; bt rbx, rdx: 65d63b8f1c66c419
+mov edx, 31; bt rbx, rdx: 9131761189d949e5
+mov edx, 32; bt rbx, rdx: ba02d64aa4486079
+mov edx, 63; bt rbx, rdx: 1f1dcae45208c041
+mov edx, 64; bt rbx, rdx: d7c0e15d3fb75880
+mov edx, 255; bt rbx, rdx: f3f958b4234d9641
+bt qword ptr [rbx+8], 5: b1256b8586f00cf1
+bt qword ptr fs:[rbx+8], 5: da196ee4fbe9d5d9
+bt qword ptr gs:[rbx+8], 5: 1c4554a9cc267cd9
+bt qword ptr [rbx+rcx*1+8], 5: 1b6ca7a66b0aabc5
+bt qword ptr fs:[rbx+rcx*1+8], 5: 830f35bebced82f5
+bt qword ptr gs:[rbx+rcx*1+8], 5: 94692465eeab6a95
+bt qword ptr [rbx+rcx*2+8], 5: 6707fea65a6455c5
+bt qword ptr fs:[rbx+rcx*2+8], 5: 20439170f0aa68dd
+bt qword ptr gs:[rbx+rcx*2+8], 5: 182e936f3bfe967d
+bt qword ptr [rbx+rcx*4+8], 5: 3c0950093232b5a5
+bt qword ptr fs:[rbx+rcx*4+8], 5: c389d4263a3f371d
+bt qword ptr gs:[rbx+rcx*4+8], 5: fe9f0a75e854c2bd
+bt qword ptr [rbx+rcx*8+8], 5: e154432110195255
+bt qword ptr fs:[rbx+rcx*8+8], 5: d75f83a5b7eab93d
+bt qword ptr gs:[rbx+rcx*8+8], 5: d9e595cf5c5a53d
+bt qword ptr [rcx*1+0x8], 5: 1352370889bf4cf9
+bt qword ptr fs:[rcx*1+0x8], 5: 6073e39589979ab1
+bt qword ptr gs:[rcx*1+0x8], 5: 64200026ffa396b1
+bt qword ptr [rcx*2+0x8], 5: fc2cf9c5b6ff04a9
+bt qword ptr fs:[rcx*2+0x8], 5: c0343dea221aa669
+bt qword ptr gs:[rcx*2+0x8], 5: 9dfc23b1a3e90869
+bt qword ptr [rcx*4+0x8], 5: 6fca9cde3fcd94b9
+bt qword ptr fs:[rcx*4+0x8], 5: 4064abb14ec45d91
+bt qword ptr gs:[rcx*4+0x8], 5: 93d9db5b492d44f1
+bt qword ptr [rcx*8+0x8], 5: 605e0780027264f9
+bt qword ptr fs:[rcx*8+0x8], 5: f2f85a8f1f97d3fd
+bt qword ptr gs:[rcx*8+0x8], 5: afa6ff4a194bee49
+bt qword ptr [0x1800010], 5: 68c1b1032006f4b5
+bt qword ptr fs:[0x17ff010], 5: 68c1b1032006f4b5
+bt qword ptr gs:[0x17fe010], 5: 68c1b1032006f4b5
+bt qword ptr [rbx+8], 0: d22e6fcc2122e3e0
+bt qword ptr [rbx+8], 1: b1256b8586f00cf1
+bt qword ptr [rbx+8], 7: 21d92d48662e2bc1
+bt qword ptr [rbx+8], 8: 6c4150be4de56c51
+bt qword ptr [rbx+8], 15: fff86626ce870501
+bt qword ptr [rbx+8], 16: 9dc97b1bccc61a61
+bt qword ptr [rbx+8], 31: 8b8ed52dfc9d4331
+bt qword ptr [rbx+8], 32: 87a0b52c6a610e41
+bt qword ptr [rbx+8], 63: 76e2246ba677861
+bt qword ptr [rbx+8], 64: d22e6fcc2122e3e0
+bt qword ptr [rbx+8], 255: 76e2246ba677861
+bt qword ptr [rbx+8], 9: 933a30590913554b
+bt qword ptr [rbx+8], 9: e95b43ebbbef7d5f
+bt qword ptr [rip+rcg_mem+16], 3: 68c1b1032006f4b5
+mov edx, 5; bt qword ptr [rbx+8], rdx: a7c85a556f6a851d
+cmp rax, rbx; bt rbx, rax: 4b53c739436d42a8
+add rax, rbx; bt rbx, rax: 649fdca37bc8451a
+test rax, rbx; bt rbx, rax: a93ca64f19c1f274
+inc rax; bt rbx, rax: 15a447e7ffbf4027
+dec rax; bt rbx, rax: bb1dbb414533dd74
+shr rax, 3; bt rbx, rax: 9c31069293c89916
+mov ah, 0xd5; sahf; bt rbx, rax: d4e9c6b2dea349aa
+imul rax, rbx; bt rbx, rax; jle 1f; mov ecx, 1; 1:: fca5ba76a9aa347f
+shl rax, 3; bt rbx, rax; jle 1f; mov ecx, 1; 1:: 137c21ec9dec58f9
+stc; adc rax, rbx; bt rbx, rax; jle 1f; mov ecx, 1; 1:: 741575580b5a669
+stc; sbb rax, rbx; bt rbx, rax; jle 1f; mov ecx, 1; 1:: 9a0725f9bfba09d2
+stc; sbb rax, rax; bt rbx, rax; jle 1f; mov ecx, 1; 1:: 10e1fc3de5d44325
+cmp al, bl; bt rbx, 3; jo 1f; mov ecx, 1; 1:: 74ce3293213c254f
+cmp al, bl; bt rbx, 3; jno 1f; mov ecx, 1; 1:: 33bf5eae32f3908f
+cmp al, bl; bt rbx, 3; jb 1f; mov ecx, 1; 1:: 493756daaf726bdb
+cmp al, bl; bt rbx, 3; jae 1f; mov ecx, 1; 1:: e0f0c99714eccc4b
+cmp al, bl; bt rbx, 3; je 1f; mov ecx, 1; 1:: b26e72e1b36caee7
+cmp al, bl; bt rbx, 3; jne 1f; mov ecx, 1; 1:: 2820ce4923184aff
+cmp al, bl; bt rbx, 3; jbe 1f; mov ecx, 1; 1:: f48572b63694d4c9
+cmp al, bl; bt rbx, 3; ja 1f; mov ecx, 1; 1:: 1a98fa46cf975821
+cmp al, bl; bt rbx, 3; js 1f; mov ecx, 1; 1:: dac05f891609d033
+cmp al, bl; bt rbx, 3; jns 1f; mov ecx, 1; 1:: 649c037c40c3ca83
+cmp al, bl; bt rbx, 3; jp 1f; mov ecx, 1; 1:: 2fae7faf91bf3625
+cmp al, bl; bt rbx, 3; jnp 1f; mov ecx, 1; 1:: 3804fed058c201bd
+cmp al, bl; bt rbx, 3; jl 1f; mov ecx, 1; 1:: ea168ce3a0e6a3e3
+cmp al, bl; bt rbx, 3; jge 1f; mov ecx, 1; 1:: 4761306582e3d823
+cmp al, bl; bt rbx, 3; jle 1f; mov ecx, 1; 1:: 4b9afefc15ef7f7d
+cmp al, bl; bt rbx, 3; jg 1f; mov ecx, 1; 1:: cb784b6aa3b7b915
+cmp rax, rbx; bt rbx, 3; jo 1f; mov ecx, 1; 1:: 3c47cfdd71bf5b9
+cmp rax, rbx; bt rbx, 3; jno 1f; mov ecx, 1; 1:: 2df029205163c481
+cmp rax, rbx; bt rbx, 3; jb 1f; mov ecx, 1; 1:: aa6a231d570722cd
+cmp rax, rbx; bt rbx, 3; jae 1f; mov ecx, 1; 1:: e80f5f10c49f2e15
+cmp rax, rbx; bt rbx, 3; je 1f; mov ecx, 1; 1:: d8b9f9954b139215
+cmp rax, rbx; bt rbx, 3; jne 1f; mov ecx, 1; 1:: d9b44e74fd2602d
+cmp rax, rbx; bt rbx, 3; jbe 1f; mov ecx, 1; 1:: b1db809a780360bb
+cmp rax, rbx; bt rbx, 3; ja 1f; mov ecx, 1; 1:: ea96d5b8b53d2f23
+cmp rax, rbx; bt rbx, 3; js 1f; mov ecx, 1; 1:: 3c47cfdd71bf5b9
+cmp rax, rbx; bt rbx, 3; jns 1f; mov ecx, 1; 1:: 2df029205163c481
+cmp rax, rbx; bt rbx, 3; jp 1f; mov ecx, 1; 1:: b11d127b3e515917
+cmp rax, rbx; bt rbx, 3; jnp 1f; mov ecx, 1; 1:: 8731bb663a802cef
+cmp rax, rbx; bt rbx, 3; jl 1f; mov ecx, 1; 1:: 5836b3f5ce2ba661
+cmp rax, rbx; bt rbx, 3; jge 1f; mov ecx, 1; 1:: 6d3112887a5f8861
+cmp rax, rbx; bt rbx, 3; jle 1f; mov ecx, 1; 1:: d8b9f9954b139215
+cmp rax, rbx; bt rbx, 3; jg 1f; mov ecx, 1; 1:: d9b44e74fd2602d
+bts ax, bx: 8af1bcd292f234d3
+bts cx, cx: 5d230abd7a69ddfe
+bts r8w, r15w: c3c3b108072a7393
+bts ax, 0: 20fc8e957356580
+bts ax, 1: c8ae4300465fce63
+bts ax, 7: 8e2bebbd11bd7c51
+bts ax, 8: 47306328cb4240fa
+bts ax, 15: 4cef9c6d6954cfb1
+bts ax, 16: 20fc8e957356580
+bts ax, 31: 4cef9c6d6954cfb1
+bts ax, 32: 20fc8e957356580
+bts ax, 63: 4cef9c6d6954cfb1
+bts ax, 64: 20fc8e957356580
+bts ax, 255: 4cef9c6d6954cfb1
+bts r9w, 0: baaada29c8f67120
+bts r9w, 1: 55de35d7977e401b
+bts r9w, 7: 3adcbc2c66d21011
+bts r9w, 8: bc064b832952417e
+bts r9w, 15: 5c35a01327c167b1
+bts r9w, 16: baaada29c8f67120
+bts r9w, 31: 5c35a01327c167b1
+bts r9w, 32: baaada29c8f67120
+bts r9w, 63: 5c35a01327c167b1
+bts r9w, 64: baaada29c8f67120
+bts r9w, 255: 5c35a01327c167b1
+mov edx, 0; bts bx, dx: 9c58437c87cec49c
+mov edx, 1; bts bx, dx: 775bafe8501cbc5b
+mov edx, 7; bts bx, dx: a5839d2022d764fd
+mov edx, 8; bts bx, dx: 421b05a20baf3eea
+mov edx, 15; bts bx, dx: 5f7df792a4667bfd
+mov edx, 16; bts bx, dx: 30eb52931d91995c
+mov edx, 31; bts bx, dx: e21639e2ebfceefd
+mov edx, 32; bts bx, dx: d4a9ac63d1eef19c
+mov edx, 63; bts bx, dx: 56f7efa96fb2d83d
+mov edx, 64; bts bx, dx: 8ba4bd2d3e60e89c
+mov edx, 255; bts bx, dx: b9431ea9b5b80c3d
+bts word ptr [rbx+8], 5: da1802e000482ed1
+bts word ptr fs:[rbx+8], 5: b5f818e9a9b34c39
+bts word ptr gs:[rbx+8], 5: 3dc4bc4d9b085a39
+bts word ptr [rbx+rcx*1+8], 5: ddddb0abc036f925
+bts word ptr fs:[rbx+rcx*1+8], 5: bed63418c72c155
+bts word ptr gs:[rbx+rcx*1+8], 5: ca5673f11f8e27b5
+bts word ptr [rbx+rcx*2+8], 5: 80345c26fec64225
+bts word ptr fs:[rbx+rcx*2+8], 5: 5455950f71856fbd
+bts word ptr gs:[rbx+rcx*2+8], 5: 40427abc11d8055d
+bts word ptr [rbx+rcx*4+8], 5: dc1854a91021f8c5
+bts word ptr fs:[rbx+rcx*4+8], 5: e69153df125b407d
+bts word ptr gs:[rbx+rcx*4+8], 5: 6d18cde56487acdd
+bts word ptr [rbx+rcx*8+8], 5: 49ae68aef2bd2075
+bts word ptr fs:[rbx+rcx*8+8], 5: b414ce99cb0edf9d
+bts word ptr gs:[rbx+rcx*8+8], 5: 1d69b5993ed5e5dd
+bts word ptr [rcx*1+0x8], 5: 1fe31f6b6273c259
+bts word ptr fs:[rcx*1+0x8], 5: f53f13758592b011
+bts word ptr gs:[rcx*1+0x8], 5: 92be6eb43fac3391
+bts word ptr [rcx*2+0x8], 5: 51827691d62f3c09
+bts word ptr fs:[rcx*2+0x8], 5: f7f9cfce4a92a509
+bts word ptr gs:[rcx*2+0x8], 5: 2f77da0c2fbc5ac9
+bts word ptr [rcx*4+0x8], 5: 2d9c4128fc6d3099
+bts word ptr fs:[rcx*4+0x8], 5: b1572be9802245f1
+bts word ptr gs:[rcx*4+0x8], 5: c250c6064e0d8bd1
+bts word ptr [rcx*8+0x8], 5: 61be368574713b99
+bts word ptr fs:[rcx*8+0x8], 5: 7954dfacc4ee9c9d
+bts word ptr gs:[rcx*8+0x8], 5: f070f2c26ef778e9
+bts word ptr [0x1800010], 5: 8b241ac794f11755
+bts word ptr fs:[0x17ff010], 5: 8b241ac794f11755
+bts word ptr gs:[0x17fe010], 5: 8b241ac794f11755
+bts word ptr [rbx+8], 0: e9e06d64f2aae628
+bts word ptr [rbx+8], 1: dd7ff0e285ebb45b
+bts word ptr [rbx+8], 7: 61b466a11b53fa41
+bts word ptr [rbx+8], 8: c5980df5fbe68056
+bts word ptr [rbx+8], 15: 5640592c621f3481
+bts word ptr [rbx+8], 16: e9e06d64f2aae628
+bts word ptr [rbx+8], 31: 5640592c621f3481
+bts word ptr [rbx+8], 32: e9e06d64f2aae628
+bts word ptr [rbx+8], 63: 5640592c621f3481
+bts word ptr [rbx+8], 64: e9e06d64f2aae628
+bts word ptr [rbx+8], 255: 5640592c621f3481
+bts word ptr [rbx+8], 9: 9f5e17f77efb2b49
+bts word ptr [rbx+8], 9: 2b301a97e99bd859
+bts word ptr [rip+rcg_mem+16], 3: 7eff399d19051d3d
+mov edx, 5; bts word ptr [rbx+8], dx: eac4e378d7f5c5fd
+cmp ax, bx; bts bx, ax: de1d4f3d8b338aa3
+add ax, bx; bts bx, ax: cf699d7f3df8e92e
+test ax, bx; bts bx, ax: 77ca63aafe141e37
+inc ax; bts bx, ax: 2b3cce9fc47be4ae
+dec ax; bts bx, ax: ccbe07d07bd69ec2
+shr ax, 3; bts bx, ax: 2a619dac640f3e15
+mov ah, 0xd5; sahf; bts bx, ax: 9bb8976897b12aa3
+imul ax, bx; bts bx, ax; jle 1f; mov ecx, 1; 1:: cb4e41c662c518f7
+shl ax, 3; bts bx, ax; jle 1f; mov ecx, 1; 1:: cc9f992861d25f1d
+stc; adc ax, bx; bts bx, ax; jle 1f; mov ecx, 1; 1:: 43b9bae664a51a5d
+stc; sbb ax, bx; bts bx, ax; jle 1f; mov ecx, 1; 1:: 8e8a1130665ce31
+stc; sbb ax, ax; bts bx, ax; jle 1f; mov ecx, 1; 1:: 65b279d741635795
+cmp al, bl; bts bx, 3; jo 1f; mov ecx, 1; 1:: 706910d065ddd34f
+cmp al, bl; bts bx, 3; jno 1f; mov ecx, 1; 1:: 3e7104502de859cf
+cmp al, bl; bts bx, 3; jb 1f; mov ecx, 1; 1:: 492d2489d11b73eb
+cmp al, bl; bts bx, 3; jae 1f; mov ecx, 1; 1:: 49f473151a3d03bb
+cmp al, bl; bts bx, 3; je 1f; mov ecx, 1; 1:: 196ac9f4b4ed48b7
+cmp al, bl; bts bx, 3; jne 1f; mov ecx, 1; 1:: a54f3a5d5619bf0f
+cmp al, bl; bts bx, 3; jbe 1f; mov ecx, 1; 1:: d70834f3804dc5b9
+cmp al, bl; bts bx, 3; ja 1f; mov ecx, 1; 1:: e05b42fb87969b01
+cmp al, bl; bts bx, 3; js 1f; mov ecx, 1; 1:: 6a5af75282254ca3
+cmp al, bl; bts bx, 3; jns 1f; mov ecx, 1; 1:: 16ca177dc00edd03
+cmp al, bl; bts bx, 3; jp 1f; mov ecx, 1; 1:: be6d5a0215173625
+cmp al, bl; bts bx, 3; jnp 1f; mov ecx, 1; 1:: 131b117f4971f2ad
+cmp al, bl; bts bx, 3; jl 1f; mov ecx, 1; 1:: 66b157ff0c5c5eb3
+cmp al, bl; bts bx, 3; jge 1f; mov ecx, 1; 1:: 1a844946db07b223
+cmp al, bl; bts bx, 3; jle 1f; mov ecx, 1; 1:: 79da99dce7933dad
+cmp al, bl; bts bx, 3; jg 1f; mov ecx, 1; 1:: f79f4286022f8a15
+cmp ax, bx; bts bx, 3; jo 1f; mov ecx, 1; 1:: 2145c72da98d741
+cmp ax, bx; bts bx, 3; jno 1f; mov ecx, 1; 1:: 120f19a42d145d91
+cmp ax, bx; bts bx, 3; jb 1f; mov ecx, 1; 1:: b4913013b563b03
+cmp ax, bx; bts bx, 3; jae 1f; mov ecx, 1; 1:: ed858599da6ba2a3
+cmp ax, bx; bts bx, 3; je 1f; mov ecx, 1; 1:: b04313ee5547788f
+cmp ax, bx; bts bx, 3; jne 1f; mov ecx, 1; 1:: 794c49878525d40f
+cmp ax, bx; bts bx, 3; jbe 1f; mov ecx, 1; 1:: 39d18c0920b31755
+cmp ax, bx; bts bx, 3; ja 1f; mov ecx, 1; 1:: b23c50f8ea6907d5
+cmp ax, bx; bts bx, 3; js 1f; mov ecx, 1; 1:: 969bcb2955218a19
+cmp ax, bx; bts bx, 3; jns 1f; mov ecx, 1; 1:: f7742f33e6722a41
+cmp ax, bx; bts bx, 3; jp 1f; mov ecx, 1; 1:: 504e17177f6e4941
+cmp ax, bx; bts bx, 3; jnp 1f; mov ecx, 1; 1:: 8398f1ab5f87899
+cmp ax, bx; bts bx, 3; jl 1f; mov ecx, 1; 1:: 9de006b7831ee937
+cmp ax, bx; bts bx, 3; jge 1f; mov ecx, 1; 1:: 6471468d68b6e9f
+cmp ax, bx; bts bx, 3; jle 1f; mov ecx, 1; 1:: 1c2c37f15c9d2ce1
+cmp ax, bx; bts bx, 3; jg 1f; mov ecx, 1; 1:: da0b7ae1a214a5a9
+bts eax, ebx: 74ee24c6807a34c7
+bts ecx, ecx: 429b586b7a97666
+bts r8d, r15d: 5704b6fdcd6b3213
+bts eax, 0: 116fff9917cf1230
+bts eax, 1: d32868faec9eb7e3
+bts eax, 7: 1f9abe6706a1a1e1
+bts eax, 8: c92d00fdd4ad3432
+bts eax, 15: 1cc51fd6a5baf1e1
+bts eax, 16: 6e966fb724860bf8
+bts eax, 31: 2777b7a1f19f6bf1
+bts eax, 32: 116fff9917cf1230
+bts eax, 63: 2777b7a1f19f6bf1
+bts eax, 64: 116fff9917cf1230
+bts eax, 255: 2777b7a1f19f6bf1
+bts r9d, 0: e5c3f68bb3511b08
+bts r9d, 1: f2042cdd00cb043b
+bts r9d, 7: eafd4923ea675929
+bts r9d, 8: 2623643e8691fc26
+bts r9d, 15: e0d457aa43fc05c9
+bts r9d, 16: 56c2b430a5982e08
+bts r9d, 31: 63b0d4b4feeb6a79
+bts r9d, 32: e5c3f68bb3511b08
+bts r9d, 63: 63b0d4b4feeb6a79
+bts r9d, 64: e5c3f68bb3511b08
+bts r9d, 255: 63b0d4b4feeb6a79
+mov edx, 0; bts ebx, edx: 4f1c6ac4eabb332c
+mov edx, 1; bts ebx, edx: 8f05fcd2843f3653
+mov edx, 7; bts ebx, edx: b8022188eb1272ad
+mov edx, 8; bts ebx, edx: 6829f4c59e63340a
+mov edx, 15; bts ebx, edx: 1a50b9b7bb0ac70d
+mov edx, 16; bts ebx, edx: 9acb9ae6f0d189d0
+mov edx, 31; bts ebx, edx: c06291dcb71552d5
+mov edx, 32; bts ebx, edx: 13ed893764c1782c
+mov edx, 63; bts ebx, edx: f79e4d33463d41d5
+mov edx, 64; bts ebx, edx: 766400a39532552c
+mov edx, 255; bts ebx, edx: d90a3e4d33ac6455
+bts dword ptr [rbx+8], 5: da1802e000482ed1
+bts dword ptr fs:[rbx+8], 5: b5f818e9a9b34c39
+bts dword ptr gs:[rbx+8], 5: 3dc4bc4d9b085a39
+bts dword ptr [rbx+rcx*1+8], 5: ddddb0abc036f925
+bts dword ptr fs:[rbx+rcx*1+8], 5: bed63418c72c155
+bts dword ptr gs:[rbx+rcx*1+8], 5: ca5673f11f8e27b5
+bts dword ptr [rbx+rcx*2+8], 5: 80345c26fec64225
+bts dword ptr fs:[rbx+rcx*2+8], 5: 5455950f71856fbd
+bts dword ptr gs:[rbx+rcx*2+8], 5: 40427abc11d8055d
+bts dword ptr [rbx+rcx*4+8], 5: dc1854a91021f8c5
+bts dword ptr fs:[rbx+rcx*4+8], 5: e69153df125b407d
+bts dword ptr gs:[rbx+rcx*4+8], 5: 6d18cde56487acdd
+bts dword ptr [rbx+rcx*8+8], 5: 49ae68aef2bd2075
+bts dword ptr fs:[rbx+rcx*8+8], 5: b414ce99cb0edf9d
+bts dword ptr gs:[rbx+rcx*8+8], 5: 1d69b5993ed5e5dd
+bts dword ptr [rcx*1+0x8], 5: 1fe31f6b6273c259
+bts dword ptr fs:[rcx*1+0x8], 5: f53f13758592b011
+bts dword ptr gs:[rcx*1+0x8], 5: 92be6eb43fac3391
+bts dword ptr [rcx*2+0x8], 5: 51827691d62f3c09
+bts dword ptr fs:[rcx*2+0x8], 5: f7f9cfce4a92a509
+bts dword ptr gs:[rcx*2+0x8], 5: 2f77da0c2fbc5ac9
+bts dword ptr [rcx*4+0x8], 5: 2d9c4128fc6d3099
+bts dword ptr fs:[rcx*4+0x8], 5: b1572be9802245f1
+bts dword ptr gs:[rcx*4+0x8], 5: c250c6064e0d8bd1
+bts dword ptr [rcx*8+0x8], 5: 61be368574713b99
+bts dword ptr fs:[rcx*8+0x8], 5: 7954dfacc4ee9c9d
+bts dword ptr gs:[rcx*8+0x8], 5: f070f2c26ef778e9
+bts dword ptr [0x1800010], 5: 8b241ac794f11755
+bts dword ptr fs:[0x17ff010], 5: 8b241ac794f11755
+bts dword ptr gs:[0x17fe010], 5: 8b241ac794f11755
+bts dword ptr [rbx+8], 0: e9e06d64f2aae628
+bts dword ptr [rbx+8], 1: dd7ff0e285ebb45b
+bts dword ptr [rbx+8], 7: 61b466a11b53fa41
+bts dword ptr [rbx+8], 8: c5980df5fbe68056
+bts dword ptr [rbx+8], 15: 5640592c621f3481
+bts dword ptr [rbx+8], 16: 38f245bebed35d78
+bts dword ptr [rbx+8], 31: da271a7e070de6b1
+bts dword ptr [rbx+8], 32: e9e06d64f2aae628
+bts dword ptr [rbx+8], 63: da271a7e070de6b1
+bts dword ptr [rbx+8], 64: e9e06d64f2aae628
+bts dword ptr [rbx+8], 255: da271a7e070de6b1
+bts dword ptr [rbx+8], 9: 9f5e17f77efb2b49
+bts dword ptr [rbx+8], 9: 2b301a97e99bd859
+bts dword ptr [rip+rcg_mem+16], 3: 7eff399d19051d3d
+mov edx, 5; bts dword ptr [rbx+8], edx: eac4e378d7f5c5fd
+cmp eax, ebx; bts ebx, eax: 888cf214a39002b
+add eax, ebx; bts ebx, eax: d9a86528b0d62407
+test eax, ebx; bts ebx, eax: a9bd0c764bf98bbd
+inc eax; bts ebx, eax: 1b1e3eab52a4d3ea
+dec eax; bts ebx, eax: 4f02b0d19439825a
+shr eax, 3; bts ebx, eax: c9c4a8e71fab4e8f
+mov ah, 0xd5; sahf; bts ebx, eax: c6505f7e6d9009b5
+imul eax, ebx; bts ebx, eax; jle 1f; mov ecx, 1; 1:: c018a7a8ed85c142
+shl eax, 3; bts ebx, eax; jle 1f; mov ecx, 1; 1:: 6141c56981bc6779
+stc; adc eax, ebx; bts ebx, eax; jle 1f; mov ecx, 1; 1:: 9eec6d172c68421c
+stc; sbb eax, ebx; bts ebx, eax; jle 1f; mov ecx, 1; 1:: d1aa6dc033297cee
+stc; sbb eax, eax; bts ebx, eax; jle 1f; mov ecx, 1; 1:: 8b620c9305dce6e5
+cmp al, bl; bts ebx, 3; jo 1f; mov ecx, 1; 1:: 42e8af8f5a1339c7
+cmp al, bl; bts ebx, 3; jno 1f; mov ecx, 1; 1:: 9717e2c47173e85f
+cmp al, bl; bts ebx, 3; jb 1f; mov ecx, 1; 1:: dac6c84d2905275b
+cmp al, bl; bts ebx, 3; jae 1f; mov ecx, 1; 1:: 27f66777ecbec853
+cmp al, bl; bts ebx, 3; je 1f; mov ecx, 1; 1:: cf87f9514082260f
+cmp al, bl; bts ebx, 3; jne 1f; mov ecx, 1; 1:: 1a7f5918139379ff
+cmp al, bl; bts ebx, 3; jbe 1f; mov ecx, 1; 1:: 4a08972ce1302f1
+cmp al, bl; bts ebx, 3; ja 1f; mov ecx, 1; 1:: c7d95d744e023801
+cmp al, bl; bts ebx, 3; js 1f; mov ecx, 1; 1:: 375f9e6d79ceba0b
+cmp al, bl; bts ebx, 3; jns 1f; mov ecx, 1; 1:: a03cd6630cc3b263
+cmp al, bl; bts ebx, 3; jp 1f; mov ecx, 1; 1:: e45c068a3211f80d
+cmp al, bl; bts ebx, 3; jnp 1f; mov ecx, 1; 1:: cfb6b3458693fa2d
+cmp al, bl; bts ebx, 3; jl 1f; mov ecx, 1; 1:: a0704fb92239cb93
+cmp al, bl; bts ebx, 3; jge 1f; mov ecx, 1; 1:: 2069db299eacef1b
+cmp al, bl; bts ebx, 3; jle 1f; mov ecx, 1; 1:: 2bec4e054225911d
+cmp al, bl; bts ebx, 3; jg 1f; mov ecx, 1; 1:: 196d23efc7db1f3d
+cmp eax, ebx; bts ebx, 3; jo 1f; mov ecx, 1; 1:: 42d9732e409a0265
+cmp eax, ebx; bts ebx, 3; jno 1f; mov ecx, 1; 1:: d6b634427d16ed81
+cmp eax, ebx; bts ebx, 3; jb 1f; mov ecx, 1; 1:: 2de4b81c3e248957
+cmp eax, ebx; bts ebx, 3; jae 1f; mov ecx, 1; 1:: 7dd9177128654563
+cmp eax, ebx; bts ebx, 3; je 1f; mov ecx, 1; 1:: 26c167afdc925673
+cmp eax, ebx; bts ebx, 3; jne 1f; mov ecx, 1; 1:: 24f5d0cd59dfb59f
+cmp eax, ebx; bts ebx, 3; jbe 1f; mov ecx, 1; 1:: 996833ec9a8243a9
+cmp eax, ebx; bts ebx, 3; ja 1f; mov ecx, 1; 1:: cbc79243ee88391d
+cmp eax, ebx; bts ebx, 3; js 1f; mov ecx, 1; 1:: e2cca9f07da35b2d
+cmp eax, ebx; bts ebx, 3; jns 1f; mov ecx, 1; 1:: 65a46bd7446094c1
+cmp eax, ebx; bts ebx, 3; jp 1f; mov ecx, 1; 1:: 800b51d92388cb79
+cmp eax, ebx; bts ebx, 3; jnp 1f; mov ecx, 1; 1:: 5ac09422a7a6b3d5
+cmp eax, ebx; bts ebx, 3; jl 1f; mov ecx, 1; 1:: 6042af4048a0d7bf
+cmp eax, ebx; bts ebx, 3; jge 1f; mov ecx, 1; 1:: 9e6ff01bf7de5edb
+cmp eax, ebx; bts ebx, 3; jle 1f; mov ecx, 1; 1:: 858abc6f40f0bfe1
+cmp eax, ebx; bts ebx, 3; jg 1f; mov ecx, 1; 1:: 7226e9ef9e6f8dbd
+bts rax, rbx: e9e7b74a1f21d467
+bts rcx, rcx: 3b03d61fb5dbbb37
+bts r8, r15: c18b8afa862b9b53
+bts rax, 0: 20fc8e957356580
+bts rax, 1: c8ae4300465fce63
+bts rax, 7: 8e2bebbd11bd7c51
+bts rax, 8: 47306328cb4240fa
+bts rax, 15: 4cef9c6d6954cfb1
+bts rax, 16: c499f762de844ab8
+bts rax, 31: c966b54a29feaba1
+bts rax, 32: d9f0ee341a9b2efc
+bts rax, 63: f81e82115ad59fe9
+bts rax, 64: 20fc8e957356580
+bts rax, 255: f81e82115ad59fe9
+bts r9, 0: baaada29c8f67120
+bts r9, 1: 55de35d7977e401b
+bts r9, 7: 3adcbc2c66d21011
+bts r9, 8: bc064b832952417e
+bts r9, 15: 5c35a01327c167b1
+bts r9, 16: a546cbe785147310
+bts r9, 31: ff1b14d8e4eeb581
+bts r9, 32: 9dadd98f4864dccc
+bts r9, 63: fde3be67b5f61251
+bts r9, 64: baaada29c8f67120
+bts r9, 255: fde3be67b5f61251
+mov edx, 0; bts rbx, rdx: 9c58437c87cec49c
+mov edx, 1; bts rbx, rdx: 775bafe8501cbc5b
+mov edx, 7; bts rbx, rdx: a5839d2022d764fd
+mov edx, 8; bts rbx, rdx: 421b05a20baf3eea
+mov edx, 15; bts rbx, rdx: 5f7df792a4667bfd
+mov edx, 16; bts rbx, rdx: 5e20e3ff9d3ce970
+mov edx, 31; bts rbx, rdx: 65b16776c5407f65
+mov edx, 32; bts rbx, rdx: dddd9d8c6431551c
+mov edx, 63; bts rbx, rdx: a3a7de09b241b6c1
+mov edx, 64; bts rbx, rdx: 8ba4bd2d3e60e89c
+mov edx, 255; bts rbx, rdx: fd19aeca3c1457c1
+bts qword ptr [rbx+8], 5: da1802e000482ed1
+bts qword ptr fs:[rbx+8], 5: b5f818e9a9b34c39
+bts qword ptr gs:[rbx+8], 5: 3dc4bc4d9b085a39
+bts qword ptr [rbx+rcx*1+8], 5: ddddb0abc036f925
+bts qword ptr fs:[rbx+rcx*1+8], 5: bed63418c72c155
+bts qword ptr gs:[rbx+rcx*1+8], 5: ca5673f11f8e27b5
+bts qword ptr [rbx+rcx*2+8], 5: 80345c26fec64225
+bts qword ptr fs:[rbx+rcx*2+8], 5: 5455950f71856fbd
+bts qword ptr gs:[rbx+rcx*2+8], 5: 40427abc11d8055d
+bts qword ptr [rbx+rcx*4+8], 5: dc1854a91021f8c5
+bts qword ptr fs:[rbx+rcx*4+8], 5: e69153df125b407d
+bts qword ptr gs:[rbx+rcx*4+8], 5: 6d18cde56487acdd
+bts qword ptr [rbx+rcx*8+8], 5: 49ae68aef2bd2075
+bts qword ptr fs:[rbx+rcx*8+8], 5: b414ce99cb0edf9d
+bts qword ptr gs:[rbx+rcx*8+8], 5: 1d69b5993ed5e5dd
+bts qword ptr [rcx*1+0x8], 5: 1fe31f6b6273c259
+bts qword ptr fs:[rcx*1+0x8], 5: f53f13758592b011
+bts qword ptr gs:[rcx*1+0x8], 5: 92be6eb43fac3391
+bts qword ptr [rcx*2+0x8], 5: 51827691d62f3c09
+bts qword ptr fs:[rcx*2+0x8], 5: f7f9cfce4a92a509
+bts qword ptr gs:[rcx*2+0x8], 5: 2f77da0c2fbc5ac9
+bts qword ptr [rcx*4+0x8], 5: 2d9c4128fc6d3099
+bts qword ptr fs:[rcx*4+0x8], 5: b1572be9802245f1
+bts qword ptr gs:[rcx*4+0x8], 5: c250c6064e0d8bd1
+bts qword ptr [rcx*8+0x8], 5: 61be368574713b99
+bts qword ptr fs:[rcx*8+0x8], 5: 7954dfacc4ee9c9d
+bts qword ptr gs:[rcx*8+0x8], 5: f070f2c26ef778e9
+bts qword ptr [0x1800010], 5: 8b241ac794f11755
+bts qword ptr fs:[0x17ff010], 5: 8b241ac794f11755
+bts qword ptr gs:[0x17fe010], 5: 8b241ac794f11755
+bts qword ptr [rbx+8], 0: 35f78dbe14b01e50
+bts qword ptr [rbx+8], 1: dd7ff0e285ebb45b
+bts qword ptr [rbx+8], 7: 61b466a11b53fa41
+bts qword ptr [rbx+8], 8: c5980df5fbe68056
+bts qword ptr [rbx+8], 15: 5640592c621f3481
+bts qword ptr [rbx+8], 16: 38f245bebed35d78
+bts qword ptr [rbx+8], 31: da271a7e070de6b1
+bts qword ptr [rbx+8], 32: 337da21f8e47bdbc
+bts qword ptr [rbx+8], 63: 11d904697c550ce1
+bts qword ptr [rbx+8], 64: 35f78dbe14b01e50
+bts qword ptr [rbx+8], 255: 11d904697c550ce1
+bts qword ptr [rbx+8], 9: 9f5e17f77efb2b49
+bts qword ptr [rbx+8], 9: 2b301a97e99bd859
+bts qword ptr [rip+rcg_mem+16], 3: 7eff399d19051d3d
+mov edx, 5; bts qword ptr [rbx+8], rdx: eac4e378d7f5c5fd
+cmp rax, rbx; bts rbx, rax: 5af81fefce284f5f
+add rax, rbx; bts rbx, rax: 940a996e6fe90023
+test rax, rbx; bts rbx, rax: 472ab46e6ba0f5d7
+inc rax; bts rbx, rax: fc28fac0a5e2e59a
+dec rax; bts rbx, rax: f35522dbd91ad648
+shr rax, 3; bts rbx, rax: 9acef9b9f9dabb53
+mov ah, 0xd5; sahf; bts rbx, rax: 2a5b2da40884fac5
+imul rax, rbx; bts rbx, rax; jle 1f; mov ecx, 1; 1:: 928cc478bf9fcdcc
+shl rax, 3; bts rbx, rax; jle 1f; mov ecx, 1; 1:: ce00a1f953da2205
+stc; adc rax, rbx; bts rbx, rax; jle 1f; mov ecx, 1; 1:: a8c35d55a2ffa0b7
+stc; sbb rax, rbx; bts rbx, rax; jle 1f; mov ecx, 1; 1:: 4db2b139cd248bf6
+stc; sbb rax, rax; bts rbx, rax; jle 1f; mov ecx, 1; 1:: de4abdaab740e325
+cmp al, bl; bts rbx, 3; jo 1f; mov ecx, 1; 1:: 706910d065ddd34f
+cmp al, bl; bts rbx, 3; jno 1f; mov ecx, 1; 1:: 3e7104502de859cf
+cmp al, bl; bts rbx, 3; jb 1f; mov ecx, 1; 1:: 492d2489d11b73eb
+cmp al, bl; bts rbx, 3; jae 1f; mov ecx, 1; 1:: 49f473151a3d03bb
+cmp al, bl; bts rbx, 3; je 1f; mov ecx, 1; 1:: 196ac9f4b4ed48b7
+cmp al, bl; bts rbx, 3; jne 1f; mov ecx, 1; 1:: a54f3a5d5619bf0f
+cmp al, bl; bts rbx, 3; jbe 1f; mov ecx, 1; 1:: d70834f3804dc5b9
+cmp al, bl; bts rbx, 3; ja 1f; mov ecx, 1; 1:: e05b42fb87969b01
+cmp al, bl; bts rbx, 3; js 1f; mov ecx, 1; 1:: 6a5af75282254ca3
+cmp al, bl; bts rbx, 3; jns 1f; mov ecx, 1; 1:: 16ca177dc00edd03
+cmp al, bl; bts rbx, 3; jp 1f; mov ecx, 1; 1:: be6d5a0215173625
+cmp al, bl; bts rbx, 3; jnp 1f; mov ecx, 1; 1:: 131b117f4971f2ad
+cmp al, bl; bts rbx, 3; jl 1f; mov ecx, 1; 1:: 66b157ff0c5c5eb3
+cmp al, bl; bts rbx, 3; jge 1f; mov ecx, 1; 1:: 1a844946db07b223
+cmp al, bl; bts rbx, 3; jle 1f; mov ecx, 1; 1:: 79da99dce7933dad
+cmp al, bl; bts rbx, 3; jg 1f; mov ecx, 1; 1:: f79f4286022f8a15
+cmp rax, rbx; bts rbx, 3; jo 1f; mov ecx, 1; 1:: cb076cef3089589
+cmp rax, rbx; bts rbx, 3; jno 1f; mov ecx, 1; 1:: 5e0ce1354d0ac471
+cmp rax, rbx; bts rbx, 3; jb 1f; mov ecx, 1; 1:: 66e76c52a763ca6d
+cmp rax, rbx; bts rbx, 3; jae 1f; mov ecx, 1; 1:: 4ed50827ffa0e5a5
+cmp rax, rbx; bts rbx, 3; je 1f; mov ecx, 1; 1:: 596f8c85b1c71ec5
+cmp rax, rbx; bts rbx, 3; jne 1f; mov ecx, 1; 1:: dea0d2a983cacad
+cmp rax, rbx; bts rbx, 3; jbe 1f; mov ecx, 1; 1:: 21cc7cb63900813b
+cmp rax, rbx; bts rbx, 3; ja 1f; mov ecx, 1; 1:: 63b595e0da0d9c93
+cmp rax, rbx; bts rbx, 3; js 1f; mov ecx, 1; 1:: cb076cef3089589
+cmp rax, rbx; bts rbx, 3; jns 1f; mov ecx, 1; 1:: 5e0ce1354d0ac471
+cmp rax, rbx; bts rbx, 3; jp 1f; mov ecx, 1; 1:: 95d872c22365ead7
+cmp rax, rbx; bts rbx, 3; jnp 1f; mov ecx, 1; 1:: f8440323516d4f6f
+cmp rax, rbx; bts rbx, 3; jl 1f; mov ecx, 1; 1:: 8a794f91c3bc22a1
+cmp rax, rbx; bts rbx, 3; jge 1f; mov ecx, 1; 1:: 660d210e92a478f1
+cmp rax, rbx; bts rbx, 3; jle 1f; mov ecx, 1; 1:: 596f8c85b1c71ec5
+cmp rax, rbx; bts rbx, 3; jg 1f; mov ecx, 1; 1:: dea0d2a983cacad
+btr ax, bx: a10c3db74e5b7b83
+btr cx, cx: 3eca6214ece5479c
+btr r8w, r15w: 6d05dc473d115f3b
+btr ax, 0: 85dd5136be5227d8
+btr ax, 1: 3cc36958ff2fc2cb
+btr ax, 7: e9c2c3751d20b651
+btr ax, 8: de022d10cbdcf242
+btr ax, 15: 2d9bebdd7b8915b1
+btr ax, 16: 85dd5136be5227d8
+btr ax, 31: 2d9bebdd7b8915b1
+btr ax, 32: 85dd5136be5227d8
+btr ax, 63: 2d9bebdd7b8915b1
+btr ax, 64: 85dd5136be5227d8
+btr ax, 255: 2d9bebdd7b8915b1
+btr r9w, 0: dfed6b9e21bd0e38
+btr r9w, 1: e1325fcfc9c708a3
+btr r9w, 7: ac7cfcd875e03a11
+btr r9w, 8: a67c70677b22acb6
+btr r9w, 15: 20a8970d10b4dfb1
+btr r9w, 16: dfed6b9e21bd0e38
+btr r9w, 31: 20a8970d10b4dfb1
+btr r9w, 32: dfed6b9e21bd0e38
+btr r9w, 63: 20a8970d10b4dfb1
+btr r9w, 64: dfed6b9e21bd0e38
+btr r9w, 255: 20a8970d10b4dfb1
+mov edx, 0; btr bx, dx: b1c0dc1185ae8064
+mov edx, 1; btr bx, dx: c63e26dd03531503
+mov edx, 7; btr bx, dx: 1f10895fbc4405fd
+mov edx, 8; btr bx, dx: a803f5cec880e6da
+mov edx, 15; btr bx, dx: 6c98269e45a14afd
+mov edx, 16; btr bx, dx: aeb09474a4052344
+mov edx, 31; btr bx, dx: 6c772c0bd1b82fd
+mov edx, 32; btr bx, dx: 2a8fbd666fef32e4
+mov edx, 63; btr bx, dx: c553fe59383e4b3d
+mov edx, 64; btr bx, dx: f5d75be88fc499e4
+mov edx, 255; btr bx, dx: 83ca9e935084063d
+btr word ptr [rbx+8], 5: 94361a48a072ad11
+btr word ptr fs:[rbx+8], 5: 34b16a7712b075b9
+btr word ptr gs:[rbx+8], 5: 32eb8c0d4abfd079
+btr word ptr [rbx+rcx*1+8], 5: 9dbce5f01e6a2165
+btr word ptr fs:[rbx+rcx*1+8], 5: 4556958c9e76a395
+btr word ptr gs:[rbx+rcx*1+8], 5: baf0400493bdd75
+btr word ptr [rbx+rcx*2+8], 5: f0b3a3a9453e3c25
+btr word ptr fs:[rbx+rcx*2+8], 5: d61d65239d15427d
+btr word ptr gs:[rbx+rcx*2+8], 5: 42117e045aa96f5d
+btr word ptr [rbx+rcx*4+8], 5: 1f3efed8b10e3405
+btr word ptr fs:[rbx+rcx*4+8], 5: 40a64a50aeab9a7d
+btr word ptr gs:[rbx+rcx*4+8], 5: 5531f4f7bb3ad6dd
+btr word ptr [rbx+rcx*8+8], 5: 597fa239dae31db5
+btr word ptr fs:[rbx+rcx*8+8], 5: b9fdf830a08ba79d
+btr word ptr gs:[rbx+rcx*8+8], 5: 18672baff4cd539d
+btr word ptr [rcx*1+0x8], 5: 9b23da8d3eaa6099
+btr word ptr fs:[rcx*1+0x8], 5: 727ca8a49cd32c51
+btr word ptr gs:[rcx*1+0x8], 5: 2e8ce7a3acce10d1
+btr word ptr [rcx*2+0x8], 5: dd3fcc13d4fee7c9
+btr word ptr fs:[rcx*2+0x8], 5: 272dff2683afb649
+btr word ptr gs:[rcx*2+0x8], 5: 8773523adecb4689
+btr word ptr [rcx*4+0x8], 5: 2dd4b8384ca3159
+btr word ptr fs:[rcx*4+0x8], 5: e29209f6005f1671
+btr word ptr gs:[rcx*4+0x8], 5: 2c17f301aa3dad51
+btr word ptr [rcx*8+0x8], 5: 4f882eaf14d1499
+btr word ptr fs:[rcx*8+0x8], 5: 818419303459dd5d
+btr word ptr gs:[rcx*8+0x8], 5: 3a2ed615d8769669
+btr word ptr [0x1800010], 5: 89848cb620ee6555
+btr word ptr fs:[0x17ff010], 5: 89848cb620ee6555
+btr word ptr gs:[0x17fe010], 5: 89848cb620ee6555
+btr word ptr [rbx+8], 0: 1c5141d0f4a8f6b0
+btr word ptr [rbx+8], 1: 53fdddb44f1712b
+btr word ptr [rbx+8], 7: a114170053bbf141
+btr word ptr [rbx+8], 8: 3518be862b0ae962
+btr word ptr [rbx+8], 15: 9ff56bd457d43e81
+btr word ptr [rbx+8], 16: 1c5141d0f4a8f6b0
+btr word ptr [rbx+8], 31: 9ff56bd457d43e81
+btr word ptr [rbx+8], 32: 1c5141d0f4a8f6b0
+btr word ptr [rbx+8], 63: 9ff56bd457d43e81
+btr word ptr [rbx+8], 64: 1c5141d0f4a8f6b0
+btr word ptr [rbx+8], 255: 9ff56bd457d43e81
+btr word ptr [rbx+8], 9: 61e19081959d7b09
+btr word ptr [rbx+8], 9: 3659d47b1495fde9
+btr word ptr [rip+rcg_mem+16], 3: 1e1a8f16e2db186d
+mov edx, 5; btr word ptr [rbx+8], dx: 6cfb12c086ca173d
+cmp ax, bx; btr bx, ax: 6135e2865e0ca793
+add ax, bx; btr bx, ax: f88177d02d8d4d36
+test ax, bx; btr bx, ax: a4d92446b6d72beb
+inc ax; btr bx, ax: 41f677a03b321e22
+dec ax; btr bx, ax: a3dbf797611bca6
+shr ax, 3; btr bx, ax: ec6abaca7607c7b5
+mov ah, 0xd5; sahf; btr bx, ax: 75350231038fc797
+imul ax, bx; btr bx, ax; jle 1f; mov ecx, 1; 1:: 8b9c9b583a964b1f
+shl ax, 3; btr bx, ax; jle 1f; mov ecx, 1; 1:: 70649eb0f9c63cd
+stc; adc ax, bx; btr bx, ax; jle 1f; mov ecx, 1; 1:: 588e1e60ed29a889
+stc; sbb ax, bx; btr bx, ax; jle 1f; mov ecx, 1; 1:: ae89c5ad8ef5396b
+stc; sbb ax, ax; btr bx, ax; jle 1f; mov ecx, 1; 1:: dd22d80ffb2ea595
+cmp al, bl; btr bx, 3; jo 1f; mov ecx, 1; 1:: 899053227ff1111f
+cmp al, bl; btr bx, 3; jno 1f; mov ecx, 1; 1:: d5062e5899ab62ff
+cmp al, bl; btr bx, 3; jb 1f; mov ecx, 1; 1:: 479097ecf8dd156b
+cmp al, bl; btr bx, 3; jae 1f; mov ecx, 1; 1:: 1f51ba1226f4d79b
+cmp al, bl; btr bx, 3; je 1f; mov ecx, 1; 1:: 3a1d609bbfe70717
+cmp al, bl; btr bx, 3; jne 1f; mov ecx, 1; 1:: 2326b21eb5977ff
+cmp al, bl; btr bx, 3; jbe 1f; mov ecx, 1; 1:: 35887f06caba71b9
+cmp al, bl; btr bx, 3; ja 1f; mov ecx, 1; 1:: 3d46d4a1f65d6391
+cmp al, bl; btr bx, 3; js 1f; mov ecx, 1; 1:: 2ca1e9c9134d78c3
+cmp al, bl; btr bx, 3; jns 1f; mov ecx, 1; 1:: d35d1bf50f8dacb3
+cmp al, bl; btr bx, 3; jp 1f; mov ecx, 1; 1:: 763eed2093e7d5b5
+cmp al, bl; btr bx, 3; jnp 1f; mov ecx, 1; 1:: 6fa3dd6c88f1ad6d
+cmp al, bl; btr bx, 3; jl 1f; mov ecx, 1; 1:: 133bf8813da9e53
+cmp al, bl; btr bx, 3; jge 1f; mov ecx, 1; 1:: 333f51460b7754a3
+cmp al, bl; btr bx, 3; jle 1f; mov ecx, 1; 1:: ce38c60562ab513d
+cmp al, bl; btr bx, 3; jg 1f; mov ecx, 1; 1:: 710b933c2b3fe965
+cmp ax, bx; btr bx, 3; jo 1f; mov ecx, 1; 1:: 4ff56fbd8b8ef5f1
+cmp ax, bx; btr bx, 3; jno 1f; mov ecx, 1; 1:: 9d9db734688835e1
+cmp ax, bx; btr bx, 3; jb 1f; mov ecx, 1; 1:: fc33486ae60d8c53
+cmp ax, bx; btr bx, 3; jae 1f; mov ecx, 1; 1:: aa101b954d8fd0d3
+cmp ax, bx; btr bx, 3; je 1f; mov ecx, 1; 1:: 7418995ab3af15df
+cmp ax, bx; btr bx, 3; jne 1f; mov ecx, 1; 1:: 8e66b88deebe666f
+cmp ax, bx; btr bx, 3; jbe 1f; mov ecx, 1; 1:: ad7c339facf67175
+cmp ax, bx; btr bx, 3; ja 1f; mov ecx, 1; 1:: e66dbe2f5ab2cc95
+cmp ax, bx; btr bx, 3; js 1f; mov ecx, 1; 1:: 836c9dc2b8b6e529
+cmp ax, bx; btr bx, 3; jns 1f; mov ecx, 1; 1:: c22b7db8717050f1
+cmp ax, bx; btr bx, 3; jp 1f; mov ecx, 1; 1:: ddb36910c697f071
+cmp ax, bx; btr bx, 3; jnp 1f; mov ecx, 1; 1:: e2ea92e036a4dff9
+cmp ax, bx; btr bx, 3; jl 1f; mov ecx, 1; 1:: 3cb1f83be02b8fb7
+cmp ax, bx; btr bx, 3; jge 1f; mov ecx, 1; 1:: 6c723dd3153c4e5f
+cmp ax, bx; btr bx, 3; jle 1f; mov ecx, 1; 1:: a4b6693f53cbdc11
+cmp ax, bx; btr bx, 3; jg 1f; mov ecx, 1; 1:: a468ab505cd4b89
+btr eax, ebx: 84e1421ec85196c7
+btr ecx, ecx: 690b04d2bbdaad9c
+btr r8d, r15d: c7fae6940472aacb
+btr eax, 0: 390fecc995987390
+btr eax, 1: 3049118ad5d1e6a3
+btr eax, 7: 485ca925b29d93e1
+btr eax, 8: bc8c55c41857d492
+btr eax, 15: 1e22e77a837286e1
+btr eax, 16: 8c79366f7b14b808
+btr eax, 31: 44f1d33741e5b8f1
+btr eax, 32: 390fecc995987390
+btr eax, 63: 44f1d33741e5b8f1
+btr eax, 64: 390fecc995987390
+btr eax, 255: 44f1d33741e5b8f1
+btr r9d, 0: 6804cb994271c998
+btr r9d, 1: 488331daf7f4c363
+btr r9d, 7: 5eb43ea54e653729
+btr r9d, 8: b8969d9dd3925e7e
+btr r9d, 15: c96aa7eed978ac9
+btr r9d, 16: ecc6dbcc391e1e18
+btr r9d, 31: 8de058a1f76e5579
+btr r9d, 32: 6804cb994271c998
+btr r9d, 63: 8de058a1f76e5579
+btr r9d, 64: 6804cb994271c998
+btr r9d, 255: 8de058a1f76e5579
+mov edx, 0; btr ebx, edx: 157bd307b6031efc
+mov edx, 1; btr ebx, edx: 8a62f1cb33f1e5db
+mov edx, 7; btr ebx, edx: b7f24f535929ebad
+mov edx, 8; btr ebx, edx: 73d2b688133fd772
+mov edx, 15; btr ebx, edx: c3614407433c380d
+mov edx, 16; btr ebx, edx: c9b775dde6cd3028
+mov edx, 31; btr ebx, edx: a3f56c55f50694d5
+mov edx, 32; btr ebx, edx: b98473db3fe889fc
+mov edx, 63; btr ebx, edx: 65a78c3ed5372cd5
+mov edx, 64; btr ebx, edx: e908ebaee20227fc
+mov edx, 255; btr ebx, edx: b8bc531e9caf1a55
+btr dword ptr [rbx+8], 5: 94361a48a072ad11
+btr dword ptr fs:[rbx+8], 5: 34b16a7712b075b9
+btr dword ptr gs:[rbx+8], 5: 32eb8c0d4abfd079
+btr dword ptr [rbx+rcx*1+8], 5: 9dbce5f01e6a2165
+btr dword ptr fs:[rbx+rcx*1+8], 5: 4556958c9e76a395
+btr dword ptr gs:[rbx+rcx*1+8], 5: baf0400493bdd75
+btr dword ptr [rbx+rcx*2+8], 5: f0b3a3a9453e3c25
+btr dword ptr fs:[rbx+rcx*2+8], 5: d61d65239d15427d
+btr dword ptr gs:[rbx+rcx*2+8], 5: 42117e045aa96f5d
+btr dword ptr [rbx+rcx*4+8], 5: 1f3efed8b10e3405
+btr dword ptr fs:[rbx+rcx*4+8], 5: 40a64a50aeab9a7d
+btr dword ptr gs:[rbx+rcx*4+8], 5: 5531f4f7bb3ad6dd
+btr dword ptr [rbx+rcx*8+8], 5: 597fa239dae31db5
+btr dword ptr fs:[rbx+rcx*8+8], 5: b9fdf830a08ba79d
+btr dword ptr gs:[rbx+rcx*8+8], 5: 18672baff4cd539d
+btr dword ptr [rcx*1+0x8], 5: 9b23da8d3eaa6099
+btr dword ptr fs:[rcx*1+0x8], 5: 727ca8a49cd32c51
+btr dword ptr gs:[rcx*1+0x8], 5: 2e8ce7a3acce10d1
+btr dword ptr [rcx*2+0x8], 5: dd3fcc13d4fee7c9
+btr dword ptr fs:[rcx*2+0x8], 5: 272dff2683afb649
+btr dword ptr gs:[rcx*2+0x8], 5: 8773523adecb4689
+btr dword ptr [rcx*4+0x8], 5: 2dd4b8384ca3159
+btr dword ptr fs:[rcx*4+0x8], 5: e29209f6005f1671
+btr dword ptr gs:[rcx*4+0x8], 5: 2c17f301aa3dad51
+btr dword ptr [rcx*8+0x8], 5: 4f882eaf14d1499
+btr dword ptr fs:[rcx*8+0x8], 5: 818419303459dd5d
+btr dword ptr gs:[rcx*8+0x8], 5: 3a2ed615d8769669
+btr dword ptr [0x1800010], 5: 89848cb620ee6555
+btr dword ptr fs:[0x17ff010], 5: 89848cb620ee6555
+btr dword ptr gs:[0x17fe010], 5: 89848cb620ee6555
+btr dword ptr [rbx+8], 0: 1c5141d0f4a8f6b0
+btr dword ptr [rbx+8], 1: 53fdddb44f1712b
+btr dword ptr [rbx+8], 7: a114170053bbf141
+btr dword ptr [rbx+8], 8: 3518be862b0ae962
+btr dword ptr [rbx+8], 15: 9ff56bd457d43e81
+btr dword ptr [rbx+8], 16: 1a3bf5e5ab1ab4e8
+btr dword ptr [rbx+8], 31: ebfaf9aaec98aab1
+btr dword ptr [rbx+8], 32: 1c5141d0f4a8f6b0
+btr dword ptr [rbx+8], 63: ebfaf9aaec98aab1
+btr dword ptr [rbx+8], 64: 1c5141d0f4a8f6b0
+btr dword ptr [rbx+8], 255: ebfaf9aaec98aab1
+btr dword ptr [rbx+8], 9: 61e19081959d7b09
+btr dword ptr [rbx+8], 9: 3659d47b1495fde9
+btr dword ptr [rip+rcg_mem+16], 3: 1e1a8f16e2db186d
+mov edx, 5; btr dword ptr [rbx+8], edx: 6cfb12c086ca173d
+cmp eax, ebx; btr ebx, eax: bb4d86f20f25fb67
+add eax, ebx; btr ebx, eax: 3a21ef851002a8ab
+test eax, ebx; btr ebx, eax: 6f18516f88740965
+inc eax; btr ebx, eax: 4bf4563ff3d68d2a
+dec eax; btr ebx, eax: 5c88442638a4ce1e
+shr eax, 3; btr ebx, eax: b6beddb1b1d35923
+mov ah, 0xd5; sahf; btr ebx, eax: f9ae7373629530e9
+imul eax, ebx; btr ebx, eax; jle 1f; mov ecx, 1; 1:: 2bad5b69b966769a
+shl eax, 3; btr ebx, eax; jle 1f; mov ecx, 1; 1:: 4c5e542be2166cd1
+stc; adc eax, ebx; btr ebx, eax; jle 1f; mov ecx, 1; 1:: e581b1ff9079cac
+stc; sbb eax, ebx; btr ebx, eax; jle 1f; mov ecx, 1; 1:: c5099cc2d0e69268
+stc; sbb eax, eax; btr ebx, eax; jle 1f; mov ecx, 1; 1:: 2f81bc19c43d5e5
+cmp al, bl; btr ebx, 3; jo 1f; mov ecx, 1; 1:: b35105e91ff8eba7
+cmp al, bl; btr ebx, 3; jno 1f; mov ecx, 1; 1:: 3f5902336e80335f
+cmp al, bl; btr ebx, 3; jb 1f; mov ecx, 1; 1:: ca6cfd9a09ce308b
+cmp al, bl; btr ebx, 3; jae 1f; mov ecx, 1; 1:: cbf8723d68e6b323
+cmp al, bl; btr ebx, 3; je 1f; mov ecx, 1; 1:: 1fb55a9b80100acf
+cmp al, bl; btr ebx, 3; jne 1f; mov ecx, 1; 1:: ccd5853a6f2d900f
+cmp al, bl; btr ebx, 3; jbe 1f; mov ecx, 1; 1:: febe069444c3fae1
+cmp al, bl; btr ebx, 3; ja 1f; mov ecx, 1; 1:: f6fd47f27c78e361
+cmp al, bl; btr ebx, 3; js 1f; mov ecx, 1; 1:: a3e5e90a4ca85d8b
+cmp al, bl; btr ebx, 3; jns 1f; mov ecx, 1; 1:: 97a7ce72fc7c1053
+cmp al, bl; btr ebx, 3; jp 1f; mov ecx, 1; 1:: a3b1709480c3d2dd
+cmp al, bl; btr ebx, 3; jnp 1f; mov ecx, 1; 1:: e45b5390cd10de4d
+cmp al, bl; btr ebx, 3; jl 1f; mov ecx, 1; 1:: 9e00800a12f69f23
+cmp al, bl; btr ebx, 3; jge 1f; mov ecx, 1; 1:: e9fc6d5a493dd5eb
+cmp al, bl; btr ebx, 3; jle 1f; mov ecx, 1; 1:: fac972689644dead
+cmp al, bl; btr ebx, 3; jg 1f; mov ecx, 1; 1:: 613d202b57dfcd0d
+cmp eax, ebx; btr ebx, 3; jo 1f; mov ecx, 1; 1:: b3a0c32be34c0865
+cmp eax, ebx; btr ebx, 3; jno 1f; mov ecx, 1; 1:: 77e30f0fb360a241
+cmp eax, ebx; btr ebx, 3; jb 1f; mov ecx, 1; 1:: c490b4fb22fd8047
+cmp eax, ebx; btr ebx, 3; jae 1f; mov ecx, 1; 1:: 50a4419958823953
+cmp eax, ebx; btr ebx, 3; je 1f; mov ecx, 1; 1:: 52b4bae561b262f3
+cmp eax, ebx; btr ebx, 3; jne 1f; mov ecx, 1; 1:: 3f057f8d9791829f
+cmp eax, ebx; btr ebx, 3; jbe 1f; mov ecx, 1; 1:: c7f741210d8f5279
+cmp eax, ebx; btr ebx, 3; ja 1f; mov ecx, 1; 1:: 28218fe44b8fa06d
+cmp eax, ebx; btr ebx, 3; js 1f; mov ecx, 1; 1:: c89f9698f76f40cd
+cmp eax, ebx; btr ebx, 3; jns 1f; mov ecx, 1; 1:: 7da7c472a63ea091
+cmp eax, ebx; btr ebx, 3; jp 1f; mov ecx, 1; 1:: f892ed7191313ee9
+cmp eax, ebx; btr ebx, 3; jnp 1f; mov ecx, 1; 1:: 40e9527af1a295b5
+cmp eax, ebx; btr ebx, 3; jl 1f; mov ecx, 1; 1:: 9a0e028e86ce8cbf
+cmp eax, ebx; btr ebx, 3; jge 1f; mov ecx, 1; 1:: 2bce820b8fc070ab
+cmp eax, ebx; btr ebx, 3; jle 1f; mov ecx, 1; 1:: 98a12e949a9379c1
+cmp eax, ebx; btr ebx, 3; jg 1f; mov ecx, 1; 1:: 565c1411e59d98dd
+btr rax, rbx: 945a65c29837e57f
+btr rcx, rcx: 6e893152ba8f40a1
+btr r8, r15: dc1d537e79dbf313
+btr rax, 0: 85dd5136be5227d8
+btr rax, 1: 3cc36958ff2fc2cb
+btr rax, 7: e9c2c3751d20b651
+btr rax, 8: de022d10cbdcf242
+btr rax, 15: 2d9bebdd7b8915b1
+btr rax, 16: b140ce0c4ea40af0
+btr rax, 31: 2e940661225668a1
+btr rax, 32: 879743cd1c72248c
+btr rax, 63: 59374ef05a6523e9
+btr rax, 64: 85dd5136be5227d8
+btr rax, 255: 59374ef05a6523e9
+btr r9, 0: dfed6b9e21bd0e38
+btr r9, 1: e1325fcfc9c708a3
+btr r9, 7: ac7cfcd875e03a11
+btr r9, 8: a67c70677b22acb6
+btr r9, 15: 20a8970d10b4dfb1
+btr r9, 16: 4d85f72499ceef8
+btr r9, 31: f898894046d3bd81
+btr r9, 32: a08f2799f920c39c
+btr r9, 63: 9d24a4fc7dc2de51
+btr r9, 64: dfed6b9e21bd0e38
+btr r9, 255: 9d24a4fc7dc2de51
+mov edx, 0; btr rbx, rdx: b1c0dc1185ae8064
+mov edx, 1; btr rbx, rdx: c63e26dd03531503
+mov edx, 7; btr rbx, rdx: 1f10895fbc4405fd
+mov edx, 8; btr rbx, rdx: a803f5cec880e6da
+mov edx, 15; btr rbx, rdx: 6c98269e45a14afd
+mov edx, 16; btr rbx, rdx: 812c7f9ec8219970
+mov edx, 31; btr rbx, rdx: 4db596e7e8dbed65
+mov edx, 32; btr rbx, rdx: 86e53d7cd31e8004
+mov edx, 63; btr rbx, rdx: 7a76efd16cb6efc1
+mov edx, 64; btr rbx, rdx: f5d75be88fc499e4
+mov edx, 255; btr rbx, rdx: abe0fa7a577f67c1
+btr qword ptr [rbx+8], 5: 94361a48a072ad11
+btr qword ptr fs:[rbx+8], 5: 34b16a7712b075b9
+btr qword ptr gs:[rbx+8], 5: 32eb8c0d4abfd079
+btr qword ptr [rbx+rcx*1+8], 5: 9dbce5f01e6a2165
+btr qword ptr fs:[rbx+rcx*1+8], 5: 4556958c9e76a395
+btr qword ptr gs:[rbx+rcx*1+8], 5: baf0400493bdd75
+btr qword ptr [rbx+rcx*2+8], 5: f0b3a3a9453e3c25
+btr qword ptr fs:[rbx+rcx*2+8], 5: d61d65239d15427d
+btr qword ptr gs:[rbx+rcx*2+8], 5: 42117e045aa96f5d
+btr qword ptr [rbx+rcx*4+8], 5: 1f3efed8b10e3405
+btr qword ptr fs:[rbx+rcx*4+8], 5: 40a64a50aeab9a7d
+btr qword ptr gs:[rbx+rcx*4+8], 5: 5531f4f7bb3ad6dd
+btr qword ptr [rbx+rcx*8+8], 5: 597fa239dae31db5
+btr qword ptr fs:[rbx+rcx*8+8], 5: b9fdf830a08ba79d
+btr qword ptr gs:[rbx+rcx*8+8], 5: 18672baff4cd539d
+btr qword ptr [rcx*1+0x8], 5: 9b23da8d3eaa6099
+btr qword ptr fs:[rcx*1+0x8], 5: 727ca8a49cd32c51
+btr qword ptr gs:[rcx*1+0x8], 5: 2e8ce7a3acce10d1
+btr qword ptr [rcx*2+0x8], 5: dd3fcc13d4fee7c9
+btr qword ptr fs:[rcx*2+0x8], 5: 272dff2683afb649
+btr qword ptr gs:[rcx*2+0x8], 5: 8773523adecb4689
+btr qword ptr [rcx*4+0x8], 5: 2dd4b8384ca3159
+btr qword ptr fs:[rcx*4+0x8], 5: e29209f6005f1671
+btr qword ptr gs:[rcx*4+0x8], 5: 2c17f301aa3dad51
+btr qword ptr [rcx*8+0x8], 5: 4f882eaf14d1499
+btr qword ptr fs:[rcx*8+0x8], 5: 818419303459dd5d
+btr qword ptr gs:[rcx*8+0x8], 5: 3a2ed615d8769669
+btr qword ptr [0x1800010], 5: 89848cb620ee6555
+btr qword ptr fs:[0x17ff010], 5: 89848cb620ee6555
+btr qword ptr gs:[0x17fe010], 5: 89848cb620ee6555
+btr qword ptr [rbx+8], 0: 9564ab93bbee35f8
+btr qword ptr [rbx+8], 1: 53fdddb44f1712b
+btr qword ptr [rbx+8], 7: a114170053bbf141
+btr qword ptr [rbx+8], 8: 3518be862b0ae962
+btr qword ptr [rbx+8], 15: 9ff56bd457d43e81
+btr qword ptr [rbx+8], 16: 1a3bf5e5ab1ab4e8
+btr qword ptr [rbx+8], 31: ebfaf9aaec98aab1
+btr qword ptr [rbx+8], 32: 6af1d1287847754
+btr qword ptr [rbx+8], 63: 3f5d4cb8ee619ae1
+btr qword ptr [rbx+8], 64: 9564ab93bbee35f8
+btr qword ptr [rbx+8], 255: 3f5d4cb8ee619ae1
+btr qword ptr [rbx+8], 9: 61e19081959d7b09
+btr qword ptr [rbx+8], 9: 3659d47b1495fde9
+btr qword ptr [rip+rcg_mem+16], 3: 1e1a8f16e2db186d
+mov edx, 5; btr qword ptr [rbx+8], rdx: 6cfb12c086ca173d
+cmp rax, rbx; btr rbx, rax: c03bf5422753a917
+add rax, rbx; btr rbx, rax: c5a0d3a952c08497
+test rax, rbx; btr rbx, rax: b0d28005b44288bf
+inc rax; btr rbx, rax: 603d06f7e80b74b6
+dec rax; btr rbx, rax: 8e8842ebc8e7e1a4
+shr rax, 3; btr rbx, rax: 179bdabf252cbcf7
+mov ah, 0xd5; sahf; btr rbx, rax: ce3befd35d3a4e31
+imul rax, rbx; btr rbx, rax; jle 1f; mov ecx, 1; 1:: e4f1159dc6ad5210
+shl rax, 3; btr rbx, rax; jle 1f; mov ecx, 1; 1:: ee4b14c07fb36bc5
+stc; adc rax, rbx; btr rbx, rax; jle 1f; mov ecx, 1; 1:: 1510f937fa88a483
+stc; sbb rax, rbx; btr rbx, rax; jle 1f; mov ecx, 1; 1:: 17cb8ede030dd8bc
+stc; sbb rax, rax; btr rbx, rax; jle 1f; mov ecx, 1; 1:: 7cef229abcb0e325
+cmp al, bl; btr rbx, 3; jo 1f; mov ecx, 1; 1:: 899053227ff1111f
+cmp al, bl; btr rbx, 3; jno 1f; mov ecx, 1; 1:: d5062e5899ab62ff
+cmp al, bl; btr rbx, 3; jb 1f; mov ecx, 1; 1:: 479097ecf8dd156b
+cmp al, bl; btr rbx, 3; jae 1f; mov ecx, 1; 1:: 1f51ba1226f4d79b
+cmp al, bl; btr rbx, 3; je 1f; mov ecx, 1; 1:: 3a1d609bbfe70717
+cmp al, bl; btr rbx, 3; jne 1f; mov ecx, 1; 1:: 2326b21eb5977ff
+cmp al, bl; btr rbx, 3; jbe 1f; mov ecx, 1; 1:: 35887f06caba71b9
+cmp al, bl; btr rbx, 3; ja 1f; mov ecx, 1; 1:: 3d46d4a1f65d6391
+cmp al, bl; btr rbx, 3; js 1f; mov ecx, 1; 1:: 2ca1e9c9134d78c3
+cmp al, bl; btr rbx, 3; jns 1f; mov ecx, 1; 1:: d35d1bf50f8dacb3
+cmp al, bl; btr rbx, 3; jp 1f; mov ecx, 1; 1:: 763eed2093e7d5b5
+cmp al, bl; btr rbx, 3; jnp 1f; mov ecx, 1; 1:: 6fa3dd6c88f1ad6d
+cmp al, bl; btr rbx, 3; jl 1f; mov ecx, 1; 1:: 133bf8813da9e53
+cmp al, bl; btr rbx, 3; jge 1f; mov ecx, 1; 1:: 333f51460b7754a3
+cmp al, bl; btr rbx, 3; jle 1f; mov ecx, 1; 1:: ce38c60562ab513d
+cmp al, bl; btr rbx, 3; jg 1f; mov ecx, 1; 1:: 710b933c2b3fe965
+cmp rax, rbx; btr rbx, 3; jo 1f; mov ecx, 1; 1:: 25f517edd249dfe9
+cmp rax, rbx; btr rbx, 3; jno 1f; mov ecx, 1; 1:: c07123c600c13bc1
+cmp rax, rbx; btr rbx, 3; jb 1f; mov ecx, 1; 1:: d394433df731399d
+cmp rax, rbx; btr rbx, 3; jae 1f; mov ecx, 1; 1:: 7325b740076e9f85
+cmp rax, rbx; btr rbx, 3; je 1f; mov ecx, 1; 1:: 9c5bd67324561075
+cmp rax, rbx; btr rbx, 3; jne 1f; mov ecx, 1; 1:: bd8b3b6e1ea1af2d
+cmp rax, rbx; btr rbx, 3; jbe 1f; mov ecx, 1; 1:: 68ca4dd6c03b258b
+cmp rax, rbx; btr rbx, 3; ja 1f; mov ecx, 1; 1:: 116e2a0117c71da3
+cmp rax, rbx; btr rbx, 3; js 1f; mov ecx, 1; 1:: 25f517edd249dfe9
+cmp rax, rbx; btr rbx, 3; jns 1f; mov ecx, 1; 1:: c07123c600c13bc1
+cmp rax, rbx; btr rbx, 3; jp 1f; mov ecx, 1; 1:: 990f3349824ce9c7
+cmp rax, rbx; btr rbx, 3; jnp 1f; mov ecx, 1; 1:: f4a69f91f68f6a9f
+cmp rax, rbx; btr rbx, 3; jl 1f; mov ecx, 1; 1:: 1732def78477fe1
+cmp rax, rbx; btr rbx, 3; jge 1f; mov ecx, 1; 1:: 3a948611102765b1
+cmp rax, rbx; btr rbx, 3; jle 1f; mov ecx, 1; 1:: 9c5bd67324561075
+cmp rax, rbx; btr rbx, 3; jg 1f; mov ecx, 1; 1:: bd8b3b6e1ea1af2d
+btc ax, bx: ba9bdc43641c5019
+btc cx, cx: 2ed60ab91cfcafe
+btc r8w, r15w: 746ec5d9fce6881
+btc ax, 0: f93453ec40ef6150
+btc ax, 1: b08de958e5557fc9
+btc ax, 7: 5f2bb1bf48e41bd1
+btc ax, 8: 53188cbf0c88cd79
+btc ax, 15: 83da3f91ba3a8931
+btc ax, 16: f93453ec40ef6150
+btc ax, 31: 83da3f91ba3a8931
+btc ax, 32: f93453ec40ef6150
+btc ax, 63: 83da3f91ba3a8931
+btc ax, 64: f93453ec40ef6150
+btc ax, 255: 83da3f91ba3a8931
+btc r9w, 0: 8e069e7e75ee6678
+btc r9w, 1: 8dd78a9b94bb0681
+btc r9w, 7: 3a8179fbcb854791
+btc r9w, 8: 6d2f1efaa9b76291
+btc r9w, 15: a26b1aface5eba31
+btc r9w, 16: 8e069e7e75ee6678
+btc r9w, 31: a26b1aface5eba31
+btc r9w, 32: 8e069e7e75ee6678
+btc r9w, 63: a26b1aface5eba31
+btc r9w, 64: 8e069e7e75ee6678
+btc r9w, 255: a26b1aface5eba31
+mov edx, 0; btc bx, dx: 7748dbbd0da8c8
+mov edx, 1; btc bx, dx: 38ca6b26be5f2e51
+mov edx, 7; btc bx, dx: 570477c9ccffc57d
+mov edx, 8; btc bx, dx: 1a848c83726b59
+mov edx, 15; btc bx, dx: 41a823adaf81d47d
+mov edx, 16; btc bx, dx: 6e6664d691776c48
+mov edx, 31; btc bx, dx: 8cc895a917a30c7d
+mov edx, 32; btc bx, dx: c1fb164923c16288
+mov edx, 63; btc bx, dx: 990c2be226ebf9bd
+mov edx, 64; btc bx, dx: 25672284dcfac48
+mov edx, 255; btc bx, dx: 487ec3a230a476bd
+btc word ptr [rbx+8], 5: 744f333edf650331
+btc word ptr fs:[rbx+8], 5: aaf52e62453cca59
+btc word ptr gs:[rbx+8], 5: aa8a4376ec983f99
+btc word ptr [rbx+rcx*1+8], 5: 16c9742e6db17e85
+btc word ptr fs:[rbx+rcx*1+8], 5: 310442a4ce5479b5
+btc word ptr gs:[rbx+rcx*1+8], 5: 33a6e579199830d5
+btc word ptr [rbx+rcx*2+8], 5: e1611f8d6e3cf2c5
+btc word ptr fs:[rbx+rcx*2+8], 5: 722fe9829c36ea9d
+btc word ptr gs:[rbx+rcx*2+8], 5: 179d1d1fd9a6747d
+btc word ptr [rbx+rcx*4+8], 5: 120bca41d330af65
+btc word ptr fs:[rbx+rcx*4+8], 5: 4fd34290d61bd89d
+btc word ptr gs:[rbx+rcx*4+8], 5: 64582ed82cdbbb3d
+btc word ptr [rbx+rcx*8+8], 5: 6e634d3d0aad715
+btc word ptr fs:[rbx+rcx*8+8], 5: f1edd79b37caaf3d
+btc word ptr gs:[rbx+rcx*8+8], 5: 4b6bc8038772147d
+btc word ptr [rcx*1+0x8], 5: ed6bff3e48204439
+btc word ptr fs:[rcx*1+0x8], 5: 7b5b56c5f3facef1
+btc word ptr gs:[rcx*1+0x8], 5: d140c9bc5c06ff71
+btc word ptr [rcx*2+0x8], 5: 6dc87c7ab49a7fe9
+btc word ptr fs:[rcx*2+0x8], 5: 17cf7a8693f3a29
+btc word ptr gs:[rcx*2+0x8], 5: 54f8135c63a4529
+btc word ptr [rcx*4+0x8], 5: 35b2ba75fb926879
+btc word ptr fs:[rcx*4+0x8], 5: bf844aff189aef91
+btc word ptr gs:[rcx*4+0x8], 5: 66b8552524f516f1
+btc word ptr [rcx*8+0x8], 5: ebba8f849e93fdf9
+btc word ptr fs:[rcx*8+0x8], 5: 82c5314a47365ebd
+btc word ptr gs:[rcx*8+0x8], 5: 6e3dbcf64e6f7fc9
+btc word ptr [0x1800010], 5: abc71f765f787935
+btc word ptr fs:[0x17ff010], 5: abc71f765f787935
+btc word ptr gs:[0x17fe010], 5: abc71f765f787935
+btc word ptr [rbx+8], 0: 3ed972c6f0b090a0
+btc word ptr [rbx+8], 1: 1f0147998c532e11
+btc word ptr [rbx+8], 7: 679b9bc7456b4c1
+btc word ptr [rbx+8], 8: a00fe2f560b570b5
+btc word ptr [rbx+8], 15: c0c70e39b35dcb01
+btc word ptr [rbx+8], 16: 3ed972c6f0b090a0
+btc word ptr [rbx+8], 31: c0c70e39b35dcb01
+btc word ptr [rbx+8], 32: 3ed972c6f0b090a0
+btc word ptr [rbx+8], 63: c0c70e39b35dcb01
+btc word ptr [rbx+8], 64: 3ed972c6f0b090a0
+btc word ptr [rbx+8], 255: c0c70e39b35dcb01
+btc word ptr [rbx+8], 9: aa3ec446082aa1b
+btc word ptr [rbx+8], 9: fd3838f091d8058f
+btc word ptr [rip+rcg_mem+16], 3: f7f96d191e86f725
+mov edx, 5; btc word ptr [rbx+8], dx: c7172ff0bed95edd
+cmp ax, bx; btc bx, ax: 5653d9222bb58bb9
+add ax, bx; btc bx, ax: 98ae81f518ca70c2
+test ax, bx; btc bx, ax: 8aabe837603c629d
+inc ax; btc bx, ax: d788f2431cdf7f42
+dec ax; btc bx, ax: 6d16b502c7514f1a
+shr ax, 3; btc bx, ax: ecd17c48006da675
+mov ah, 0xd5; sahf; btc bx, ax: cf18d7a64c223e8d
+imul ax, bx; btc bx, ax; jle 1f; mov ecx, 1; 1:: da0e6606ceaca4bd
+shl ax, 3; btc bx, ax; jle 1f; mov ecx, 1; 1:: 588797783561f781
+stc; adc ax, bx; btc bx, ax; jle 1f; mov ecx, 1; 1:: aca797a77f109c63
+stc; sbb ax, bx; btc bx, ax; jle 1f; mov ecx, 1; 1:: fab2d0d7d892a4d3
+stc; sbb ax, ax; btc bx, ax; jle 1f; mov ecx, 1; 1:: 44e14837e6756995
+cmp al, bl; btc bx, 3; jo 1f; mov ecx, 1; 1:: 5c4315073ff091ff
+cmp al, bl; btc bx, 3; jno 1f; mov ecx, 1; 1:: b385e9ad7382993f
+cmp al, bl; btc bx, 3; jb 1f; mov ecx, 1; 1:: b51eab85ac7a89db
+cmp al, bl; btc bx, 3; jae 1f; mov ecx, 1; 1:: caa652b65d98cd4b
+cmp al, bl; btc bx, 3; je 1f; mov ecx, 1; 1:: 8397a0103e5928e7
+cmp al, bl; btc bx, 3; jne 1f; mov ecx, 1; 1:: ab3b51ef64fb02f
+cmp al, bl; btc bx, 3; jbe 1f; mov ecx, 1; 1:: 34f7c841977834c9
+cmp al, bl; btc bx, 3; ja 1f; mov ecx, 1; 1:: aa23eb900da57291
+cmp al, bl; btc bx, 3; js 1f; mov ecx, 1; 1:: e8e2af1551200f73
+cmp al, bl; btc bx, 3; jns 1f; mov ecx, 1; 1:: 45c8674f4da21793
+cmp al, bl; btc bx, 3; jp 1f; mov ecx, 1; 1:: c5344eaad9fdf855
+cmp al, bl; btc bx, 3; jnp 1f; mov ecx, 1; 1:: fbd0cf586ad57ebd
+cmp al, bl; btc bx, 3; jl 1f; mov ecx, 1; 1:: 817d2207491ed623
+cmp al, bl; btc bx, 3; jge 1f; mov ecx, 1; 1:: ec7f27ba4f4c8563
+cmp al, bl; btc bx, 3; jle 1f; mov ecx, 1; 1:: f955694dc11c116d
+cmp al, bl; btc bx, 3; jg 1f; mov ecx, 1; 1:: 447e3936b44b58e5
+cmp ax, bx; btc bx, 3; jo 1f; mov ecx, 1; 1:: ddabe454117c61c1
+cmp ax, bx; btc bx, 3; jno 1f; mov ecx, 1; 1:: 8be5a006bcb81851
+cmp ax, bx; btc bx, 3; jb 1f; mov ecx, 1; 1:: ceebd52bf99b6833
+cmp ax, bx; btc bx, 3; jae 1f; mov ecx, 1; 1:: 6da65d553cc24f83
+cmp ax, bx; btc bx, 3; je 1f; mov ecx, 1; 1:: 65f5b142531a2d2f
+cmp ax, bx; btc bx, 3; jne 1f; mov ecx, 1; 1:: a1d25430745b407f
+cmp ax, bx; btc bx, 3; jbe 1f; mov ecx, 1; 1:: c5a9c6ca5594e75
+cmp ax, bx; btc bx, 3; ja 1f; mov ecx, 1; 1:: cb0ef0e2ca29eca5
+cmp ax, bx; btc bx, 3; js 1f; mov ecx, 1; 1:: 4c6e4187b29b9089
+cmp ax, bx; btc bx, 3; jns 1f; mov ecx, 1; 1:: 2e39c8db5c3efa91
+cmp ax, bx; btc bx, 3; jp 1f; mov ecx, 1; 1:: 6d3324299aaec471
+cmp ax, bx; btc bx, 3; jnp 1f; mov ecx, 1; 1:: 5bdcfb05d589a3e9
+cmp ax, bx; btc bx, 3; jl 1f; mov ecx, 1; 1:: 41dcd022f337ca27
+cmp ax, bx; btc bx, 3; jge 1f; mov ecx, 1; 1:: 7b6222dc4523ceaf
+cmp ax, bx; btc bx, 3; jle 1f; mov ecx, 1; 1:: ebd09eb440562c1
+cmp ax, bx; btc bx, 3; jg 1f; mov ecx, 1; 1:: 502287b40fe6d379
+btc eax, ebx: ee5dc3d20738ec24
+btc ecx, ecx: 8a7d98df3aee1d66
+btc r8d, r15d: 8d7995ffa0ad8a0c
+btc eax, 0: cb05f3a3a1bf0680
+btc eax, 1: 4f4e97db901b4731
+btc eax, 7: 6b525e3011add761
+btc eax, 8: a568bfb6bdac7651
+btc eax, 15: 8aa76fee1f6edf61
+btc eax, 16: 17e4130d7995c901
+btc eax, 31: f725d6dfb63fe371
+btc eax, 32: cb05f3a3a1bf0680
+btc eax, 63: f725d6dfb63fe371
+btc eax, 64: cb05f3a3a1bf0680
+btc eax, 255: f725d6dfb63fe371
+btc r9d, 0: 2e0366a82b87e300
+btc r9d, 1: 46a3aa9fecac9ee9
+btc r9d, 7: 8d6597049574f1a9
+btc r9d, 8: 5fff001672fe7a09
+btc r9d, 15: 35122af300d73349
+btc r9d, 16: 2fb21771e10c3bf1
+btc r9d, 31: 313cd38a247b8df9
+btc r9d, 32: 2e0366a82b87e300
+btc r9d, 63: 313cd38a247b8df9
+btc r9d, 64: 2e0366a82b87e300
+btc r9d, 255: 313cd38a247b8df9
+mov edx, 0; btc ebx, edx: 3f6637ef16af018
+mov edx, 1; btc ebx, edx: 6e5b7658e1f82c81
+mov edx, 7; btc ebx, edx: 6a378568cc69c02d
+mov edx, 8; btc ebx, edx: 8e60bbd57f7d0a69
+mov edx, 15; btc ebx, edx: 119d2b1b815d708d
+mov edx, 16; btc ebx, edx: 12d2fb3694083c89
+mov edx, 31; btc ebx, edx: 39b339f56586ec55
+mov edx, 32; btc ebx, edx: af1ced97060adbd8
+mov edx, 63; btc ebx, edx: e7bb9d366f9ac755
+mov edx, 64; btc ebx, edx: cd08b99849fe3d18
+mov edx, 255; btc ebx, edx: 720a9b664de2b6d5
+btc dword ptr [rbx+8], 5: 744f333edf650331
+btc dword ptr fs:[rbx+8], 5: aaf52e62453cca59
+btc dword ptr gs:[rbx+8], 5: aa8a4376ec983f99
+btc dword ptr [rbx+rcx*1+8], 5: 16c9742e6db17e85
+btc dword ptr fs:[rbx+rcx*1+8], 5: 310442a4ce5479b5
+btc dword ptr gs:[rbx+rcx*1+8], 5: 33a6e579199830d5
+btc dword ptr [rbx+rcx*2+8], 5: e1611f8d6e3cf2c5
+btc dword ptr fs:[rbx+rcx*2+8], 5: 722fe9829c36ea9d
+btc dword ptr gs:[rbx+rcx*2+8], 5: 179d1d1fd9a6747d
+btc dword ptr [rbx+rcx*4+8], 5: 120bca41d330af65
+btc dword ptr fs:[rbx+rcx*4+8], 5: 4fd34290d61bd89d
+btc dword ptr gs:[rbx+rcx*4+8], 5: 64582ed82cdbbb3d
+btc dword ptr [rbx+rcx*8+8], 5: 6e634d3d0aad715
+btc dword ptr fs:[rbx+rcx*8+8], 5: f1edd79b37caaf3d
+btc dword ptr gs:[rbx+rcx*8+8], 5: 4b6bc8038772147d
+btc dword ptr [rcx*1+0x8], 5: ed6bff3e48204439
+btc dword ptr fs:[rcx*1+0x8], 5: 7b5b56c5f3facef1
+btc dword ptr gs:[rcx*1+0x8], 5: d140c9bc5c06ff71
+btc dword ptr [rcx*2+0x8], 5: 6dc87c7ab49a7fe9
+btc dword ptr fs:[rcx*2+0x8], 5: 17cf7a8693f3a29
+btc dword ptr gs:[rcx*2+0x8], 5: 54f8135c63a4529
+btc dword ptr [rcx*4+0x8], 5: 35b2ba75fb926879
+btc dword ptr fs:[rcx*4+0x8], 5: bf844aff189aef91
+btc dword ptr gs:[rcx*4+0x8], 5: 66b8552524f516f1
+btc dword ptr [rcx*8+0x8], 5: ebba8f849e93fdf9
+btc dword ptr fs:[rcx*8+0x8], 5: 82c5314a47365ebd
+btc dword ptr gs:[rcx*8+0x8], 5: 6e3dbcf64e6f7fc9
+btc dword ptr [0x1800010], 5: abc71f765f787935
+btc dword ptr fs:[0x17ff010], 5: abc71f765f787935
+btc dword ptr gs:[0x17fe010], 5: abc71f765f787935
+btc dword ptr [rbx+8], 0: 3ed972c6f0b090a0
+btc dword ptr [rbx+8], 1: 1f0147998c532e11
+btc dword ptr [rbx+8], 7: 679b9bc7456b4c1
+btc dword ptr [rbx+8], 8: a00fe2f560b570b5
+btc dword ptr [rbx+8], 15: c0c70e39b35dcb01
+btc dword ptr [rbx+8], 16: c43c89aab577c361
+btc dword ptr [rbx+8], 31: fa81284c291c6331
+btc dword ptr [rbx+8], 32: 3ed972c6f0b090a0
+btc dword ptr [rbx+8], 63: fa81284c291c6331
+btc dword ptr [rbx+8], 64: 3ed972c6f0b090a0
+btc dword ptr [rbx+8], 255: fa81284c291c6331
+btc dword ptr [rbx+8], 9: aa3ec446082aa1b
+btc dword ptr [rbx+8], 9: fd3838f091d8058f
+btc dword ptr [rip+rcg_mem+16], 3: f7f96d191e86f725
+mov edx, 5; btc dword ptr [rbx+8], edx: c7172ff0bed95edd
+cmp eax, ebx; btc ebx, eax: 65bd538df7c3bf4
+add eax, ebx; btc ebx, eax: 56d70bbdd61446ce
+test eax, ebx; btc ebx, eax: bc43dccc7549ed9a
+inc eax; btc ebx, eax: a4c361852ad6a027
+dec eax; btc ebx, eax: 1fcce1756678c27a
+shr eax, 3; btc ebx, eax: 3ff950e0cf4dbc32
+mov ah, 0xd5; sahf; btc ebx, eax: 2194fb56c324b97e
+imul eax, ebx; btc ebx, eax; jle 1f; mov ecx, 1; 1:: 93bcb7b6f87e613d
+shl eax, 3; btc ebx, eax; jle 1f; mov ecx, 1; 1:: 37699bc41d48dda1
+stc; adc eax, ebx; btc ebx, eax; jle 1f; mov ecx, 1; 1:: b3f39978ef76b0da
+stc; sbb eax, ebx; btc ebx, eax; jle 1f; mov ecx, 1; 1:: 3f394d0a5b56d7f4
+stc; sbb eax, eax; btc ebx, eax; jle 1f; mov ecx, 1; 1:: 69793b5b4651d9e5
+cmp al, bl; btc ebx, 3; jo 1f; mov ecx, 1; 1:: 26ddc202ccbf127
+cmp al, bl; btc ebx, 3; jno 1f; mov ecx, 1; 1:: 6050f5212e482e0f
+cmp al, bl; btc ebx, 3; jb 1f; mov ecx, 1; 1:: 990388da041de6db
+cmp al, bl; btc ebx, 3; jae 1f; mov ecx, 1; 1:: cf6f44f9277b9183
+cmp al, bl; btc ebx, 3; je 1f; mov ecx, 1; 1:: 9d895cc4d29244af
+cmp al, bl; btc ebx, 3; jne 1f; mov ecx, 1; 1:: 320ce1ed20b8235f
+cmp al, bl; btc ebx, 3; jbe 1f; mov ecx, 1; 1:: 9f88e6a81cfc9921
+cmp al, bl; btc ebx, 3; ja 1f; mov ecx, 1; 1:: 91fca609f8da2801
+cmp al, bl; btc ebx, 3; js 1f; mov ecx, 1; 1:: 13be453248c69aab
+cmp al, bl; btc ebx, 3; jns 1f; mov ecx, 1; 1:: b1be15dc0c3037f3
+cmp al, bl; btc ebx, 3; jp 1f; mov ecx, 1; 1:: 18e12e0e07e7d88d
+cmp al, bl; btc ebx, 3; jnp 1f; mov ecx, 1; 1:: 896fafd25ba3ff9d
+cmp al, bl; btc ebx, 3; jl 1f; mov ecx, 1; 1:: e23aee7c85304973
+cmp al, bl; btc ebx, 3; jge 1f; mov ecx, 1; 1:: 920e565624ba695b
+cmp al, bl; btc ebx, 3; jle 1f; mov ecx, 1; 1:: c801a900a1aa4b6d
+cmp al, bl; btc ebx, 3; jg 1f; mov ecx, 1; 1:: 1c4277a16d6aaaed
+cmp eax, ebx; btc ebx, 3; jo 1f; mov ecx, 1; 1:: 40d4a09057395e35
+cmp eax, ebx; btc ebx, 3; jno 1f; mov ecx, 1; 1:: 4764a28a27d02241
+cmp eax, ebx; btc ebx, 3; jb 1f; mov ecx, 1; 1:: bf1c697454a25d07
+cmp eax, ebx; btc ebx, 3; jae 1f; mov ecx, 1; 1:: 687fefe9f45e5723
+cmp eax, ebx; btc ebx, 3; je 1f; mov ecx, 1; 1:: f3a9240e6dbe7603
+cmp eax, ebx; btc ebx, 3; jne 1f; mov ecx, 1; 1:: 9bc4d0d777c4dedf
+cmp eax, ebx; btc ebx, 3; jbe 1f; mov ecx, 1; 1:: 27395dc1a7dd8f69
+cmp eax, ebx; btc ebx, 3; ja 1f; mov ecx, 1; 1:: 5dcf4491c3aec8d
+cmp eax, ebx; btc ebx, 3; js 1f; mov ecx, 1; 1:: a655470819252add
+cmp eax, ebx; btc ebx, 3; jns 1f; mov ecx, 1; 1:: 9c931ee1eb3aeec1
+cmp eax, ebx; btc ebx, 3; jp 1f; mov ecx, 1; 1:: affb4f466a0fe29
+cmp eax, ebx; btc ebx, 3; jnp 1f; mov ecx, 1; 1:: d887888a479d0125
+cmp eax, ebx; btc ebx, 3; jl 1f; mov ecx, 1; 1:: 6277da3e9cbd466f
+cmp eax, ebx; btc ebx, 3; jge 1f; mov ecx, 1; 1:: 93397a7443fa549b
+cmp eax, ebx; btc ebx, 3; jle 1f; mov ecx, 1; 1:: b4d2133d683ea4a1
+cmp eax, ebx; btc ebx, 3; jg 1f; mov ecx, 1; 1:: db7f285320088ad
+btc rax, rbx: 6eb6e6891c9e13ec
+btc rcx, rcx: a70630c1c0c8bfb7
+btc r8, r15: 3cc51c38f80bee1c
+btc rax, 0: f93453ec40ef6150
+btc rax, 1: b08de958e5557fc9
+btc rax, 7: 5f2bb1bf48e41bd1
+btc rax, 8: 53188cbf0c88cd79
+btc rax, 15: 83da3f91ba3a8931
+btc rax, 16: 52fc51ebeef2eca9
+btc rax, 31: bd2bf9743eb1f921
+btc rax, 32: d3f448bdaf517441
+btc rax, 63: b853dd3c3d477a69
+btc rax, 64: f93453ec40ef6150
+btc rax, 255: b853dd3c3d477a69
+btc r9, 0: 8e069e7e75ee6678
+btc r9, 1: 8dd78a9b94bb0681
+btc r9, 7: 3a8179fbcb854791
+btc r9, 8: 6d2f1efaa9b76291
+btc r9, 15: a26b1aface5eba31
+btc r9, 16: b0efe74710c89441
+btc r9, 31: eb4760ee63e1e101
+btc r9, 32: aee2f7e8e1a10489
+btc r9, 63: 67de4345643fedd1
+btc r9, 64: 8e069e7e75ee6678
+btc r9, 255: 67de4345643fedd1
+mov edx, 0; btc rbx, rdx: 7748dbbd0da8c8
+mov edx, 1; btc rbx, rdx: 38ca6b26be5f2e51
+mov edx, 7; btc rbx, rdx: 570477c9ccffc57d
+mov edx, 8; btc rbx, rdx: 1a848c83726b59
+mov edx, 15; btc rbx, rdx: 41a823adaf81d47d
+mov edx, 16; btc rbx, rdx: b21d3b1fd5424359
+mov edx, 31; btc rbx, rdx: 7e055d8c394cbbe5
+mov edx, 32; btc rbx, rdx: f8bb81c72a116719
+mov edx, 63; btc rbx, rdx: 608faea326205341
+mov edx, 64; btc rbx, rdx: 25672284dcfac48
+mov edx, 255; btc rbx, rdx: 9333a7f8af563e41
+btc qword ptr [rbx+8], 5: 744f333edf650331
+btc qword ptr fs:[rbx+8], 5: aaf52e62453cca59
+btc qword ptr gs:[rbx+8], 5: aa8a4376ec983f99
+btc qword ptr [rbx+rcx*1+8], 5: 16c9742e6db17e85
+btc qword ptr fs:[rbx+rcx*1+8], 5: 310442a4ce5479b5
+btc qword ptr gs:[rbx+rcx*1+8], 5: 33a6e579199830d5
+btc qword ptr [rbx+rcx*2+8], 5: e1611f8d6e3cf2c5
+btc qword ptr fs:[rbx+rcx*2+8], 5: 722fe9829c36ea9d
+btc qword ptr gs:[rbx+rcx*2+8], 5: 179d1d1fd9a6747d
+btc qword ptr [rbx+rcx*4+8], 5: 120bca41d330af65
+btc qword ptr fs:[rbx+rcx*4+8], 5: 4fd34290d61bd89d
+btc qword ptr gs:[rbx+rcx*4+8], 5: 64582ed82cdbbb3d
+btc qword ptr [rbx+rcx*8+8], 5: 6e634d3d0aad715
+btc qword ptr fs:[rbx+rcx*8+8], 5: f1edd79b37caaf3d
+btc qword ptr gs:[rbx+rcx*8+8], 5: 4b6bc8038772147d
+btc qword ptr [rcx*1+0x8], 5: ed6bff3e48204439
+btc qword ptr fs:[rcx*1+0x8], 5: 7b5b56c5f3facef1
+btc qword ptr gs:[rcx*1+0x8], 5: d140c9bc5c06ff71
+btc qword ptr [rcx*2+0x8], 5: 6dc87c7ab49a7fe9
+btc qword ptr fs:[rcx*2+0x8], 5: 17cf7a8693f3a29
+btc qword ptr gs:[rcx*2+0x8], 5: 54f8135c63a4529
+btc qword ptr [rcx*4+0x8], 5: 35b2ba75fb926879
+btc qword ptr fs:[rcx*4+0x8], 5: bf844aff189aef91
+btc qword ptr gs:[rcx*4+0x8], 5: 66b8552524f516f1
+btc qword ptr [rcx*8+0x8], 5: ebba8f849e93fdf9
+btc qword ptr fs:[rcx*8+0x8], 5: 82c5314a47365ebd
+btc qword ptr gs:[rcx*8+0x8], 5: 6e3dbcf64e6f7fc9
+btc qword ptr [0x1800010], 5: abc71f765f787935
+btc qword ptr fs:[0x17ff010], 5: abc71f765f787935
+btc qword ptr gs:[0x17fe010], 5: abc71f765f787935
+btc qword ptr [rbx+8], 0: 3f32d58fca4901d8
+btc qword ptr [rbx+8], 1: 1f0147998c532e11
+btc qword ptr [rbx+8], 7: 679b9bc7456b4c1
+btc qword ptr [rbx+8], 8: a00fe2f560b570b5
+btc qword ptr [rbx+8], 15: c0c70e39b35dcb01
+btc qword ptr [rbx+8], 16: c43c89aab577c361
+btc qword ptr [rbx+8], 31: fa81284c291c6331
+btc qword ptr [rbx+8], 32: 60b124c0299b6999
+btc qword ptr [rbx+8], 63: 1c93ab807110bc61
+btc qword ptr [rbx+8], 64: 3f32d58fca4901d8
+btc qword ptr [rbx+8], 255: 1c93ab807110bc61
+btc qword ptr [rbx+8], 9: aa3ec446082aa1b
+btc qword ptr [rbx+8], 9: fd3838f091d8058f
+btc qword ptr [rip+rcg_mem+16], 3: f7f96d191e86f725
+mov edx, 5; btc qword ptr [rbx+8], rdx: c7172ff0bed95edd
+cmp rax, rbx; btc rbx, rax: 8946918f060ac058
+add rax, rbx; btc rbx, rax: 7c0c6965f8e38596
+test rax, rbx; btc rbx, rax: ff8a307b04170a44
+inc rax; btc rbx, rax: ee64f9d8c840ffeb
+dec rax; btc rbx, rax: 73c04871487658f8
+shr rax, 3; btc rbx, rax: 1dc7b11b7b05cc4a
+mov ah, 0xd5; sahf; btc rbx, rax: 4687b375421913d6
+imul rax, rbx; btc rbx, rax; jle 1f; mov ecx, 1; 1:: 317f058d361f7d33
+shl rax, 3; btc rbx, rax; jle 1f; mov ecx, 1; 1:: a94091d0e2e6e8e1
+stc; adc rax, rbx; btc rbx, rax; jle 1f; mov ecx, 1; 1:: 25aa82324890565
+stc; sbb rax, rbx; btc rbx, rax; jle 1f; mov ecx, 1; 1:: 1020b655a5df1840
+stc; sbb rax, rax; btc rbx, rax; jle 1f; mov ecx, 1; 1:: 36a9dd032058d325
+cmp al, bl; btc rbx, 3; jo 1f; mov ecx, 1; 1:: 5c4315073ff091ff
+cmp al, bl; btc rbx, 3; jno 1f; mov ecx, 1; 1:: b385e9ad7382993f
+cmp al, bl; btc rbx, 3; jb 1f; mov ecx, 1; 1:: b51eab85ac7a89db
+cmp al, bl; btc rbx, 3; jae 1f; mov ecx, 1; 1:: caa652b65d98cd4b
+cmp al, bl; btc rbx, 3; je 1f; mov ecx, 1; 1:: 8397a0103e5928e7
+cmp al, bl; btc rbx, 3; jne 1f; mov ecx, 1; 1:: ab3b51ef64fb02f
+cmp al, bl; btc rbx, 3; jbe 1f; mov ecx, 1; 1:: 34f7c841977834c9
+cmp al, bl; btc rbx, 3; ja 1f; mov ecx, 1; 1:: aa23eb900da57291
+cmp al, bl; btc rbx, 3; js 1f; mov ecx, 1; 1:: e8e2af1551200f73
+cmp al, bl; btc rbx, 3; jns 1f; mov ecx, 1; 1:: 45c8674f4da21793
+cmp al, bl; btc rbx, 3; jp 1f; mov ecx, 1; 1:: c5344eaad9fdf855
+cmp al, bl; btc rbx, 3; jnp 1f; mov ecx, 1; 1:: fbd0cf586ad57ebd
+cmp al, bl; btc rbx, 3; jl 1f; mov ecx, 1; 1:: 817d2207491ed623
+cmp al, bl; btc rbx, 3; jge 1f; mov ecx, 1; 1:: ec7f27ba4f4c8563
+cmp al, bl; btc rbx, 3; jle 1f; mov ecx, 1; 1:: f955694dc11c116d
+cmp al, bl; btc rbx, 3; jg 1f; mov ecx, 1; 1:: 447e3936b44b58e5
+cmp rax, rbx; btc rbx, 3; jo 1f; mov ecx, 1; 1:: 2f9bbd6a2c6a8819
+cmp rax, rbx; btc rbx, 3; jno 1f; mov ecx, 1; 1:: e7933bdafcb6f3f1
+cmp rax, rbx; btc rbx, 3; jb 1f; mov ecx, 1; 1:: ac595a522b92bc3d
+cmp rax, rbx; btc rbx, 3; jae 1f; mov ecx, 1; 1:: 5379ef5952e57015
+cmp rax, rbx; btc rbx, 3; je 1f; mov ecx, 1; 1:: dc7a242047e65f45
+cmp rax, rbx; btc rbx, 3; jne 1f; mov ecx, 1; 1:: 82bedfe73d59e80d
+cmp rax, rbx; btc rbx, 3; jbe 1f; mov ecx, 1; 1:: 895f7df947ac07cb
+cmp rax, rbx; btc rbx, 3; ja 1f; mov ecx, 1; 1:: 6b5bf30ad5fc89b3
+cmp rax, rbx; btc rbx, 3; js 1f; mov ecx, 1; 1:: 2f9bbd6a2c6a8819
+cmp rax, rbx; btc rbx, 3; jns 1f; mov ecx, 1; 1:: e7933bdafcb6f3f1
+cmp rax, rbx; btc rbx, 3; jp 1f; mov ecx, 1; 1:: 98614f8f9df13447
+cmp rax, rbx; btc rbx, 3; jnp 1f; mov ecx, 1; 1:: 29c95fe8fd92383f
+cmp rax, rbx; btc rbx, 3; jl 1f; mov ecx, 1; 1:: f2ad70121a156ae1
+cmp rax, rbx; btc rbx, 3; jge 1f; mov ecx, 1; 1:: eef45db013a3b881
+cmp rax, rbx; btc rbx, 3; jle 1f; mov ecx, 1; 1:: dc7a242047e65f45
+cmp rax, rbx; btc rbx, 3; jg 1f; mov ecx, 1; 1:: 82bedfe73d59e80d
 cmp al, bl; jo 1f; mov ecx, 1; 1:: 8bf6fb4cf2bcad6e
 cmp al, bl; seto cl: 1d143dd354a95689
 cmp al, bl; cmovo cx, dx: fef8a12223b69bf6
@@ -7965,6 +9481,166 @@ dec al; setg cl: 83b1bcf5e47be365
 dec al; cmovg cx, dx: e4c7580983a5e31d
 dec al; cmovg ecx, edx: 78a01cd3c7513de5
 dec al; cmovg rcx, rdx: 3060301e347bc5b5
+shr al, 3; jo 1f; mov ecx, 1; 1:: 88b2f4f0023e266d
+shr al, 3; seto cl: 454b6d98df54ad65
+shr al, 3; cmovo cx, dx: ab00cf01288e85
+shr al, 3; cmovo ecx, edx: 6407fd55fc9e1615
+shr al, 3; cmovo rcx, rdx: ab00cf01288e85
+shr al, 3; jno 1f; mov ecx, 1; 1:: ab00cf01288e85
+shr al, 3; setno cl: 1a7eeca32ac9f7a5
+shr al, 3; cmovno cx, dx: 8636008f03009bfd
+shr al, 3; cmovno ecx, edx: d2a23d9f5404ac75
+shr al, 3; cmovno rcx, rdx: f33ec387efd99525
+shr al, 3; jb 1f; mov ecx, 1; 1:: 6ff73545b841e98d
+shr al, 3; setb cl: cf4f806e79156ced
+shr al, 3; cmovb cx, dx: 522b32210359e27d
+shr al, 3; cmovb ecx, edx: c12524d740277295
+shr al, 3; cmovb rcx, rdx: af72ffdfb0379e75
+shr al, 3; jae 1f; mov ecx, 1; 1:: 70e20801b9fb8345
+shr al, 3; setae cl: 34d4232b5ef2cc9d
+shr al, 3; cmovae cx, dx: 50ab889da535a085
+shr al, 3; cmovae ecx, edx: de8a1e105ce68335
+shr al, 3; cmovae rcx, rdx: a7c97c080a6b1675
+shr al, 3; je 1f; mov ecx, 1; 1:: 36467bb7c8d9d865
+shr al, 3; sete cl: 15e99c55d40a3cad
+shr al, 3; cmove cx, dx: 76a599c6d18b258d
+shr al, 3; cmove ecx, edx: f4ce1717019e5485
+shr al, 3; cmove rcx, rdx: 5bb2d66852391325
+shr al, 3; jne 1f; mov ecx, 1; 1:: 6cb2565857f886cd
+shr al, 3; setne cl: 1511408153a09fd
+shr al, 3; cmovne cx, dx: f63b0f614969495
+shr al, 3; cmovne ecx, edx: c4b4fcc01e2c3605
+shr al, 3; cmovne rcx, rdx: a93adc70676ab8c5
+shr al, 3; jbe 1f; mov ecx, 1; 1:: 54ee640819e33dc5
+shr al, 3; setbe cl: 7b1738e8d56983f5
+shr al, 3; cmovbe cx, dx: d4c495490cacfea5
+shr al, 3; cmovbe ecx, edx: 4526ee15d8eee685
+shr al, 3; cmovbe rcx, rdx: 6811f4a00cb91255
+shr al, 3; ja 1f; mov ecx, 1; 1:: 21e0b416f93bfecd
+shr al, 3; seta cl: 89e54ac8c71cf3b5
+shr al, 3; cmova cx, dx: 45184b6ef529697d
+shr al, 3; cmova ecx, edx: b228d774cdac85c5
+shr al, 3; cmova rcx, rdx: 1913b0ab04d35d55
+shr al, 3; js 1f; mov ecx, 1; 1:: 88b2f4f0023e266d
+shr al, 3; sets cl: 454b6d98df54ad65
+shr al, 3; cmovs cx, dx: ab00cf01288e85
+shr al, 3; cmovs ecx, edx: 6407fd55fc9e1615
+shr al, 3; cmovs rcx, rdx: ab00cf01288e85
+shr al, 3; jns 1f; mov ecx, 1; 1:: ab00cf01288e85
+shr al, 3; setns cl: 1a7eeca32ac9f7a5
+shr al, 3; cmovns cx, dx: 8636008f03009bfd
+shr al, 3; cmovns ecx, edx: d2a23d9f5404ac75
+shr al, 3; cmovns rcx, rdx: f33ec387efd99525
+shr al, 3; jp 1f; mov ecx, 1; 1:: 9d3dc10c0aa38fdd
+shr al, 3; setp cl: d0ade40248c6588d
+shr al, 3; cmovp cx, dx: a141adbb0caa1f75
+shr al, 3; cmovp ecx, edx: d8bd5690797c6445
+shr al, 3; cmovp rcx, rdx: be1ef1681a3efaf5
+shr al, 3; jnp 1f; mov ecx, 1; 1:: 4c5b4df9345d3375
+shr al, 3; setnp cl: 9799b11ff6cad07d
+shr al, 3; cmovnp cx, dx: 640b714171fc5c4d
+shr al, 3; cmovnp ecx, edx: fc0c5cbe9941bb05
+shr al, 3; cmovnp rcx, rdx: b138662ddca37c75
+shr al, 3; jl 1f; mov ecx, 1; 1:: 88b2f4f0023e266d
+shr al, 3; setl cl: 454b6d98df54ad65
+shr al, 3; cmovl cx, dx: ab00cf01288e85
+shr al, 3; cmovl ecx, edx: 6407fd55fc9e1615
+shr al, 3; cmovl rcx, rdx: ab00cf01288e85
+shr al, 3; jge 1f; mov ecx, 1; 1:: ab00cf01288e85
+shr al, 3; setge cl: 1a7eeca32ac9f7a5
+shr al, 3; cmovge cx, dx: 8636008f03009bfd
+shr al, 3; cmovge ecx, edx: d2a23d9f5404ac75
+shr al, 3; cmovge rcx, rdx: f33ec387efd99525
+shr al, 3; jle 1f; mov ecx, 1; 1:: 36467bb7c8d9d865
+shr al, 3; setle cl: 15e99c55d40a3cad
+shr al, 3; cmovle cx, dx: 76a599c6d18b258d
+shr al, 3; cmovle ecx, edx: f4ce1717019e5485
+shr al, 3; cmovle rcx, rdx: 5bb2d66852391325
+shr al, 3; jg 1f; mov ecx, 1; 1:: 6cb2565857f886cd
+shr al, 3; setg cl: 1511408153a09fd
+shr al, 3; cmovg cx, dx: f63b0f614969495
+shr al, 3; cmovg ecx, edx: c4b4fcc01e2c3605
+shr al, 3; cmovg rcx, rdx: a93adc70676ab8c5
+sar al, 1; jo 1f; mov ecx, 1; 1:: 3dd6d67f80abbe41
+sar al, 1; seto cl: c87d4129f07293d9
+sar al, 1; cmovo cx, dx: 5f17b4f09f577219
+sar al, 1; cmovo ecx, edx: 5dd8934bd7764899
+sar al, 1; cmovo rcx, rdx: 5f17b4f09f577219
+sar al, 1; jno 1f; mov ecx, 1; 1:: 5f17b4f09f577219
+sar al, 1; setno cl: f1bea44bc36793b1
+sar al, 1; cmovno cx, dx: 428978a0c69b5f39
+sar al, 1; cmovno ecx, edx: 7a2c35d0b18be5a9
+sar al, 1; cmovno rcx, rdx: e41ac8e47c1236b9
+sar al, 1; jb 1f; mov ecx, 1; 1:: 4f5fc243dc139909
+sar al, 1; setb cl: 3efff92defc22ed1
+sar al, 1; cmovb cx, dx: 3f974b18e923679
+sar al, 1; cmovb ecx, edx: 2b6d4fcd2bfd4029
+sar al, 1; cmovb rcx, rdx: 555adc6348a810e9
+sar al, 1; jae 1f; mov ecx, 1; 1:: 2ac48bd995d391
+sar al, 1; setae cl: a0391ea33f5f94b9
+sar al, 1; cmovae cx, dx: ee47fba78ec0acd9
+sar al, 1; cmovae ecx, edx: acb5726f528b1a19
+sar al, 1; cmovae rcx, rdx: ff0e10d024577d29
+sar al, 1; je 1f; mov ecx, 1; 1:: a2b3f86fc49b4dc9
+sar al, 1; sete cl: f5969ec1ff281249
+sar al, 1; cmove cx, dx: 8da27fd6cf203889
+sar al, 1; cmove ecx, edx: 4bfdf8bf3a55b29
+sar al, 1; cmove rcx, rdx: d9f0e82b6ca62009
+sar al, 1; jne 1f; mov ecx, 1; 1:: e2dab6ec81a9cd1
+sar al, 1; setne cl: a7c4c4347da97701
+sar al, 1; cmovne cx, dx: 5a2596aa6bcd1a29
+sar al, 1; cmovne ecx, edx: 1fbd8ca7652edf19
+sar al, 1; cmovne rcx, rdx: dee11d34e149fec9
+sar al, 1; jbe 1f; mov ecx, 1; 1:: 8da6e4a55870c799
+sar al, 1; setbe cl: b216e3f4616763d1
+sar al, 1; cmovbe cx, dx: 9398c91b1113da09
+sar al, 1; cmovbe ecx, edx: 54ff90f5cb9dcbe9
+sar al, 1; cmovbe rcx, rdx: 6ed33da46896e8e9
+sar al, 1; ja 1f; mov ecx, 1; 1:: 94f026e6862ade61
+sar al, 1; seta cl: 1bf6521c624a91d9
+sar al, 1; cmova cx, dx: 8872e2892ffb9f89
+sar al, 1; cmova ecx, edx: 1c926a4818a3f199
+sar al, 1; cmova rcx, rdx: f8cccc5b470755e9
+sar al, 1; js 1f; mov ecx, 1; 1:: d2c33372cc96deb9
+sar al, 1; sets cl: d8af55d91a9f4369
+sar al, 1; cmovs cx, dx: 42c60e50abcc1c1
+sar al, 1; cmovs ecx, edx: 58d2ff737110c3b9
+sar al, 1; cmovs rcx, rdx: a1d9e0fa019543d9
+sar al, 1; jns 1f; mov ecx, 1; 1:: 5ab2233ba7ca44a1
+sar al, 1; setns cl: b805ded36c7be641
+sar al, 1; cmovns cx, dx: af75376b6b46a731
+sar al, 1; cmovns ecx, edx: 649e340821c18bc9
+sar al, 1; cmovns rcx, rdx: 1eebd78fb924b3b9
+sar al, 1; jp 1f; mov ecx, 1; 1:: b8cbf14b77c80c09
+sar al, 1; setp cl: efb39ac839da699
+sar al, 1; cmovp cx, dx: 94dfa8013f300a61
+sar al, 1; cmovp ecx, edx: 46f32531d27c7da9
+sar al, 1; cmovp rcx, rdx: 1cfb137c05d16fc9
+sar al, 1; jnp 1f; mov ecx, 1; 1:: 8dc79a4486710ed1
+sar al, 1; setnp cl: c46afd90efd44231
+sar al, 1; cmovnp cx, dx: d965669c3bee4f31
+sar al, 1; cmovnp ecx, edx: 240054b46c0fbd9
+sar al, 1; cmovnp rcx, rdx: f77febb2431cba49
+sar al, 1; jl 1f; mov ecx, 1; 1:: d2c33372cc96deb9
+sar al, 1; setl cl: d8af55d91a9f4369
+sar al, 1; cmovl cx, dx: 42c60e50abcc1c1
+sar al, 1; cmovl ecx, edx: 58d2ff737110c3b9
+sar al, 1; cmovl rcx, rdx: a1d9e0fa019543d9
+sar al, 1; jge 1f; mov ecx, 1; 1:: 5ab2233ba7ca44a1
+sar al, 1; setge cl: b805ded36c7be641
+sar al, 1; cmovge cx, dx: af75376b6b46a731
+sar al, 1; cmovge ecx, edx: 649e340821c18bc9
+sar al, 1; cmovge rcx, rdx: 1eebd78fb924b3b9
+sar al, 1; jle 1f; mov ecx, 1; 1:: 665b33cb1be842a1
+sar al, 1; setle cl: c0c1687ba8df75f9
+sar al, 1; cmovle cx, dx: c3fa245f2f00def1
+sar al, 1; cmovle ecx, edx: 32cc75058f63b509
+sar al, 1; cmovle rcx, rdx: 5a0e5246aaa17789
+sar al, 1; jg 1f; mov ecx, 1; 1:: 46189779dcc524f9
+sar al, 1; setg cl: bb0dcddc0075edb1
+sar al, 1; cmovg cx, dx: cdfe2ad7b95f8521
+sar al, 1; cmovg ecx, edx: 84ec4cd1d74c4479
+sar al, 1; cmovg rcx, rdx: 166c005180f13a09
 cmp ax, bx; jo 1f; mov ecx, 1; 1:: 49e8590f85743e38
 cmp ax, bx; seto cl: af9060d59b505418
 cmp ax, bx; cmovo cx, dx: 820e5eb504fbd00c
@@ -8605,6 +10281,166 @@ dec ax; setg cl: c23e8f7396172b99
 dec ax; cmovg cx, dx: 8f6ae923b1bc2f31
 dec ax; cmovg ecx, edx: 699d36a5b156ab1
 dec ax; cmovg rcx, rdx: 4f761aab39e0b8d1
+shr ax, 3; jo 1f; mov ecx, 1; 1:: 479a2a30028a955
+shr ax, 3; seto cl: eb4590b4add5fced
+shr ax, 3; cmovo cx, dx: e62664a5b77e05ed
+shr ax, 3; cmovo ecx, edx: 5e2d0fa10c5bf5bd
+shr ax, 3; cmovo rcx, rdx: e62664a5b77e05ed
+shr ax, 3; jno 1f; mov ecx, 1; 1:: e62664a5b77e05ed
+shr ax, 3; setno cl: b98c7b8f9e1d340d
+shr ax, 3; cmovno cx, dx: a8ab8ccb490c65f5
+shr ax, 3; cmovno ecx, edx: da10da30619f2a8d
+shr ax, 3; cmovno rcx, rdx: 65f5ed539285b51d
+shr ax, 3; jb 1f; mov ecx, 1; 1:: 81d97474d5d40a55
+shr ax, 3; setb cl: 8d42d63bb7e7e2c5
+shr ax, 3; cmovb cx, dx: 86003506c027e0c5
+shr ax, 3; cmovb ecx, edx: ded68de85ae79d7d
+shr ax, 3; cmovb rcx, rdx: f318f0c8552ac8dd
+shr ax, 3; jae 1f; mov ecx, 1; 1:: 661647dd5b53bded
+shr ax, 3; setae cl: a87bb12b816dd615
+shr ax, 3; cmovae cx, dx: 5fa3cdd952db441d
+shr ax, 3; cmovae ecx, edx: cb624644f198790d
+shr ax, 3; cmovae rcx, rdx: 6aad17f0e59094ed
+shr ax, 3; je 1f; mov ecx, 1; 1:: 635549409e9c7d35
+shr ax, 3; sete cl: 17c2c1751e1db58d
+shr ax, 3; cmove cx, dx: 7858092da93a98ed
+shr ax, 3; cmove ecx, edx: 20fe8279c178137d
+shr ax, 3; cmove rcx, rdx: 7875ecfb5c05084d
+shr ax, 3; jne 1f; mov ecx, 1; 1:: 8b6c2c773d80ab0d
+shr ax, 3; setne cl: eea2ceb6cd7d6d2d
+shr ax, 3; cmovne cx, dx: fb5113265ca79fd5
+shr ax, 3; cmovne ecx, edx: df26567697ce0b8d
+shr ax, 3; cmovne rcx, rdx: 38ca81ec6bc0f43d
+shr ax, 3; jbe 1f; mov ecx, 1; 1:: e9fb478c506a9615
+shr ax, 3; setbe cl: bb0bda7d63508925
+shr ax, 3; cmovbe cx, dx: e4c8976dbc36dfe5
+shr ax, 3; cmovbe ecx, edx: 1865f219471bc1fd
+shr ax, 3; cmovbe rcx, rdx: 491b4f077ded863d
+shr ax, 3; ja 1f; mov ecx, 1; 1:: 6f40d23bc05a022d
+shr ax, 3; seta cl: 4597dbbd475dfab5
+shr ax, 3; cmova cx, dx: 3d2abe1e09f6b4dd
+shr ax, 3; cmova ecx, edx: 8f91e834aa84adcd
+shr ax, 3; cmova rcx, rdx: d57482a62319838d
+shr ax, 3; js 1f; mov ecx, 1; 1:: 479a2a30028a955
+shr ax, 3; sets cl: eb4590b4add5fced
+shr ax, 3; cmovs cx, dx: e62664a5b77e05ed
+shr ax, 3; cmovs ecx, edx: 5e2d0fa10c5bf5bd
+shr ax, 3; cmovs rcx, rdx: e62664a5b77e05ed
+shr ax, 3; jns 1f; mov ecx, 1; 1:: e62664a5b77e05ed
+shr ax, 3; setns cl: b98c7b8f9e1d340d
+shr ax, 3; cmovns cx, dx: a8ab8ccb490c65f5
+shr ax, 3; cmovns ecx, edx: da10da30619f2a8d
+shr ax, 3; cmovns rcx, rdx: 65f5ed539285b51d
+shr ax, 3; jp 1f; mov ecx, 1; 1:: 9baafc3b3e600dbd
+shr ax, 3; setp cl: 7fb642ebde0d1e9d
+shr ax, 3; cmovp cx, dx: 9ce33e8cacebb1bd
+shr ax, 3; cmovp ecx, edx: e572f4efd3dce7dd
+shr ax, 3; cmovp rcx, rdx: b230b9385bf6f81d
+shr ax, 3; jnp 1f; mov ecx, 1; 1:: 7d50d8c2efcc4945
+shr ax, 3; setnp cl: 691371368d319edd
+shr ax, 3; cmovnp cx, dx: ff0f29a4758ebc25
+shr ax, 3; cmovnp ecx, edx: 450b94222768f5ad
+shr ax, 3; cmovnp rcx, rdx: 11e00d6b4e74b96d
+shr ax, 3; jl 1f; mov ecx, 1; 1:: 479a2a30028a955
+shr ax, 3; setl cl: eb4590b4add5fced
+shr ax, 3; cmovl cx, dx: e62664a5b77e05ed
+shr ax, 3; cmovl ecx, edx: 5e2d0fa10c5bf5bd
+shr ax, 3; cmovl rcx, rdx: e62664a5b77e05ed
+shr ax, 3; jge 1f; mov ecx, 1; 1:: e62664a5b77e05ed
+shr ax, 3; setge cl: b98c7b8f9e1d340d
+shr ax, 3; cmovge cx, dx: a8ab8ccb490c65f5
+shr ax, 3; cmovge ecx, edx: da10da30619f2a8d
+shr ax, 3; cmovge rcx, rdx: 65f5ed539285b51d
+shr ax, 3; jle 1f; mov ecx, 1; 1:: 635549409e9c7d35
+shr ax, 3; setle cl: 17c2c1751e1db58d
+shr ax, 3; cmovle cx, dx: 7858092da93a98ed
+shr ax, 3; cmovle ecx, edx: 20fe8279c178137d
+shr ax, 3; cmovle rcx, rdx: 7875ecfb5c05084d
+shr ax, 3; jg 1f; mov ecx, 1; 1:: 8b6c2c773d80ab0d
+shr ax, 3; setg cl: eea2ceb6cd7d6d2d
+shr ax, 3; cmovg cx, dx: fb5113265ca79fd5
+shr ax, 3; cmovg ecx, edx: df26567697ce0b8d
+shr ax, 3; cmovg rcx, rdx: 38ca81ec6bc0f43d
+sar ax, 1; jo 1f; mov ecx, 1; 1:: 5f36d769b7508d05
+sar ax, 1; seto cl: ebaf6d70b07e0c15
+sar ax, 1; cmovo cx, dx: a797de5c3de04215
+sar ax, 1; cmovo ecx, edx: 72e6cfa29f2df175
+sar ax, 1; cmovo rcx, rdx: a797de5c3de04215
+sar ax, 1; jno 1f; mov ecx, 1; 1:: a797de5c3de04215
+sar ax, 1; setno cl: b371f0485baa1445
+sar ax, 1; cmovno cx, dx: 63f323839065b0e5
+sar ax, 1; cmovno ecx, edx: abc1d449b5db9c45
+sar ax, 1; cmovno rcx, rdx: 7133e3d642f92575
+sar ax, 1; jb 1f; mov ecx, 1; 1:: ab21147a29c049e5
+sar ax, 1; setb cl: c8717cefa8494ca5
+sar ax, 1; cmovb cx, dx: cea715c170eab85
+sar ax, 1; cmovb ecx, edx: 9c9985a2f5bd1bd5
+sar ax, 1; cmovb rcx, rdx: 55be2f98b7487555
+sar ax, 1; jae 1f; mov ecx, 1; 1:: ba3b78466ba58b15
+sar ax, 1; setae cl: d703f33835831175
+sar ax, 1; cmovae cx, dx: 1bb1788f2da086d5
+sar ax, 1; cmovae ecx, edx: f2e5391cf0ba2be5
+sar ax, 1; cmovae rcx, rdx: 3eee8223400435
+sar ax, 1; je 1f; mov ecx, 1; 1:: 20034ec919f8e0d5
+sar ax, 1; sete cl: abc88af31fd38b3d
+sar ax, 1; cmove cx, dx: d121cf1c68a1239d
+sar ax, 1; cmove ecx, edx: c64eacd19ebd8d95
+sar ax, 1; cmove rcx, rdx: 157108b49c31f625
+sar ax, 1; jne 1f; mov ecx, 1; 1:: f51820379d29d825
+sar ax, 1; setne cl: 22fecd1f00910fbd
+sar ax, 1; cmovne cx, dx: 6cead36a43178b1d
+sar ax, 1; cmovne ecx, edx: 7e32ed810eaef265
+sar ax, 1; cmovne rcx, rdx: 92512ecfe88ccbe5
+sar ax, 1; jbe 1f; mov ecx, 1; 1:: d314d26151e79d1d
+sar ax, 1; setbe cl: d1ccaab1111fe09d
+sar ax, 1; cmovbe cx, dx: ad42c1a8c4e4c42d
+sar ax, 1; cmovbe ecx, edx: 7b2c07c77b081765
+sar ax, 1; cmovbe rcx, rdx: afb0f9e2f1d66b5
+sar ax, 1; ja 1f; mov ecx, 1; 1:: dbf1185a6a2402dd
+sar ax, 1; seta cl: 513c10a078b3bd3d
+sar ax, 1; cmova cx, dx: 81d061119b4bb64d
+sar ax, 1; cmova ecx, edx: 3308223e9aa68155
+sar ax, 1; cmova rcx, rdx: 835da61b6b567bd5
+sar ax, 1; js 1f; mov ecx, 1; 1:: 8f42c8ed921ea60d
+sar ax, 1; sets cl: fd19b16cd7c815b5
+sar ax, 1; cmovs cx, dx: cfbf2a9dfed64d8d
+sar ax, 1; cmovs ecx, edx: 3c10828ec39b2495
+sar ax, 1; cmovs rcx, rdx: 796b92e41e5a2f45
+sar ax, 1; jns 1f; mov ecx, 1; 1:: 3e2bb2ef83a356ed
+sar ax, 1; setns cl: dbbdd8190da8a3a5
+sar ax, 1; cmovns cx, dx: 7c231d767a9487cd
+sar ax, 1; cmovns ecx, edx: 4f1b922f74e9a765
+sar ax, 1; cmovns rcx, rdx: 6e9674131f92d2c5
+sar ax, 1; jp 1f; mov ecx, 1; 1:: d2c34a4a9ce710d5
+sar ax, 1; setp cl: cc42f93a8b9f389d
+sar ax, 1; cmovp cx, dx: 3491ee31c0ff3235
+sar ax, 1; cmovp ecx, edx: 72300c3799a7785
+sar ax, 1; cmovp rcx, rdx: c8bd858a025f2a45
+sar ax, 1; jnp 1f; mov ecx, 1; 1:: bb321192d2ae1045
+sar ax, 1; setnp cl: 69cb2a43f8fac7bd
+sar ax, 1; cmovnp cx, dx: 265d74e06b4c8145
+sar ax, 1; cmovnp ecx, edx: 774f98413e18dfb5
+sar ax, 1; cmovnp rcx, rdx: fe58b1665fca8785
+sar ax, 1; jl 1f; mov ecx, 1; 1:: 8f42c8ed921ea60d
+sar ax, 1; setl cl: fd19b16cd7c815b5
+sar ax, 1; cmovl cx, dx: cfbf2a9dfed64d8d
+sar ax, 1; cmovl ecx, edx: 3c10828ec39b2495
+sar ax, 1; cmovl rcx, rdx: 796b92e41e5a2f45
+sar ax, 1; jge 1f; mov ecx, 1; 1:: 3e2bb2ef83a356ed
+sar ax, 1; setge cl: dbbdd8190da8a3a5
+sar ax, 1; cmovge cx, dx: 7c231d767a9487cd
+sar ax, 1; cmovge ecx, edx: 4f1b922f74e9a765
+sar ax, 1; cmovge rcx, rdx: 6e9674131f92d2c5
+sar ax, 1; jle 1f; mov ecx, 1; 1:: a63ead0594c3927d
+sar ax, 1; setle cl: 71c9af8d9228c61d
+sar ax, 1; cmovle cx, dx: 9a7c393e313aa275
+sar ax, 1; cmovle ecx, edx: c367695cac5896f5
+sar ax, 1; cmovle rcx, rdx: 2f9821d053a4d1d5
+sar ax, 1; jg 1f; mov ecx, 1; 1:: 67cc9d99a96a4e9d
+sar ax, 1; setg cl: fc568abfa7ee90dd
+sar ax, 1; cmovg cx, dx: a8c48c1ccafda225
+sar ax, 1; cmovg ecx, edx: 5972d4d5ec21efc5
+sar ax, 1; cmovg rcx, rdx: c1e91c189d8b4235
 cmp eax, ebx; jo 1f; mov ecx, 1; 1:: b21eb98ceb34d1f9
 cmp eax, ebx; seto cl: c7fae60afddadde
 cmp eax, ebx; cmovo cx, dx: 933ed9e2812bcff5
@@ -9245,6 +11081,166 @@ dec eax; setg cl: 7ae4930ad02adda5
 dec eax; cmovg cx, dx: 53008a62746c9a6d
 dec eax; cmovg ecx, edx: 92fe44b0abb45215
 dec eax; cmovg rcx, rdx: 1d928dbe1910aed5
+shr eax, 3; jo 1f; mov ecx, 1; 1:: e6099a305f657fa1
+shr eax, 3; seto cl: c18c00abdbd69291
+shr eax, 3; cmovo cx, dx: 530990648c2d1ff1
+shr eax, 3; cmovo ecx, edx: d119fb0255700ac1
+shr eax, 3; cmovo rcx, rdx: 530990648c2d1ff1
+shr eax, 3; jno 1f; mov ecx, 1; 1:: 530990648c2d1ff1
+shr eax, 3; setno cl: 9dce4e96408edba9
+shr eax, 3; cmovno cx, dx: 65e6dae8cb863439
+shr eax, 3; cmovno ecx, edx: 83abbc54e4a64bb1
+shr eax, 3; cmovno rcx, rdx: 6009f1f6b2cefd31
+shr eax, 3; jb 1f; mov ecx, 1; 1:: fb9dbcd23da10821
+shr eax, 3; setb cl: 30b26dee07e74359
+shr eax, 3; cmovb cx, dx: 4ef177b2d2491c61
+shr eax, 3; cmovb ecx, edx: 72c040aa8b8073e1
+shr eax, 3; cmovb rcx, rdx: 771ecc028ce461b1
+shr eax, 3; jae 1f; mov ecx, 1; 1:: 596f0e56250cd831
+shr eax, 3; setae cl: 3a2f579ae8204b41
+shr eax, 3; cmovae cx, dx: 3e929956f4de9389
+shr eax, 3; cmovae ecx, edx: 5a1a44b938739851
+shr eax, 3; cmovae rcx, rdx: af7f65875ab6d871
+shr eax, 3; je 1f; mov ecx, 1; 1:: ebe103d242de6cf9
+shr eax, 3; sete cl: bfa65924ae822ec9
+shr eax, 3; cmove cx, dx: 8799bc34ef4e1499
+shr eax, 3; cmove ecx, edx: a9b73e09f82734d1
+shr eax, 3; cmove rcx, rdx: dbbd6ff8b0e43e51
+shr eax, 3; jne 1f; mov ecx, 1; 1:: c708d097e4197159
+shr eax, 3; setne cl: 266a7b37ec80a191
+shr eax, 3; cmovne cx, dx: 55f765d53732a091
+shr eax, 3; cmovne ecx, edx: c340764b68bf70a1
+shr eax, 3; cmovne rcx, rdx: edd47fd97f4a9291
+shr eax, 3; jbe 1f; mov ecx, 1; 1:: 7ae613cfc7174bf9
+shr eax, 3; setbe cl: 776fb5a0f27fe831
+shr eax, 3; cmovbe cx, dx: 31444e43d40e1c9
+shr eax, 3; cmovbe ecx, edx: 2f93c3593584dd31
+shr eax, 3; cmovbe rcx, rdx: db60c0a72178c1d1
+shr eax, 3; ja 1f; mov ecx, 1; 1:: a823c6d2b77e8e19
+shr eax, 3; seta cl: d025018e5ab3be89
+shr eax, 3; cmova cx, dx: 82f8e9e719acbe61
+shr eax, 3; cmova ecx, edx: ad87a9e92d08b781
+shr eax, 3; cmova rcx, rdx: 3fa8ff360636d511
+shr eax, 3; js 1f; mov ecx, 1; 1:: e6099a305f657fa1
+shr eax, 3; sets cl: c18c00abdbd69291
+shr eax, 3; cmovs cx, dx: 530990648c2d1ff1
+shr eax, 3; cmovs ecx, edx: d119fb0255700ac1
+shr eax, 3; cmovs rcx, rdx: 530990648c2d1ff1
+shr eax, 3; jns 1f; mov ecx, 1; 1:: 530990648c2d1ff1
+shr eax, 3; setns cl: 9dce4e96408edba9
+shr eax, 3; cmovns cx, dx: 65e6dae8cb863439
+shr eax, 3; cmovns ecx, edx: 83abbc54e4a64bb1
+shr eax, 3; cmovns rcx, rdx: 6009f1f6b2cefd31
+shr eax, 3; jp 1f; mov ecx, 1; 1:: 2747e2dd25cd99c1
+shr eax, 3; setp cl: 3c440cc62de8b579
+shr eax, 3; cmovp cx, dx: 3fe5705aa3cee321
+shr eax, 3; cmovp ecx, edx: f385e9fe32327f41
+shr eax, 3; cmovp rcx, rdx: 35e5449c59c84871
+shr eax, 3; jnp 1f; mov ecx, 1; 1:: 89eddf51e068b891
+shr eax, 3; setnp cl: 5100121342ee5881
+shr eax, 3; cmovnp cx, dx: 609b1dccca22cd89
+shr eax, 3; cmovnp ecx, edx: 7228ab0b24582fb1
+shr eax, 3; cmovnp rcx, rdx: 53a7a7938109931
+shr eax, 3; jl 1f; mov ecx, 1; 1:: e6099a305f657fa1
+shr eax, 3; setl cl: c18c00abdbd69291
+shr eax, 3; cmovl cx, dx: 530990648c2d1ff1
+shr eax, 3; cmovl ecx, edx: d119fb0255700ac1
+shr eax, 3; cmovl rcx, rdx: 530990648c2d1ff1
+shr eax, 3; jge 1f; mov ecx, 1; 1:: 530990648c2d1ff1
+shr eax, 3; setge cl: 9dce4e96408edba9
+shr eax, 3; cmovge cx, dx: 65e6dae8cb863439
+shr eax, 3; cmovge ecx, edx: 83abbc54e4a64bb1
+shr eax, 3; cmovge rcx, rdx: 6009f1f6b2cefd31
+shr eax, 3; jle 1f; mov ecx, 1; 1:: ebe103d242de6cf9
+shr eax, 3; setle cl: bfa65924ae822ec9
+shr eax, 3; cmovle cx, dx: 8799bc34ef4e1499
+shr eax, 3; cmovle ecx, edx: a9b73e09f82734d1
+shr eax, 3; cmovle rcx, rdx: dbbd6ff8b0e43e51
+shr eax, 3; jg 1f; mov ecx, 1; 1:: c708d097e4197159
+shr eax, 3; setg cl: 266a7b37ec80a191
+shr eax, 3; cmovg cx, dx: 55f765d53732a091
+shr eax, 3; cmovg ecx, edx: c340764b68bf70a1
+shr eax, 3; cmovg rcx, rdx: edd47fd97f4a9291
+sar eax, 1; jo 1f; mov ecx, 1; 1:: 586afd5f3355a741
+sar eax, 1; seto cl: d8de8084eb2ea99
+sar eax, 1; cmovo cx, dx: 8a0766fff3698089
+sar eax, 1; cmovo ecx, edx: c0ce4c0e1eeaa5e9
+sar eax, 1; cmovo rcx, rdx: 8a0766fff3698089
+sar eax, 1; jno 1f; mov ecx, 1; 1:: 8a0766fff3698089
+sar eax, 1; setno cl: 1047f6b6f00829d1
+sar eax, 1; cmovno cx, dx: 846758495c14b119
+sar eax, 1; cmovno ecx, edx: b8c765a45e529f09
+sar eax, 1; cmovno rcx, rdx: 3de616c4c6751ea9
+sar eax, 1; jb 1f; mov ecx, 1; 1:: 6ac9753eb681d1e1
+sar eax, 1; setb cl: e3e0cc4eec405631
+sar eax, 1; cmovb cx, dx: 75fd3f1a7c136ee9
+sar eax, 1; cmovb ecx, edx: 67995ed226546bd9
+sar eax, 1; cmovb rcx, rdx: 61554c5c2f61ece9
+sar eax, 1; jae 1f; mov ecx, 1; 1:: 3dcd27237cc0ddc9
+sar eax, 1; setae cl: fb47b4ca1a8cac39
+sar eax, 1; cmovae cx, dx: aec1cab71a9070d9
+sar eax, 1; cmovae ecx, edx: e8eda79efb12f999
+sar eax, 1; cmovae rcx, rdx: 48be703f55cd4ec9
+sar eax, 1; je 1f; mov ecx, 1; 1:: 31708c6830ce1789
+sar eax, 1; sete cl: bef8c5a8f1eeb979
+sar eax, 1; cmove cx, dx: 21cab24763759159
+sar eax, 1; cmove ecx, edx: b06d2aa722bef59
+sar eax, 1; cmove rcx, rdx: c4163f428dc92b79
+sar eax, 1; jne 1f; mov ecx, 1; 1:: 90a83359da8046c1
+sar eax, 1; setne cl: 398167664eb3e211
+sar eax, 1; cmovne cx, dx: e0fa9d36a10fd009
+sar eax, 1; cmovne ecx, edx: aecf080f411b9559
+sar eax, 1; cmovne rcx, rdx: edd12929d89681b9
+sar eax, 1; jbe 1f; mov ecx, 1; 1:: 9fb63f857d8c1551
+sar eax, 1; setbe cl: 511a6fa6cb58c7e1
+sar eax, 1; cmovbe cx, dx: bf5a2676098f1cf9
+sar eax, 1; cmovbe ecx, edx: cb09f0d54a2b5f9
+sar eax, 1; cmovbe rcx, rdx: 5d1882580f37cca9
+sar eax, 1; ja 1f; mov ecx, 1; 1:: e921e2629c56a979
+sar eax, 1; seta cl: 5cf129bdf93afb89
+sar eax, 1; cmova cx, dx: 12c705ddef8e2469
+sar eax, 1; cmova ecx, edx: a2ac1efd2b16d79
+sar eax, 1; cmova rcx, rdx: ea06973cc36caec9
+sar eax, 1; js 1f; mov ecx, 1; 1:: a96d22dc60402431
+sar eax, 1; sets cl: 177bbab6e44b9ca1
+sar eax, 1; cmovs cx, dx: 237181ba2de6bc71
+sar eax, 1; cmovs ecx, edx: c52188f46a63dd59
+sar eax, 1; cmovs rcx, rdx: 5a6ed7c58009469
+sar eax, 1; jns 1f; mov ecx, 1; 1:: 647d5e58c132b699
+sar eax, 1; setns cl: 6ec388f8161eb269
+sar eax, 1; cmovns cx, dx: 19a0ad2b668507f1
+sar eax, 1; cmovns ecx, edx: c5db1b2078c8ac59
+sar eax, 1; cmovns rcx, rdx: e4c6f52e6b099809
+sar eax, 1; jp 1f; mov ecx, 1; 1:: ced60cc504f3b159
+sar eax, 1; setp cl: d2940d9cfc05509
+sar eax, 1; cmovp cx, dx: 3665c30e4de20eb9
+sar eax, 1; cmovp ecx, edx: 7f77c59dcf3a5639
+sar eax, 1; cmovp rcx, rdx: 34e6a6e7a7c249e9
+sar eax, 1; jnp 1f; mov ecx, 1; 1:: ad2c58faa230e5b1
+sar eax, 1; setnp cl: 98b0e8998897df21
+sar eax, 1; cmovnp cx, dx: 718cbc6e479a3569
+sar eax, 1; cmovnp ecx, edx: 68fddc910a3721b9
+sar eax, 1; cmovnp rcx, rdx: 45c6298880f53a49
+sar eax, 1; jl 1f; mov ecx, 1; 1:: a96d22dc60402431
+sar eax, 1; setl cl: 177bbab6e44b9ca1
+sar eax, 1; cmovl cx, dx: 237181ba2de6bc71
+sar eax, 1; cmovl ecx, edx: c52188f46a63dd59
+sar eax, 1; cmovl rcx, rdx: 5a6ed7c58009469
+sar eax, 1; jge 1f; mov ecx, 1; 1:: 647d5e58c132b699
+sar eax, 1; setge cl: 6ec388f8161eb269
+sar eax, 1; cmovge cx, dx: 19a0ad2b668507f1
+sar eax, 1; cmovge ecx, edx: c5db1b2078c8ac59
+sar eax, 1; cmovge rcx, rdx: e4c6f52e6b099809
+sar eax, 1; jle 1f; mov ecx, 1; 1:: 4afc354df57673f9
+sar eax, 1; setle cl: 474e1cff22da1bc1
+sar eax, 1; cmovle cx, dx: f2e50dfb0097d7e1
+sar eax, 1; cmovle ecx, edx: 6d80f3d464b8b6c9
+sar eax, 1; cmovle rcx, rdx: dd5d310586ca17d9
+sar eax, 1; jg 1f; mov ecx, 1; 1:: 6999938efb393451
+sar eax, 1; setg cl: 4d6987a589f61469
+sar eax, 1; cmovg cx, dx: 8cff46a7edd1e641
+sar eax, 1; cmovg ecx, edx: 4d39150c5b24a9
+sar eax, 1; cmovg rcx, rdx: e8e8ddf1f48b3819
 cmp rax, rbx; jo 1f; mov ecx, 1; 1:: 729a3db4e60f668f
 cmp rax, rbx; seto cl: bf74f88e176bf0bb
 cmp rax, rbx; cmovo cx, dx: 19bbd32f1740751b
@@ -9885,6 +11881,166 @@ dec rax; setg cl: 30c041c63bde5d81
 dec rax; cmovg cx, dx: 6197c658d95348d9
 dec rax; cmovg ecx, edx: 2872b895695a9b51
 dec rax; cmovg rcx, rdx: 89d4a685d5f8a391
+shr rax, 3; jo 1f; mov ecx, 1; 1:: d97e5f2f92729fd5
+shr rax, 3; seto cl: 700757cfaa5a8e0d
+shr rax, 3; cmovo cx, dx: 937c857034f740d
+shr rax, 3; cmovo ecx, edx: 7914dd600158edfd
+shr rax, 3; cmovo rcx, rdx: 937c857034f740d
+shr rax, 3; jno 1f; mov ecx, 1; 1:: 937c857034f740d
+shr rax, 3; setno cl: 212c3d20a4f13b8d
+shr rax, 3; cmovno cx, dx: ab4f6bc5479efe95
+shr rax, 3; cmovno ecx, edx: fd6504d8a7221aed
+shr rax, 3; cmovno rcx, rdx: 99418138963509dd
+shr rax, 3; jb 1f; mov ecx, 1; 1:: db290a626b7d20e5
+shr rax, 3; setb cl: b39a1c045285
+shr rax, 3; cmovb cx, dx: acfa8fb0f6ac49d
+shr rax, 3; cmovb ecx, edx: 1b833928fb0949fd
+shr rax, 3; cmovb rcx, rdx: 908a6bc9df479b9d
+shr rax, 3; jae 1f; mov ecx, 1; 1:: 781cfdb56a1e121d
+shr rax, 3; setae cl: 47e621d34a31f635
+shr rax, 3; cmovae cx, dx: aa21c8b4e4de0f65
+shr rax, 3; cmovae ecx, edx: 84b154af7829a72d
+shr rax, 3; cmovae rcx, rdx: 292bb7d6975eba0d
+shr rax, 3; je 1f; mov ecx, 1; 1:: b922e127b8f08e15
+shr rax, 3; sete cl: 78da32541761a25d
+shr rax, 3; cmove cx, dx: 7cac4e4d43e18ed
+shr rax, 3; cmove ecx, edx: f26023ea60599a9d
+shr rax, 3; cmove rcx, rdx: 7e066b55596b1b8d
+shr rax, 3; jne 1f; mov ecx, 1; 1:: af70d6182c78414d
+shr rax, 3; setne cl: b77de3efe1f38dfd
+shr rax, 3; cmovne cx, dx: 72b073735d45f135
+shr rax, 3; cmovne ecx, edx: f19ca0a025067cd
+shr rax, 3; cmovne rcx, rdx: e6c32002ed5c1e5d
+shr rax, 3; jbe 1f; mov ecx, 1; 1:: 3754eba69c615aa5
+shr rax, 3; setbe cl: 31edf26a5b990f15
+shr rax, 3; cmovbe cx, dx: 3bf594dd26f6307d
+shr rax, 3; cmovbe ecx, edx: 84f9fa4edfaa5d1d
+shr rax, 3; cmovbe rcx, rdx: 1b79c5b57754901d
+shr rax, 3; ja 1f; mov ecx, 1; 1:: 11839d1c7eb3505d
+shr rax, 3; seta cl: 8a8959c4c16f5625
+shr rax, 3; cmova cx, dx: 4afbc1dfdcbbeb05
+shr rax, 3; cmova ecx, edx: da69f3aacc6d0a0d
+shr rax, 3; cmova rcx, rdx: 6b4e3c65d278f98d
+shr rax, 3; js 1f; mov ecx, 1; 1:: d97e5f2f92729fd5
+shr rax, 3; sets cl: 700757cfaa5a8e0d
+shr rax, 3; cmovs cx, dx: 937c857034f740d
+shr rax, 3; cmovs ecx, edx: 7914dd600158edfd
+shr rax, 3; cmovs rcx, rdx: 937c857034f740d
+shr rax, 3; jns 1f; mov ecx, 1; 1:: 937c857034f740d
+shr rax, 3; setns cl: 212c3d20a4f13b8d
+shr rax, 3; cmovns cx, dx: ab4f6bc5479efe95
+shr rax, 3; cmovns ecx, edx: fd6504d8a7221aed
+shr rax, 3; cmovns rcx, rdx: 99418138963509dd
+shr rax, 3; jp 1f; mov ecx, 1; 1:: 9ef674ec3fcb43dd
+shr rax, 3; setp cl: 40abd255792e44dd
+shr rax, 3; cmovp cx, dx: 2691649c9060167d
+shr rax, 3; cmovp ecx, edx: 5b8034ab898f527d
+shr rax, 3; cmovp rcx, rdx: 9fe7a02de710625d
+shr rax, 3; jnp 1f; mov ecx, 1; 1:: 2182316e9a3e3785
+shr rax, 3; setnp cl: 68c970c7e09530fd
+shr rax, 3; cmovnp cx, dx: a8fb35ea25435aa5
+shr rax, 3; cmovnp ecx, edx: b38a72028d5dc6ed
+shr rax, 3; cmovnp rcx, rdx: 8576d981016d378d
+shr rax, 3; jl 1f; mov ecx, 1; 1:: d97e5f2f92729fd5
+shr rax, 3; setl cl: 700757cfaa5a8e0d
+shr rax, 3; cmovl cx, dx: 937c857034f740d
+shr rax, 3; cmovl ecx, edx: 7914dd600158edfd
+shr rax, 3; cmovl rcx, rdx: 937c857034f740d
+shr rax, 3; jge 1f; mov ecx, 1; 1:: 937c857034f740d
+shr rax, 3; setge cl: 212c3d20a4f13b8d
+shr rax, 3; cmovge cx, dx: ab4f6bc5479efe95
+shr rax, 3; cmovge ecx, edx: fd6504d8a7221aed
+shr rax, 3; cmovge rcx, rdx: 99418138963509dd
+shr rax, 3; jle 1f; mov ecx, 1; 1:: b922e127b8f08e15
+shr rax, 3; setle cl: 78da32541761a25d
+shr rax, 3; cmovle cx, dx: 7cac4e4d43e18ed
+shr rax, 3; cmovle ecx, edx: f26023ea60599a9d
+shr rax, 3; cmovle rcx, rdx: 7e066b55596b1b8d
+shr rax, 3; jg 1f; mov ecx, 1; 1:: af70d6182c78414d
+shr rax, 3; setg cl: b77de3efe1f38dfd
+shr rax, 3; cmovg cx, dx: 72b073735d45f135
+shr rax, 3; cmovg ecx, edx: f19ca0a025067cd
+shr rax, 3; cmovg rcx, rdx: e6c32002ed5c1e5d
+sar rax, 1; jo 1f; mov ecx, 1; 1:: cd70382e41fdbbb5
+sar rax, 1; seto cl: 586b56ad5c1c0025
+sar rax, 1; cmovo cx, dx: 17a460fcbd3200b5
+sar rax, 1; cmovo ecx, edx: 88e4714304c0c175
+sar rax, 1; cmovo rcx, rdx: 17a460fcbd3200b5
+sar rax, 1; jno 1f; mov ecx, 1; 1:: 17a460fcbd3200b5
+sar rax, 1; setno cl: 16cfd5322e010445
+sar rax, 1; cmovno cx, dx: 17f3dbbccdc13475
+sar rax, 1; cmovno ecx, edx: c78485fbab839ac5
+sar rax, 1; cmovno rcx, rdx: 9351ce5e49f392f5
+sar rax, 1; jb 1f; mov ecx, 1; 1:: 530e73c9fe80168d
+sar rax, 1; setb cl: a9bb2b4b1e8cc08d
+sar rax, 1; cmovb cx, dx: 47e12b5570588755
+sar rax, 1; cmovb ecx, edx: 5bf127d74f37bfe5
+sar rax, 1; cmovb rcx, rdx: addbdb1dffdfff75
+sar rax, 1; jae 1f; mov ecx, 1; 1:: fe0006d717c525fd
+sar rax, 1; setae cl: ee9114d5fcf6a87d
+sar rax, 1; cmovae cx, dx: 8131a80d492010f5
+sar rax, 1; cmovae ecx, edx: 5a306ebce0317a15
+sar rax, 1; cmovae rcx, rdx: bb1e24de2a36975
+sar rax, 1; je 1f; mov ecx, 1; 1:: 46fa1f39594a5545
+sar rax, 1; sete cl: 861891a24fcee99d
+sar rax, 1; cmove cx, dx: b8ea6bbaa9d8537d
+sar rax, 1; cmove ecx, edx: 3e86e88d943a6bf5
+sar rax, 1; cmove rcx, rdx: eb7050cf5a633125
+sar rax, 1; jne 1f; mov ecx, 1; 1:: dbf05af994ec2da5
+sar rax, 1; setne cl: a101af608c9f1b6d
+sar rax, 1; cmovne cx, dx: 9a6ac33948ed8b8d
+sar rax, 1; cmovne ecx, edx: 35804969b502fb45
+sar rax, 1; cmovne rcx, rdx: cc8f6286489a4c05
+sar rax, 1; jbe 1f; mov ecx, 1; 1:: adccd2db57f96625
+sar rax, 1; setbe cl: c94f0e09fe80f415
+sar rax, 1; cmovbe cx, dx: 2e83767c79ce745d
+sar rax, 1; cmovbe ecx, edx: a9673543500ac295
+sar rax, 1; cmovbe rcx, rdx: 7d38dce6085e0675
+sar rax, 1; ja 1f; mov ecx, 1; 1:: 2697e1542eb6fa25
+sar rax, 1; seta cl: 88dcb80cde93d535
+sar rax, 1; cmova cx, dx: 62e43b36fa2f856d
+sar rax, 1; cmova ecx, edx: e13ce1d3c7630325
+sar rax, 1; cmova rcx, rdx: f5364ab183859c75
+sar rax, 1; js 1f; mov ecx, 1; 1:: 7cdc2817122c147d
+sar rax, 1; sets cl: aa1a6e1be5e9915
+sar rax, 1; cmovs cx, dx: 1634476b7af14755
+sar rax, 1; cmovs ecx, edx: 7460406eb74cb8d5
+sar rax, 1; cmovs rcx, rdx: b667f7a81cdb9d85
+sar rax, 1; jns 1f; mov ecx, 1; 1:: 8171175542a82bed
+sar rax, 1; setns cl: 8cda4ed572a97315
+sar rax, 1; cmovns cx, dx: 294abbf890f2c895
+sar rax, 1; cmovns ecx, edx: 8b22510337b1a7e5
+sar rax, 1; cmovns rcx, rdx: bea92fb112c280a5
+sar rax, 1; jp 1f; mov ecx, 1; 1:: 5aae1da378cdadf5
+sar rax, 1; setp cl: 912cff339804290d
+sar rax, 1; cmovp cx, dx: 99e51c50111e9ee5
+sar rax, 1; cmovp ecx, edx: 39246d2113a81ae5
+sar rax, 1; cmovp rcx, rdx: 3ddce6fb83147b85
+sar rax, 1; jnp 1f; mov ecx, 1; 1:: 2c3253fe8b1521f5
+sar rax, 1; setnp cl: f1d3051b7b03197d
+sar rax, 1; cmovnp cx, dx: 2885f5a9fa139965
+sar rax, 1; cmovnp ecx, edx: 6d82c793534cf1d5
+sar rax, 1; cmovnp rcx, rdx: 421411fc86408ea5
+sar rax, 1; jl 1f; mov ecx, 1; 1:: 7cdc2817122c147d
+sar rax, 1; setl cl: aa1a6e1be5e9915
+sar rax, 1; cmovl cx, dx: 1634476b7af14755
+sar rax, 1; cmovl ecx, edx: 7460406eb74cb8d5
+sar rax, 1; cmovl rcx, rdx: b667f7a81cdb9d85
+sar rax, 1; jge 1f; mov ecx, 1; 1:: 8171175542a82bed
+sar rax, 1; setge cl: 8cda4ed572a97315
+sar rax, 1; cmovge cx, dx: 294abbf890f2c895
+sar rax, 1; cmovge ecx, edx: 8b22510337b1a7e5
+sar rax, 1; cmovge rcx, rdx: bea92fb112c280a5
+sar rax, 1; jle 1f; mov ecx, 1; 1:: bf190f48702e54cd
+sar rax, 1; setle cl: 2e9a450f69b13b6d
+sar rax, 1; cmovle cx, dx: 3d8eb3e7e653f89d
+sar rax, 1; cmovle ecx, edx: 47e87aa8c61e3e55
+sar rax, 1; cmovle rcx, rdx: c73b205d0b388075
+sar rax, 1; jg 1f; mov ecx, 1; 1:: a7d9bc7c141c1edd
+sar rax, 1; setg cl: eacff73c9bb58ddd
+sar rax, 1; cmovg cx, dx: ef3007812aa0aed
+sar rax, 1; cmovg ecx, edx: 31789210e3227e65
+sar rax, 1; cmovg rcx, rdx: 8ff90ab1a076adb5
 mov ah, 0x0; sahf; jo 1f; mov ecx, 1; 1:: aee9d58e28b55f45
 mov ah, 0x0; sahf; seto cl: afd417401777efc
 mov ah, 0x0; sahf; cmovo cx, dx: 98b6c95382ed0b6f
