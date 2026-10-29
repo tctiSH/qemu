@@ -30,7 +30,8 @@ rcg-table.c.inc, the translator's table of them, to a directory.
     rcg-gen.py --gadgets DIR
     rcg-gen.py --coverage ordered|plain NM TRACE...
 
-Only 64-bit code is covered, without LOCK; anything else is left to TCG.
+Only 64-bit code without LOCK is covered, and the 32-bit address size
+only without a memory operand; anything else is left to TCG.
 """
 
 import argparse
@@ -2064,6 +2065,7 @@ def insn_cases():
             yield from bt_cases(op, width)
     yield from move_cases()
     yield from high_byte_cases()
+    yield from addr32_cases()
     yield from cond_cases()
     yield from branch_cases()
     yield from chain_cases()
@@ -2430,6 +2432,11 @@ def branch_cases():
     yield Case(f"lea rdx, [rip+2f]; call rdx; 1: ud2; {back}; mov edx, 0; "
                f"{clear}", 64, stack=True)
     yield Case("lea rdx, [rip+2f]; jmp rdx; 1: ud2; 2: mov edx, 0", 64)
+    # The address size does not change what a CALL without a memory
+    # operand does.
+    yield Case(f"addr32 call 2f; 1: ud2; {back}; {clear}", 64, stack=True)
+    yield Case(f"lea rdx, [rip+2f]; addr32 call rdx; 1: ud2; {back}; "
+               f"mov edx, 0; {clear}", 64, stack=True)
     targets = [memory_operand(64, shape, seg)
                for shape in EA_SHAPES for seg in SEGS]
     targets.append((rip_relative(64), -1, -1, 0, 0))
@@ -2448,6 +2455,8 @@ def branch_cases():
         yield Case(f"lea rsi, [rip+2f]; push rsi; {ret}; 1: ud2; "
                    f"2: mov esi, 0; mov qword ptr [rsp-{8 + (adjust or 0)}], 0",
                    64, stack=True)
+    yield Case("lea rsi, [rip+2f]; push rsi; addr32 ret; 1: ud2; "
+               "2: mov esi, 0; mov qword ptr [rsp-8], 0", 64, stack=True)
 
 
 def fault_cases():
@@ -2703,6 +2712,22 @@ def move_cases():
     yield Case("xchg eax, eax", 32, a=0)
     # 0x90 with REX.B: the short encoding with R8.
     yield Case("xchg rax, r8", 64, a=0, b=8)
+
+
+def addr32_cases():
+    """ Instructions with the 32-bit address size and no memory operand,
+    where it changes nothing. With one, they stay with TCG (see
+    memory_cases()). CALL and RET are in branch_cases(). """
+    for insn, a, b, stack in (
+            ("addr32 add rax, rbx", 0, 3, False),
+            ("addr32 mov ecx, edx", 1, 2, False),
+            ("addr32 push rax", 0, -1, True),
+            ("addr32 pop rcx", 1, -1, True),
+            ("addr32 imul eax, ebx, 5", 0, 3, False),
+            ("cmp eax, ebx; addr32 setb cl", 0, 3, False),
+            ("cmp eax, ebx; addr32 jb 1f; mov ecx, 1; 1:", 0, 3, False),
+            ("mov rbp, rsp; addr32 leave", -1, -1, True)):
+        yield Case(insn, 64, a=a, b=b, stack=stack)
 
 
 def high_byte_cases():

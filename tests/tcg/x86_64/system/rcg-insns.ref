@@ -8924,6 +8924,14 @@ cmp eax, ebx; setle bh: 159507e4913910c3
 cmp eax, ebx; setle ah: dfc31315d7a1bc83
 cmp eax, ebx; setg bh: d70aa86537fab057
 cmp eax, ebx; setg ah: bfc5fd98c32d737
+addr32 add rax, rbx: 8fc48bbb4ffb9111
+addr32 mov ecx, edx: 6cbf9b2c20d42c25
+addr32 push rax: ff6da3e6566596a5
+addr32 pop rcx: 13e5f7a4fd62f9a5
+addr32 imul eax, ebx, 5: ffc157032871f25
+cmp eax, ebx; addr32 setb cl: efac9f5470a161eb
+cmp eax, ebx; addr32 jb 1f; mov ecx, 1; 1:: c6945fbc069ec227
+mov rbp, rsp; addr32 leave: de468bc10b0646c1
 cmp al, bl; jo 1f; mov ecx, 1; 1:: 8bf6fb4cf2bcad6e
 cmp al, bl; seto cl: 1d143dd354a95689
 cmp al, bl; cmovo cx, dx: fef8a12223b69bf6
@@ -12769,6 +12777,8 @@ jl 1f; mov ecx, 1; 1:: 3eb11d3c1b58dcce
 call 2f; 1: ud2; 2: pop rsi; lea rdi, [rip+1b]; sub rsi, rdi; mov edi, 0; mov qword ptr [rsp-8], 0: f2748029e349750
 lea rdx, [rip+2f]; call rdx; 1: ud2; 2: pop rsi; lea rdi, [rip+1b]; sub rsi, rdi; mov edi, 0; mov edx, 0; mov qword ptr [rsp-8], 0: 76d1a34925681628
 lea rdx, [rip+2f]; jmp rdx; 1: ud2; 2: mov edx, 0: 705eec3d6ab029df
+addr32 call 2f; 1: ud2; 2: pop rsi; lea rdi, [rip+1b]; sub rsi, rdi; mov edi, 0; mov qword ptr [rsp-8], 0: f2748029e349750
+lea rdx, [rip+2f]; addr32 call rdx; 1: ud2; 2: pop rsi; lea rdi, [rip+1b]; sub rsi, rdi; mov edi, 0; mov edx, 0; mov qword ptr [rsp-8], 0: 76d1a34925681628
 lea rdx, [rip+2f]; mov qword ptr [rbx+8], rdx; call qword ptr [rbx+8]; 1: ud2; 2: pop rsi; lea rdi, [rip+1b]; sub rsi, rdi; mov edi, 0; mov edx, 0; mov qword ptr [rbx+8], 0; mov qword ptr [rsp-8], 0: 5fe0e76668f91cc8
 lea rdx, [rip+2f]; mov qword ptr [rbx+8], rdx; jmp qword ptr [rbx+8]; 1: ud2; 2: mov edx, 0; mov qword ptr [rbx+8], 0: ec32c64944d21c5
 lea rdx, [rip+2f]; mov qword ptr fs:[rbx+8], rdx; call qword ptr fs:[rbx+8]; 1: ud2; 2: pop rsi; lea rdi, [rip+1b]; sub rsi, rdi; mov edi, 0; mov edx, 0; mov qword ptr fs:[rbx+8], 0; mov qword ptr [rsp-8], 0: 66981b28cd0a8410
@@ -12837,6 +12847,7 @@ lea rsi, [rip+2f]; push rsi; ret 8; 1: ud2; 2: mov esi, 0; mov qword ptr [rsp-16
 lea rsi, [rip+2f]; push rsi; ret 16; 1: ud2; 2: mov esi, 0; mov qword ptr [rsp-24], 0: 3376d151c1edb4e8
 lea rsi, [rip+2f]; push rsi; ret 32768; 1: ud2; 2: mov esi, 0; mov qword ptr [rsp-32776], 0: d3038fbf8849f188
 lea rsi, [rip+2f]; push rsi; ret 65528; 1: ud2; 2: mov esi, 0; mov qword ptr [rsp-65536], 0: d830bb9e37091e70
+lea rsi, [rip+2f]; push rsi; addr32 ret; 1: ud2; 2: mov esi, 0; mov qword ptr [rsp-8], 0: 490c331043717988
 bswap rax; mov al, bl: f4a20e4005e8bb21
 bswap rax; add ax, bx: 14c4386348ab8610
 bswap rax; movzx ax, bl: 208008cb44b33f39

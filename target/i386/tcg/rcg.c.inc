@@ -596,7 +596,18 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     unsigned n, nb_outs = 0, nb_ins = 0;
     TCGv reg;
 
-    if (!CODE64(s) || s->aflag != MO_64 || (s->prefix & PREFIX_LOCK)) {
+    if (!CODE64(s) || (s->prefix & PREFIX_LOCK)) {
+        return NULL;
+    }
+    /*
+     * In 64-bit code the address size changes only how a memory operand's
+     * address is formed. The stack address is always 64-bit
+     * (mo_stacksize()), and RCG has no gadget for the instructions that
+     * use registers at the address size: string instructions, XLAT, LOOP
+     * and JRCXZ.
+     */
+    if (s->aflag != MO_64 && (decode->op[0].has_ea || decode->op[1].has_ea ||
+                              decode->op[2].has_ea)) {
         return NULL;
     }
     if (gen == gen_Jcc || gen == gen_SETcc || gen == gen_CMOVcc) {
