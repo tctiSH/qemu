@@ -4963,6 +4963,47 @@ shl byte ptr [0x1800010], 3: 78002fef0b7772ff
 shl byte ptr fs:[0x17ff010], 3: 78002fef0b7772ff
 shl byte ptr gs:[0x17fe010], 3: 78002fef0b7772ff
 shl byte ptr [rip+rcg_mem+16], 1: a7bace86b217d603
+shl bl, cl: 652e47036d4d7f16
+shl r10b, cl: 901e99e513fe2b76
+shl byte ptr [rbx+8], cl: 33b1fa8e2cb9c82b
+shl byte ptr fs:[rbx+8], cl: adb331b59155f363
+shl byte ptr gs:[rbx+8], cl: f48ee84ffc4ad9c3
+shl byte ptr [rbx+rsi*1+8], cl: db99ba431ca71d5b
+shl byte ptr fs:[rbx+rsi*1+8], cl: a2a40701ed330b63
+shl byte ptr gs:[rbx+rsi*1+8], cl: 7fe26d3681035983
+shl byte ptr [rbx+rsi*2+8], cl: 61f4138e6d602f67
+shl byte ptr fs:[rbx+rsi*2+8], cl: 51ca77ee0746927
+shl byte ptr gs:[rbx+rsi*2+8], cl: e891ec001f1e82a7
+shl byte ptr [rbx+rsi*4+8], cl: 4ca1279d43887247
+shl byte ptr fs:[rbx+rsi*4+8], cl: a3fab9bbc5e94757
+shl byte ptr gs:[rbx+rsi*4+8], cl: 619de0701a9229d7
+shl byte ptr [rbx+rsi*8+8], cl: ba687794f01ed7a7
+shl byte ptr fs:[rbx+rsi*8+8], cl: 3bae0d9c4b41c807
+shl byte ptr gs:[rbx+rsi*8+8], cl: 40aa0425e42f5b87
+shl byte ptr [rsi*1+0x8], cl: d25bae3d34b2062b
+shl byte ptr fs:[rsi*1+0x8], cl: 716fe05592295243
+shl byte ptr gs:[rsi*1+0x8], cl: 1d16dc5c7b8d7b03
+shl byte ptr [rsi*2+0x8], cl: 30bef30dc7073aff
+shl byte ptr fs:[rsi*2+0x8], cl: 7e3d2bbc6c7a43c3
+shl byte ptr gs:[rsi*2+0x8], cl: 10103dc7b84c07b3
+shl byte ptr [rsi*4+0x8], cl: 1c9dec8d0a6e8713
+shl byte ptr fs:[rsi*4+0x8], cl: bedfd9d551f150b7
+shl byte ptr gs:[rsi*4+0x8], cl: fdeb0b81003ab3c7
+shl byte ptr [rsi*8+0x8], cl: bc21c4667bbbb93b
+shl byte ptr fs:[rsi*8+0x8], cl: afe96d4a3e186303
+shl byte ptr gs:[rsi*8+0x8], cl: 6a2bca535e0b9b1f
+shl byte ptr [0x1800010], cl: 15000c236fd29b17
+shl byte ptr fs:[0x17ff010], cl: 15000c236fd29b17
+shl byte ptr gs:[0x17fe010], cl: 15000c236fd29b17
+shl byte ptr [rip+rcg_mem+16], cl: 15000c236fd29b17
+cmp al, bl; shl al, cl: a05790590e0fc6f8
+add al, bl; shl al, cl: efacd99576e54515
+test al, bl; shl al, cl: dac2c8b97d013c4e
+inc al; shl al, cl: bacda308f4197f78
+dec al; shl al, cl: c5cb2a7c8b54f061
+mov ah, 0xd5; sahf; shl al, cl: 465eecda486df3bb
+imul rax, rbx; shl al, cl: fc2de486aff76bbd
+shl cl, cl: a919abe43ee23eda
 shl ax, 1: 3c78448c2af28c05
 shl ax, 2: d10205a41d288adf
 shl ax, 7: cf14286a29d51059
@@ -5029,6 +5070,49 @@ shl word ptr gs:[0x17fe010], 3: 11d06607fd4365e9
 shl word ptr [rbx+8], 1: b171e2cdd663d2f
 shl word ptr [rbx+8], 1: cbc495fa943b1333
 shl word ptr [rip+rcg_mem+16], 1: 7f5d31f9b1112b3d
+shl bx, cl: 32c820be26352def
+shl r10w, cl: 171387b699e08f17
+shl word ptr [rbx+8], cl: 410b792cef748527
+shl word ptr fs:[rbx+8], cl: 3f594d2fd5093233
+shl word ptr gs:[rbx+8], cl: 9d9a737fff3fef93
+shl word ptr [rbx+rsi*1+8], cl: 402c3f5521e3ff8f
+shl word ptr fs:[rbx+rsi*1+8], cl: ad66047d70d27bbb
+shl word ptr gs:[rbx+rsi*1+8], cl: c10e5d13986e1adb
+shl word ptr [rbx+rsi*2+8], cl: 124a6b058acfb337
+shl word ptr fs:[rbx+rsi*2+8], cl: 6a80281a1a332913
+shl word ptr gs:[rbx+rsi*2+8], cl: d4e52b42755f24b3
+shl word ptr [rbx+rsi*4+8], cl: 55eef3067934704f
+shl word ptr fs:[rbx+rsi*4+8], cl: fb3bdb5d50250c2b
+shl word ptr gs:[rbx+rsi*4+8], cl: ff00386923f3cd2b
+shl word ptr [rbx+rsi*8+8], cl: 8d921e62ef19f9af
+shl word ptr fs:[rbx+rsi*8+8], cl: b3f5b972e2bffbb
+shl word ptr gs:[rbx+rsi*8+8], cl: e728b2cbbb43249b
+shl word ptr [rsi*1+0x8], cl: 706a335971610aef
+shl word ptr fs:[rsi*1+0x8], cl: 43df35a304c4ec1b
+shl word ptr gs:[rsi*1+0x8], cl: 13481029a0c771fb
+shl word ptr [rsi*2+0x8], cl: 9e20ef22d891dd07
+shl word ptr fs:[rsi*2+0x8], cl: 8bb27a178e749b3
+shl word ptr gs:[rsi*2+0x8], cl: 94edb0fd6bc7d8d3
+shl word ptr [rsi*4+0x8], cl: e88f143909b7f077
+shl word ptr fs:[rsi*4+0x8], cl: d255655ea303718b
+shl word ptr gs:[rsi*4+0x8], cl: 72b1fedc15de761b
+shl word ptr [rsi*8+0x8], cl: 3e620af1234b8dff
+shl word ptr fs:[rsi*8+0x8], cl: c38606fcfa9daab3
+shl word ptr gs:[rsi*8+0x8], cl: 24992924ca4069d3
+shl word ptr [0x1800010], cl: a75f9f8e6e58bbc7
+shl word ptr fs:[0x17ff010], cl: a75f9f8e6e58bbc7
+shl word ptr gs:[0x17fe010], cl: a75f9f8e6e58bbc7
+shl word ptr [rbx+8], cl: 1fe2dd594577314b
+shl word ptr [rbx+8], cl: a3dfbe98d1291ac3
+shl word ptr [rip+rcg_mem+16], cl: a75f9f8e6e58bbc7
+cmp ax, bx; shl ax, cl: de7728779e2703cd
+add ax, bx; shl ax, cl: 2c9aa979385b8b8f
+test ax, bx; shl ax, cl: c6b848516bd2d8a9
+inc ax; shl ax, cl: 390728c26deb8c4a
+dec ax; shl ax, cl: 42ce021d6196f780
+mov ah, 0xd5; sahf; shl ax, cl: de114248ca2223f1
+imul rax, rbx; shl ax, cl: de89b448c97ffc19
+shl cx, cl: baf57fd7fb20f6c2
 shl eax, 1: 91e1c8591a62ad63
 shl eax, 2: 78dcafe19b25b41d
 shl eax, 7: ecd7a4b055501c1f
@@ -5095,6 +5179,49 @@ shl dword ptr gs:[0x17fe010], 3: 654b6da30acaeef7
 shl dword ptr [rbx+8], 1: ee3848213185b341
 shl dword ptr [rbx+8], 1: bb17214e3b5643d5
 shl dword ptr [rip+rcg_mem+16], 1: 2866ff3ec98de2b3
+shl ebx, cl: b95c7c378da7c20b
+shl r10d, cl: 30d6f7fa3bd0c583
+shl dword ptr [rbx+8], cl: 48d06adc1db08910
+shl dword ptr fs:[rbx+8], cl: 46b38becc936f680
+shl dword ptr gs:[rbx+8], cl: 48e0382af1c79400
+shl dword ptr [rbx+rsi*1+8], cl: 696e976279e236fc
+shl dword ptr fs:[rbx+rsi*1+8], cl: 5f32d053e52057f4
+shl dword ptr gs:[rbx+rsi*1+8], cl: 5a97805ba97f6dd4
+shl dword ptr [rbx+rsi*2+8], cl: c0c2054e17566fc8
+shl dword ptr fs:[rbx+rsi*2+8], cl: 4fe9c30a754c8de0
+shl dword ptr gs:[rbx+rsi*2+8], cl: d71cdff6517da800
+shl dword ptr [rbx+rsi*4+8], cl: abdd48df7996ea40
+shl dword ptr fs:[rbx+rsi*4+8], cl: c539ef41007b4150
+shl dword ptr gs:[rbx+rsi*4+8], cl: e764fb02d4c73fd0
+shl dword ptr [rbx+rsi*8+8], cl: c7ad5a8c2879ca40
+shl dword ptr fs:[rbx+rsi*8+8], cl: 726be42f63f27510
+shl dword ptr gs:[rbx+rsi*8+8], cl: cc3fc106d6e51fd0
+shl dword ptr [rsi*1+0x8], cl: cb309f3edd5ae9f0
+shl dword ptr fs:[rsi*1+0x8], cl: 6c6092352f99a570
+shl dword ptr gs:[rsi*1+0x8], cl: cb33fd9ca9453dd0
+shl dword ptr [rsi*2+0x8], cl: a7b27fe6b3b2c970
+shl dword ptr fs:[rsi*2+0x8], cl: 9e39c21dc45003f8
+shl dword ptr gs:[rsi*2+0x8], cl: be791fcc7520aa88
+shl dword ptr [rsi*4+0x8], cl: 527ca9bfd6cbd934
+shl dword ptr fs:[rsi*4+0x8], cl: aae562a1ee58bf54
+shl dword ptr gs:[rsi*4+0x8], cl: fc9bfbb3323eee44
+shl dword ptr [rsi*8+0x8], cl: 6e88476b643ec770
+shl dword ptr fs:[rsi*8+0x8], cl: aeb8ea3b8559cc80
+shl dword ptr gs:[rsi*8+0x8], cl: 4bc8d947f5cbef70
+shl dword ptr [0x1800010], cl: 2717e033b5d8bf98
+shl dword ptr fs:[0x17ff010], cl: 2717e033b5d8bf98
+shl dword ptr gs:[0x17fe010], cl: 2717e033b5d8bf98
+shl dword ptr [rbx+8], cl: 8ccd4d8ae5d99db2
+shl dword ptr [rbx+8], cl: 3b8273cd66f9fbe
+shl dword ptr [rip+rcg_mem+16], cl: 2717e033b5d8bf98
+cmp eax, ebx; shl eax, cl: 6edd2119b58c079a
+add eax, ebx; shl eax, cl: e0fe8c554d076b66
+test eax, ebx; shl eax, cl: 4ff1c060fc2eb709
+inc eax; shl eax, cl: 1e91ea93ef0c62fb
+dec eax; shl eax, cl: 356519a3949996a
+mov ah, 0xd5; sahf; shl eax, cl: 124823923977052b
+imul rax, rbx; shl eax, cl: 4d014f1538e710d7
+shl ecx, cl: 10632b4349a1e4d
 shl rax, 1: 3df45308f6a13cb1
 shl rax, 2: 9e443ffac74c4fcf
 shl rax, 7: 45c919d00156988d
@@ -5161,6 +5288,49 @@ shl qword ptr gs:[0x17fe010], 3: 2555f1246ad3eb4d
 shl qword ptr [rbx+8], 1: 6f0e9e4af41ba603
 shl qword ptr [rbx+8], 1: 62ec4cd3b5975883
 shl qword ptr [rip+rcg_mem+16], 1: 99dd497f8fcf0c5d
+shl rbx, cl: 1ebda4465485bfdf
+shl r10, cl: 1f9a09b74f32532f
+shl qword ptr [rbx+8], cl: ca9893d2a21b8ae4
+shl qword ptr fs:[rbx+8], cl: b48d46ae2fd3f4cc
+shl qword ptr gs:[rbx+8], cl: 6c8a74242659c68c
+shl qword ptr [rbx+rsi*1+8], cl: 5547676234b30b90
+shl qword ptr fs:[rbx+rsi*1+8], cl: c22100ad7e15a0d0
+shl qword ptr gs:[rbx+rsi*1+8], cl: 61ec11377d462270
+shl qword ptr [rbx+rsi*2+8], cl: fc3c8739114f566c
+shl qword ptr fs:[rbx+rsi*2+8], cl: 84d40f5e817a73b4
+shl qword ptr gs:[rbx+rsi*2+8], cl: cab14f5ec9b8dad4
+shl qword ptr [rbx+rsi*4+8], cl: af389945e7ed3064
+shl qword ptr fs:[rbx+rsi*4+8], cl: 5716924f005df1c4
+shl qword ptr gs:[rbx+rsi*4+8], cl: 885e92da166ee824
+shl qword ptr [rbx+rsi*8+8], cl: 7a82928f251a0f24
+shl qword ptr fs:[rbx+rsi*8+8], cl: eebefa04ac99a844
+shl qword ptr gs:[rbx+rsi*8+8], cl: 8adb6e031d1f984
+shl qword ptr [rsi*1+0x8], cl: 652133589b5d6724
+shl qword ptr fs:[rsi*1+0x8], cl: 1fb80bf6add2dddc
+shl qword ptr gs:[rsi*1+0x8], cl: 59eb9b23df97281c
+shl qword ptr [rsi*2+0x8], cl: b35af8763ce50954
+shl qword ptr fs:[rsi*2+0x8], cl: a87760de417d4a34
+shl qword ptr gs:[rsi*2+0x8], cl: 21272d041c80d4d4
+shl qword ptr [rsi*4+0x8], cl: 9b629682bf8b4140
+shl qword ptr fs:[rsi*4+0x8], cl: ba11e5ae9266e878
+shl qword ptr gs:[rsi*4+0x8], cl: d16f077b433d6da8
+shl qword ptr [rsi*8+0x8], cl: 8750810927785b54
+shl qword ptr fs:[rsi*8+0x8], cl: 2f9e39be5e3a4c64
+shl qword ptr gs:[rsi*8+0x8], cl: d6ac793a068d80b4
+shl qword ptr [0x1800010], cl: 9a516648977624ec
+shl qword ptr fs:[0x17ff010], cl: 9a516648977624ec
+shl qword ptr gs:[0x17fe010], cl: 9a516648977624ec
+shl qword ptr [rbx+8], cl: 94eb89c976dc954e
+shl qword ptr [rbx+8], cl: 9993546e8651982
+shl qword ptr [rip+rcg_mem+16], cl: 9a516648977624ec
+cmp rax, rbx; shl rax, cl: 16b5712e2a5c8e0d
+add rax, rbx; shl rax, cl: b9473371c967f3c7
+test rax, rbx; shl rax, cl: cd41a45a0654ea9
+inc rax; shl rax, cl: 750a72f955b7b5dd
+dec rax; shl rax, cl: d2a9e0b197273c63
+mov ah, 0xd5; sahf; shl rax, cl: 317e973bf8b3a490
+imul rax, rbx; shl rax, cl: b1d80f65ebbb168f
+shl rcx, cl: eeda0a0245c76609
 shr al, 1: ea663bbdeafff0f5
 shr al, 2: a5b3aecef2323ca6
 shr al, 7: 32095e395b1afa90
@@ -5226,6 +5396,47 @@ shr byte ptr [0x1800010], 3: bc602d13179f8034
 shr byte ptr fs:[0x17ff010], 3: bc602d13179f8034
 shr byte ptr gs:[0x17fe010], 3: bc602d13179f8034
 shr byte ptr [rip+rcg_mem+16], 1: 9a994768ce0ceab1
+shr bl, cl: 51a026c08e6ee7e0
+shr r10b, cl: 1e814775c7503f8
+shr byte ptr [rbx+8], cl: a9ac6fda6da24b2e
+shr byte ptr fs:[rbx+8], cl: 14ce33fe3355e5e6
+shr byte ptr gs:[rbx+8], cl: f95738ae2b25ae26
+shr byte ptr [rbx+rsi*1+8], cl: b576fcffac61ddae
+shr byte ptr fs:[rbx+rsi*1+8], cl: 5faea5805e40383e
+shr byte ptr gs:[rbx+rsi*1+8], cl: 93cc07b5b134c69e
+shr byte ptr [rbx+rsi*2+8], cl: 1dcfe0636fbc5db2
+shr byte ptr fs:[rbx+rsi*2+8], cl: 81b46c0b288c7782
+shr byte ptr gs:[rbx+rsi*2+8], cl: 15bc89ff5523cc62
+shr byte ptr [rbx+rsi*4+8], cl: 7728fcbac307ccda
+shr byte ptr fs:[rbx+rsi*4+8], cl: c5b82d9fd34a99a
+shr byte ptr gs:[rbx+rsi*4+8], cl: b77fbe4584e0b0fa
+shr byte ptr [rbx+rsi*8+8], cl: c2b84f112c50e5da
+shr byte ptr fs:[rbx+rsi*8+8], cl: 389060e474fa41ea
+shr byte ptr gs:[rbx+rsi*8+8], cl: f894a8c48c3b5c6a
+shr byte ptr [rsi*1+0x8], cl: a081ea0d8ba0493e
+shr byte ptr fs:[rsi*1+0x8], cl: 30ea58186269c1e6
+shr byte ptr gs:[rsi*1+0x8], cl: bc9f418a738c20a6
+shr byte ptr [rsi*2+0x8], cl: d962c63dea3cd2ca
+shr byte ptr fs:[rsi*2+0x8], cl: 1088f3f828aadb96
+shr byte ptr gs:[rsi*2+0x8], cl: 8308633b28076ff6
+shr byte ptr [rsi*4+0x8], cl: dac88d67cf88b626
+shr byte ptr fs:[rsi*4+0x8], cl: 963e1eaa1b33aff2
+shr byte ptr gs:[rsi*4+0x8], cl: 93b20dfad92005ba
+shr byte ptr [rsi*8+0x8], cl: 7c2c4f8196e2c12e
+shr byte ptr fs:[rsi*8+0x8], cl: ed624b8e1111a876
+shr byte ptr gs:[rsi*8+0x8], cl: dccad950b9913fca
+shr byte ptr [0x1800010], cl: 8962c7caedb0717a
+shr byte ptr fs:[0x17ff010], cl: 8962c7caedb0717a
+shr byte ptr gs:[0x17fe010], cl: 8962c7caedb0717a
+shr byte ptr [rip+rcg_mem+16], cl: 8962c7caedb0717a
+cmp al, bl; shr al, cl: ac5586dfadd9cac2
+add al, bl; shr al, cl: 5cbb1c806b3fd628
+test al, bl; shr al, cl: bcd62737ffe66e00
+inc al; shr al, cl: afb08e2a61eb0e0c
+dec al; shr al, cl: 2640cf4b247b9a02
+mov ah, 0xd5; sahf; shr al, cl: fa4b444e3fde8693
+imul rax, rbx; shr al, cl: e904c47a288444c9
+shr cl, cl: 75808b144ef32193
 shr ax, 1: fe786d590e38b7c9
 shr ax, 2: fb8f04220868caf4
 shr ax, 7: 595d678e208756c2
@@ -5292,6 +5503,49 @@ shr word ptr gs:[0x17fe010], 3: f9cda95e292d116c
 shr word ptr [rbx+8], 1: 2f1aafe3ef1e6361
 shr word ptr [rbx+8], 1: 756e8d8c864965c9
 shr word ptr [rip+rcg_mem+16], 1: c3af05289843da45
+shr bx, cl: fc339469862bcc81
+shr r10w, cl: 9bb5921f8e4eec79
+shr word ptr [rbx+8], cl: f19af7cd13b4be97
+shr word ptr fs:[rbx+8], cl: 16e83807ab5499b
+shr word ptr gs:[rbx+8], cl: 2669c52c39f971b
+shr word ptr [rbx+rsi*1+8], cl: 11c143ace3b5df13
+shr word ptr fs:[rbx+rsi*1+8], cl: 5703e9e411c55b67
+shr word ptr gs:[rbx+rsi*1+8], cl: f964e55135b8b607
+shr word ptr [rbx+rsi*2+8], cl: 1135b17f6f746a5b
+shr word ptr fs:[rbx+rsi*2+8], cl: e72e893abb30edd7
+shr word ptr gs:[rbx+rsi*2+8], cl: 31c11c0958efe617
+shr word ptr [rbx+rsi*4+8], cl: 83cbab700c50c1a3
+shr word ptr fs:[rbx+rsi*4+8], cl: 35cca2fc5410f47f
+shr word ptr gs:[rbx+rsi*4+8], cl: 2d72bfe420619bbf
+shr word ptr [rbx+rsi*8+8], cl: 4cd4f01a95286de3
+shr word ptr fs:[rbx+rsi*8+8], cl: a1b3bd9f838ffb3f
+shr word ptr gs:[rbx+rsi*8+8], cl: 2795e262cac6909f
+shr word ptr [rsi*1+0x8], cl: a0ed5913b89917b7
+shr word ptr fs:[rsi*1+0x8], cl: 2c278326d91070fb
+shr word ptr gs:[rsi*1+0x8], cl: f4a65015d3add99b
+shr word ptr [rsi*2+0x8], cl: c8b92ac60a719397
+shr word ptr fs:[rsi*2+0x8], cl: cb14d58225ee67ab
+shr word ptr gs:[rsi*2+0x8], cl: 48bf66dad7b9fa2b
+shr word ptr [rsi*4+0x8], cl: 1d51a41f2819c3b7
+shr word ptr fs:[rsi*4+0x8], cl: e42e5b4163356413
+shr word ptr gs:[rsi*4+0x8], cl: 59c2c41ea6c7d4b
+shr word ptr [rsi*8+0x8], cl: 7d3e983e3f824f57
+shr word ptr fs:[rsi*8+0x8], cl: 6a589ef1cc322b17
+shr word ptr gs:[rsi*8+0x8], cl: 4fd30454cb5a7403
+shr word ptr [0x1800010], cl: 5ae80a75d45d0ceb
+shr word ptr fs:[0x17ff010], cl: 5ae80a75d45d0ceb
+shr word ptr gs:[0x17fe010], cl: 5ae80a75d45d0ceb
+shr word ptr [rbx+8], cl: fbc823ef9f79512d
+shr word ptr [rbx+8], cl: bc6abc819866740d
+shr word ptr [rip+rcg_mem+16], cl: 5ae80a75d45d0ceb
+cmp ax, bx; shr ax, cl: ff53ee50cc696fa7
+add ax, bx; shr ax, cl: 12573a1e943b1614
+test ax, bx; shr ax, cl: 57930cc5f0becc1b
+inc ax; shr ax, cl: 2ea0d6f4b8039e04
+dec ax; shr ax, cl: 377b986e297fd8f7
+mov ah, 0xd5; sahf; shr ax, cl: 6741db1b4b0d69c9
+imul rax, rbx; shr ax, cl: ef2837dbe0c27235
+shr cx, cl: f16098302823790e
 shr eax, 1: 169359fa182eedeb
 shr eax, 2: b97c816a87eeb6a
 shr eax, 7: 34f746c58ae4bd88
@@ -5358,6 +5612,49 @@ shr dword ptr gs:[0x17fe010], 3: 1f5e56410f9a3a0a
 shr dword ptr [rbx+8], 1: 653f22a9d3c8f387
 shr dword ptr [rbx+8], 1: fb5fba85d4912a7
 shr dword ptr [rip+rcg_mem+16], 1: eba38e0372a38167
+shr ebx, cl: 6baf285c43a43399
+shr r10d, cl: 958f6ae71fea4bf9
+shr dword ptr [rbx+8], cl: d2c3aa9e3c102836
+shr dword ptr fs:[rbx+8], cl: f9488cb9388d70e6
+shr dword ptr gs:[rbx+8], cl: 422848bd853bcf86
+shr dword ptr [rbx+rsi*1+8], cl: 492f99eb6b83fff6
+shr dword ptr fs:[rbx+rsi*1+8], cl: 787a6fd88185c596
+shr dword ptr gs:[rbx+rsi*1+8], cl: ae88f702508f5e36
+shr dword ptr [rbx+rsi*2+8], cl: f32f25c690f6d24a
+shr dword ptr fs:[rbx+rsi*2+8], cl: 5a52f980c990d792
+shr dword ptr gs:[rbx+rsi*2+8], cl: 9e40f2e43b5b0f2
+shr dword ptr [rbx+rsi*4+8], cl: aed1467a7ba89482
+shr dword ptr fs:[rbx+rsi*4+8], cl: 5fb8b9e253ec1b4a
+shr dword ptr gs:[rbx+rsi*4+8], cl: 6c5b3c5abb6ae3aa
+shr dword ptr [rbx+rsi*8+8], cl: de4ce54f0893edc2
+shr dword ptr fs:[rbx+rsi*8+8], cl: 1177354fe64ca87a
+shr dword ptr gs:[rbx+rsi*8+8], cl: a5b8883892dbbda
+shr dword ptr [rsi*1+0x8], cl: 7eda8d37308790be
+shr dword ptr fs:[rsi*1+0x8], cl: fdd7e05098e1495e
+shr dword ptr gs:[rsi*1+0x8], cl: e889444c9d4ddcbe
+shr dword ptr [rsi*2+0x8], cl: 8cfcba037142b176
+shr dword ptr fs:[rsi*2+0x8], cl: 7fa2e397e0c5bafe
+shr dword ptr gs:[rsi*2+0x8], cl: 78b836f6091291e
+shr dword ptr [rsi*4+0x8], cl: 30bda75bb1dfc66a
+shr dword ptr fs:[rsi*4+0x8], cl: 759cf550d7e90022
+shr dword ptr gs:[rsi*4+0x8], cl: 52adb9369af28aba
+shr dword ptr [rsi*8+0x8], cl: 6c6f929ab6aa967e
+shr dword ptr fs:[rsi*8+0x8], cl: de31b6e41936dab2
+shr dword ptr gs:[rsi*8+0x8], cl: 3e07e838a2d95c3e
+shr dword ptr [0x1800010], cl: 8212b720141ebc7a
+shr dword ptr fs:[0x17ff010], cl: 8212b720141ebc7a
+shr dword ptr gs:[0x17fe010], cl: 8212b720141ebc7a
+shr dword ptr [rbx+8], cl: 3d4fab4d175cfdf6
+shr dword ptr [rbx+8], cl: 3b66f00f5412da9e
+shr dword ptr [rip+rcg_mem+16], cl: 8212b720141ebc7a
+cmp eax, ebx; shr eax, cl: ca9c5be1ca13e328
+add eax, ebx; shr eax, cl: 88e962a42f2dbd68
+test eax, ebx; shr eax, cl: dde9b6ac1b1d7f0f
+inc eax; shr eax, cl: ff420c406c2128bc
+dec eax; shr eax, cl: 89da57741969fda7
+mov ah, 0xd5; sahf; shr eax, cl: 9a1a2101fb361091
+imul rax, rbx; shr eax, cl: f5584870d4f397a6
+shr ecx, cl: b267fe1a2650f81b
 shr rax, 1: 20426b8b0fdff4b9
 shr rax, 2: d2cb6babec590ce4
 shr rax, 7: fb0c68257397688a
@@ -5424,6 +5721,49 @@ shr qword ptr gs:[0x17fe010], 3: a9ceb01cf1c180ac
 shr qword ptr [rbx+8], 1: 712ae84407995d61
 shr qword ptr [rbx+8], 1: 1b65bfcea5e1d151
 shr qword ptr [rip+rcg_mem+16], 1: 5fb60f8125965a05
+shr rbx, cl: ff0e639eeb673a4b
+shr r10, cl: d3a07cef50c34e3
+shr qword ptr [rbx+8], cl: d80ab062a2adfc5d
+shr qword ptr fs:[rbx+8], cl: 124324642ef6b38d
+shr qword ptr gs:[rbx+8], cl: 5414f28f6e63be2d
+shr qword ptr [rbx+rsi*1+8], cl: 5925471dceeec615
+shr qword ptr fs:[rbx+rsi*1+8], cl: 25ff0d3923f1442d
+shr qword ptr gs:[rbx+rsi*1+8], cl: 6cf0c58f98d8e72d
+shr qword ptr [rbx+rsi*2+8], cl: 90caf8920675f0e1
+shr qword ptr fs:[rbx+rsi*2+8], cl: 3f91bd507aa0a209
+shr qword ptr gs:[rbx+rsi*2+8], cl: 9fd16f0ff76a4409
+shr qword ptr [rbx+rsi*4+8], cl: 71e886c4c399f209
+shr qword ptr fs:[rbx+rsi*4+8], cl: d14569333ae7bee9
+shr qword ptr gs:[rbx+rsi*4+8], cl: e63f7609abf38409
+shr qword ptr [rbx+rsi*8+8], cl: 7bc45eca87527109
+shr qword ptr fs:[rbx+rsi*8+8], cl: 13399a3ef0126ea9
+shr qword ptr gs:[rbx+rsi*8+8], cl: c754aca9ecbfbce9
+shr qword ptr [rsi*1+0x8], cl: 51e444ea353bb9c5
+shr qword ptr fs:[rsi*1+0x8], cl: 4aa8a9c9a7e52c85
+shr qword ptr gs:[rsi*1+0x8], cl: fe31f42b1cf2e0c5
+shr qword ptr [rsi*2+0x8], cl: 8df3e8c82bba77c5
+shr qword ptr fs:[rsi*2+0x8], cl: 3c957e026d3f38d5
+shr qword ptr gs:[rsi*2+0x8], cl: 3352caff9a5fd3e5
+shr qword ptr [rsi*4+0x8], cl: 372ec74bf3a4d2b9
+shr qword ptr fs:[rsi*4+0x8], cl: aaa8c30673d52761
+shr qword ptr gs:[rsi*4+0x8], cl: cc4fa2bda8f28921
+shr qword ptr [rsi*8+0x8], cl: d91f0ae8797e5155
+shr qword ptr fs:[rsi*8+0x8], cl: 9c93136416de45a1
+shr qword ptr gs:[rsi*8+0x8], cl: 700bb705ee7d6925
+shr qword ptr [0x1800010], cl: cfe6951957c617b1
+shr qword ptr fs:[0x17ff010], cl: cfe6951957c617b1
+shr qword ptr gs:[0x17fe010], cl: cfe6951957c617b1
+shr qword ptr [rbx+8], cl: fcdf5d4c9d4b66b3
+shr qword ptr [rbx+8], cl: 86d3bd53f5c4b5cb
+shr qword ptr [rip+rcg_mem+16], cl: cfe6951957c617b1
+cmp rax, rbx; shr rax, cl: 9bbfe9d5b97a7d49
+add rax, rbx; shr rax, cl: 1779aef8d4d09f54
+test rax, rbx; shr rax, cl: e35e82fc813c9335
+inc rax; shr rax, cl: eb8c30157a585b18
+dec rax; shr rax, cl: f25e0c1cc9757b33
+mov ah, 0xd5; sahf; shr rax, cl: c0787b41ba71040
+imul rax, rbx; shr rax, cl: b55f508336b8b4f2
+shr rcx, cl: 1626b24c5d80759c
 sar al, 1: 6a5f05dc964501b3
 sar al, 2: c283043cff66bbcc
 sar al, 7: da1bbf53a4c02a46
@@ -5489,6 +5829,47 @@ sar byte ptr [0x1800010], 3: 249d9eff8f97a5c
 sar byte ptr fs:[0x17ff010], 3: 249d9eff8f97a5c
 sar byte ptr gs:[0x17fe010], 3: 249d9eff8f97a5c
 sar byte ptr [rip+rcg_mem+16], 1: 7fe29c187bde2447
+sar bl, cl: 397b707cf18d55d6
+sar r10b, cl: 8151bf2b9b30aba6
+sar byte ptr [rbx+8], cl: b9e8ecfb5d93a486
+sar byte ptr fs:[rbx+8], cl: 6a7a737e2d3f17ce
+sar byte ptr gs:[rbx+8], cl: c9ce383ecb631f0e
+sar byte ptr [rbx+rsi*1+8], cl: 82e4e5f8bc6dea5e
+sar byte ptr fs:[rbx+rsi*1+8], cl: f11ef744011aec8e
+sar byte ptr gs:[rbx+rsi*1+8], cl: fa7b4c87de58566e
+sar byte ptr [rbx+rsi*2+8], cl: 100f6f681d4d4ca
+sar byte ptr fs:[rbx+rsi*2+8], cl: 1bd9f232d96fd74a
+sar byte ptr gs:[rbx+rsi*2+8], cl: c2fec9eec1b9e72a
+sar byte ptr [rbx+rsi*4+8], cl: 65c2c57aba88a7fa
+sar byte ptr fs:[rbx+rsi*4+8], cl: 6502a2cb87f3351a
+sar byte ptr gs:[rbx+rsi*4+8], cl: b1be009b67c3c9da
+sar byte ptr [rbx+rsi*8+8], cl: bcbb43348f8d73fa
+sar byte ptr fs:[rbx+rsi*8+8], cl: fd1fea17d1b7a8da
+sar byte ptr gs:[rbx+rsi*8+8], cl: 9946f11776cc489a
+sar byte ptr [rsi*1+0x8], cl: 40205ecdb93627d6
+sar byte ptr fs:[rsi*1+0x8], cl: c824a4dae48f28ae
+sar byte ptr gs:[rsi*1+0x8], cl: d4bd9573430ba3ee
+sar byte ptr [rsi*2+0x8], cl: f2736e3c71454e9a
+sar byte ptr fs:[rsi*2+0x8], cl: 556ed7e2be6bdc56
+sar byte ptr gs:[rsi*2+0x8], cl: 9671dab250a39166
+sar byte ptr [rsi*4+0x8], cl: ce7834672f13bf3e
+sar byte ptr fs:[rsi*4+0x8], cl: 7bb07dfbf71f0912
+sar byte ptr gs:[rsi*4+0x8], cl: 5a3ada0b94a63882
+sar byte ptr [rsi*8+0x8], cl: ea80eb4904d8ddd6
+sar byte ptr fs:[rsi*8+0x8], cl: dfb82d3e90b1b046
+sar byte ptr gs:[rsi*8+0x8], cl: 3499f1bee508fcaa
+sar byte ptr [0x1800010], cl: 24333511453f921a
+sar byte ptr fs:[0x17ff010], cl: 24333511453f921a
+sar byte ptr gs:[0x17fe010], cl: 24333511453f921a
+sar byte ptr [rip+rcg_mem+16], cl: 24333511453f921a
+cmp al, bl; sar al, cl: d1df754f0becf7d8
+add al, bl; sar al, cl: d62351a008ee1c34
+test al, bl; sar al, cl: 5f90973e491b41c6
+inc al; sar al, cl: d08440ebedd6c6e
+dec al; sar al, cl: 2c31864ffd29b38a
+mov ah, 0xd5; sahf; sar al, cl: fa4b444e3fde8693
+imul rax, rbx; sar al, cl: e904c47a288444c9
+sar cl, cl: fa563a3d85a962ff
 sar ax, 1: 6f2d2e2e39be4a11
 sar ax, 2: cba1c5962e003abe
 sar ax, 7: 2fc1a923013a6202
@@ -5555,6 +5936,49 @@ sar word ptr gs:[0x17fe010], 3: 2f73e8fb0cd843a2
 sar word ptr [rbx+8], 1: 157d6c3f9a2217d9
 sar word ptr [rbx+8], 1: e3ed7605ebb817b1
 sar word ptr [rip+rcg_mem+16], 1: 5c9b3fdc042c812d
+sar bx, cl: ec843c627d255fba
+sar r10w, cl: be4c09ec8ea9a912
+sar word ptr [rbx+8], cl: 86391332941b3197
+sar word ptr fs:[rbx+8], cl: c885cdf253f9c37b
+sar word ptr gs:[rbx+8], cl: b5154dda0a275cbb
+sar word ptr [rbx+rsi*1+8], cl: 1ca1c2edc34760ef
+sar word ptr fs:[rbx+rsi*1+8], cl: ef9ff54dfbdc38c3
+sar word ptr gs:[rbx+rsi*1+8], cl: 26b034599ff07ac3
+sar word ptr [rbx+rsi*2+8], cl: b609929e34f89ad3
+sar word ptr fs:[rbx+rsi*2+8], cl: d19236bad23994cf
+sar word ptr gs:[rbx+rsi*2+8], cl: b2f57f5f6cb07a4f
+sar word ptr [rbx+rsi*4+8], cl: 9909052d367b9633
+sar word ptr fs:[rbx+rsi*4+8], cl: d3c654ec09e99017
+sar word ptr gs:[rbx+rsi*4+8], cl: f1f5d4be19e814d7
+sar word ptr [rbx+rsi*8+8], cl: c56c4b02ae2f05d3
+sar word ptr fs:[rbx+rsi*8+8], cl: 95ec6581e1f53ee7
+sar word ptr gs:[rbx+rsi*8+8], cl: 5294545a87f975a7
+sar word ptr [rsi*1+0x8], cl: 1b6635ce34014cd7
+sar word ptr fs:[rsi*1+0x8], cl: ca3fd28da718132b
+sar word ptr gs:[rsi*1+0x8], cl: 57fecc91046fdd4b
+sar word ptr [rsi*2+0x8], cl: f6edd46251af1ba7
+sar word ptr fs:[rsi*2+0x8], cl: 1c629b4bc5c95103
+sar word ptr gs:[rsi*2+0x8], cl: be929920805b0fc3
+sar word ptr [rsi*4+0x8], cl: 6dfe762c40436123
+sar word ptr fs:[rsi*4+0x8], cl: 6255ab7c9d38dfb7
+sar word ptr gs:[rsi*4+0x8], cl: a514a67bfd05cd5f
+sar word ptr [rsi*8+0x8], cl: e5b7850d27055247
+sar word ptr fs:[rsi*8+0x8], cl: 83c98c4f39d9ec87
+sar word ptr gs:[rsi*8+0x8], cl: b213f7dabacd2c9b
+sar word ptr [0x1800010], cl: e2e0bfcc42872ed3
+sar word ptr fs:[0x17ff010], cl: e2e0bfcc42872ed3
+sar word ptr gs:[0x17fe010], cl: e2e0bfcc42872ed3
+sar word ptr [rbx+8], cl: adf1e8ed26a22c3
+sar word ptr [rbx+8], cl: 74fdaf272924e3bf
+sar word ptr [rip+rcg_mem+16], cl: e2e0bfcc42872ed3
+cmp ax, bx; sar ax, cl: 1fb649d83f686e14
+add ax, bx; sar ax, cl: 8b5c0bf1a442a608
+test ax, bx; sar ax, cl: 1534516159675278
+inc ax; sar ax, cl: 802b672fe837df9f
+dec ax; sar ax, cl: ddbfdc779b3898a0
+mov ah, 0xd5; sahf; sar ax, cl: 59b4722b28c85252
+imul rax, rbx; sar ax, cl: 5f577609074aef1a
+sar cx, cl: af1188241e1262aa
 sar eax, 1: cbb462d6b2bf32f3
 sar eax, 2: b1597b8392a75198
 sar eax, 7: cb628c600958f800
@@ -5621,6 +6045,49 @@ sar dword ptr gs:[0x17fe010], 3: 5c8e7226c1a7e738
 sar dword ptr [rbx+8], 1: 7f4de25bc382f30f
 sar dword ptr [rbx+8], 1: b0f18de385bed51f
 sar dword ptr [rip+rcg_mem+16], 1: 5914fb669bd81c0f
+sar ebx, cl: eda17c0f194d0d80
+sar r10d, cl: 6f210885b70b2a28
+sar dword ptr [rbx+8], cl: fc9b6157616cf1ce
+sar dword ptr fs:[rbx+8], cl: b2c5f88cb20b5db2
+sar dword ptr gs:[rbx+8], cl: ad3526eddad5d032
+sar dword ptr [rbx+rsi*1+8], cl: ec9ca982f9f01386
+sar dword ptr fs:[rbx+rsi*1+8], cl: fdb9317c7f3f8cb2
+sar dword ptr gs:[rbx+rsi*1+8], cl: 9ac5543fcc023072
+sar dword ptr [rbx+rsi*2+8], cl: e61a50df66f5737a
+sar dword ptr fs:[rbx+rsi*2+8], cl: 83199803e4badd3e
+sar dword ptr gs:[rbx+rsi*2+8], cl: d429611f73b46a3e
+sar dword ptr [rbx+rsi*4+8], cl: 4cc70b4074f013ea
+sar dword ptr fs:[rbx+rsi*4+8], cl: 91eef0bc9142b8b6
+sar dword ptr gs:[rbx+rsi*4+8], cl: 9a5a83ae75dcb0d6
+sar dword ptr [rbx+rsi*8+8], cl: 74e6bd6d9b5ac34a
+sar dword ptr fs:[rbx+rsi*8+8], cl: 4d1095b290a28b06
+sar dword ptr gs:[rbx+rsi*8+8], cl: d26fde1050009c26
+sar dword ptr [rsi*1+0x8], cl: 849449a74e013ab6
+sar dword ptr fs:[rsi*1+0x8], cl: e9afff7a47e2a3ba
+sar dword ptr gs:[rsi*1+0x8], cl: 4b41fd1a4ba9d7ba
+sar dword ptr [rsi*2+0x8], cl: f3555d8aa323bf52
+sar dword ptr fs:[rsi*2+0x8], cl: fa460ae537ddd102
+sar dword ptr gs:[rsi*2+0x8], cl: e790604869013e82
+sar dword ptr [rsi*4+0x8], cl: 478055c023b903fe
+sar dword ptr fs:[rsi*4+0x8], cl: 947e47ee1b81ab9e
+sar dword ptr gs:[rsi*4+0x8], cl: 34ecb26b1f850b1e
+sar dword ptr [rsi*8+0x8], cl: 80ec0e93b7863a6
+sar dword ptr fs:[rsi*8+0x8], cl: fd69cd4e1ff9a34a
+sar dword ptr gs:[rsi*8+0x8], cl: 298074177c4f266
+sar dword ptr [0x1800010], cl: b978b44de62bcfd2
+sar dword ptr fs:[0x17ff010], cl: b978b44de62bcfd2
+sar dword ptr gs:[0x17fe010], cl: b978b44de62bcfd2
+sar dword ptr [rbx+8], cl: 72645deb9f8080da
+sar dword ptr [rbx+8], cl: 3a9f707c1ca8ef3a
+sar dword ptr [rip+rcg_mem+16], cl: b978b44de62bcfd2
+cmp eax, ebx; sar eax, cl: 11aeaf543d607171
+add eax, ebx; sar eax, cl: 9db9b54d736bcfc
+test eax, ebx; sar eax, cl: a297741153516442
+inc eax; sar eax, cl: d7ae5db0c65e35a5
+dec eax; sar eax, cl: 3a3c234758f11c7b
+mov ah, 0xd5; sahf; sar eax, cl: 9a1a2101fb361091
+imul rax, rbx; sar eax, cl: f5584870d4f397a6
+sar ecx, cl: 4b0f75ba2d15310b
 sar rax, 1: 755ac0d4cf0419b1
 sar rax, 2: bb256ecb720bc3a2
 sar rax, 7: e45bc896c991522a
@@ -5687,6 +6154,49 @@ sar qword ptr gs:[0x17fe010], 3: fbc93e92477f13ca
 sar qword ptr [rbx+8], 1: f8b0cb1a3d99bac9
 sar qword ptr [rbx+8], 1: f031b2af3318a399
 sar qword ptr [rip+rcg_mem+16], 1: 295af9dbd8cb5d6d
+sar rbx, cl: 1eb4134e1cf92cde
+sar r10, cl: 859c953a1acec51e
+sar qword ptr [rbx+8], cl: 4ad95766da547ad8
+sar qword ptr fs:[rbx+8], cl: b9106f2213a4968
+sar qword ptr gs:[rbx+8], cl: 1bef1fd320aa9dc8
+sar qword ptr [rbx+rsi*1+8], cl: 7a1fdeab4d32b418
+sar qword ptr fs:[rbx+rsi*1+8], cl: ed3fdfec19052de8
+sar qword ptr gs:[rbx+rsi*1+8], cl: 4c794eb5056f3c08
+sar qword ptr [rbx+rsi*2+8], cl: efdd26ec9327768c
+sar qword ptr fs:[rbx+rsi*2+8], cl: 2cfc367d3c9f5694
+sar qword ptr gs:[rbx+rsi*2+8], cl: 5df45464b17fa774
+sar qword ptr [rbx+rsi*4+8], cl: 7b7bc48435d46924
+sar qword ptr fs:[rbx+rsi*4+8], cl: 877068d42872db84
+sar qword ptr gs:[rbx+rsi*4+8], cl: 28b03be14f8b38e4
+sar qword ptr [rbx+rsi*8+8], cl: 38b3fbd3ab47cca4
+sar qword ptr fs:[rbx+rsi*8+8], cl: 3c988cc5d5589494
+sar qword ptr gs:[rbx+rsi*8+8], cl: 7c7a59b1b0a67434
+sar qword ptr [rsi*1+0x8], cl: 9b8aa4f8e48af120
+sar qword ptr fs:[rsi*1+0x8], cl: 126d74812d3fd90
+sar qword ptr gs:[rsi*1+0x8], cl: 6f3c36cc42a1ead0
+sar qword ptr [rsi*2+0x8], cl: edd2855ff670748
+sar qword ptr fs:[rsi*2+0x8], cl: 3b4c470f40d7c358
+sar qword ptr gs:[rsi*2+0x8], cl: 29b617f69a5865d8
+sar qword ptr [rsi*4+0x8], cl: 5d838667b427ead4
+sar qword ptr fs:[rsi*4+0x8], cl: 71720df06b0fea4c
+sar qword ptr gs:[rsi*4+0x8], cl: 72d377bf92019a94
+sar qword ptr [rsi*8+0x8], cl: b7f29f539ce68a40
+sar qword ptr fs:[rsi*8+0x8], cl: f277de22baa13e3c
+sar qword ptr gs:[rsi*8+0x8], cl: dd3489b822a2acb0
+sar qword ptr [0x1800010], cl: ca2553fef5bb5b1c
+sar qword ptr fs:[0x17ff010], cl: ca2553fef5bb5b1c
+sar qword ptr gs:[0x17fe010], cl: ca2553fef5bb5b1c
+sar qword ptr [rbx+8], cl: e27e0706ba53998
+sar qword ptr [rbx+8], cl: 74f34eec2e3df724
+sar qword ptr [rip+rcg_mem+16], cl: ca2553fef5bb5b1c
+cmp rax, rbx; sar rax, cl: 41f3bab54e09f488
+add rax, rbx; sar rax, cl: 2021978b074bfa74
+test rax, rbx; sar rax, cl: bdf66b46ad42b968
+inc rax; sar rax, cl: e18af4f19617d245
+dec rax; sar rax, cl: 33e4a5c87d948a32
+mov ah, 0xd5; sahf; sar rax, cl: 9977f209a8bfb379
+imul rax, rbx; sar rax, cl: 5fef29b99461a2f
+sar rcx, cl: 8a5e79fd815a17f1
 rol al, 1: a33855adb64ea472
 rol al, 2: 5a2f861a8282e30c
 rol al, 7: 50226822be86eb96
@@ -10100,6 +10610,9 @@ bswap rax; mov eax, ebx: 74069a732eff1925
 bswap rax; mov rax, rbx: 1d7e43312a427ea5
 bswap rax; xor eax, eax: 203d53e93827d965
 bswap rax; pop rax: 7d7f91f436d62c65
+bswap rcx; shl eax, cl: 4b6d84c2e596e939
+bswap rax; shl eax, cl: e4e4eb92c2c3f461
+add rax, rbx; shl eax, cl: 4cae9fbcb275b181
 bswap rax; mul bl: 34081abb1365a3b1
 bswap rax; mul bx: 7dbc9edea4a79c8f
 bswap rax; imul ebx: 5f27c5c61381fc89

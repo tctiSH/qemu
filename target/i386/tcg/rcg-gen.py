@@ -173,13 +173,22 @@ UNARY_OPS = (Unary("not", None), Unary("neg", "SUB"))
 
 
 class Shift:
-    """ SHL, SHR and SAR by an immediate count (or 1): dest = dest shifted,
-    on the value zero-extended (SAR: sign-extended) from the operand size as
-    TCG's ZExtT0 and SExtT0 load it, with cc_dst the result and cc_src the
-    value shifted by one less, as gen_SHL and friends leave them. The count
-    is a word, which the translator must mask, and a count that masks to 0
-    must be left to TCG: cc_src would be the value shifted by count - 1,
-    that is by -1. """
+    """ SHL, SHR and SAR by an immediate count (or 1), or by CL: dest = dest
+    shifted, on the value zero-extended (SAR: sign-extended) from the
+    operand size as TCG's ZExtT0 and SExtT0 load it, with cc_dst the result
+    and cc_src the value shifted by one less, as gen_SHL and friends leave
+    them.
+
+    An immediate count is a word, which the translator must mask, and a
+    count that masks to 0 must be left to TCG: cc_src would be the value
+    shifted by count - 1, that is by -1. The gadget masks a count in CL
+    itself (forms rr and mr, CL being the source), and where it masks to 0
+    it still writes the operand back but keeps the flags state, as
+    gen_shift_dynamic_flags() does. Which happened is known only when it
+    runs, so the gadget writes cc_op, and the translator must take the
+    state as CC_OP_DYNAMIC after it. The translator gives the state before
+    as the word ccop, which the gadget stores for a count of 0 unless it is
+    CC_OP_DYNAMIC, when env already holds the state. """
 
     def __init__(self, name, a64, cc):
         self.name = name
@@ -406,6 +415,8 @@ class Spec:
                 words.append("imm")
             else:
                 words.append(operand)
+        if self.kind == "shift" and self.form[1] == "r":
+            words.append("ccop")
         if self.accesses_memory:
             words += ["oi", "tlb"]
         return words
@@ -414,9 +425,12 @@ class Spec:
     def cc_op(self):
         """ The CC_OP the gadget leaves, as a C expression, or None if the
         gadget leaves the flags state alone. For ROR the instruction still
-        changes the flags; see ROTATE_OP. """
+        changes the flags; see ROTATE_OP. A shift by CL leaves a state the
+        translator cannot know; see Shift. """
         if self.kind == "zero":
             return "CC_OP_EFLAGS"
+        if self.kind == "shift" and self.form[1] == "r":
+            return "CC_OP_DYNAMIC"
         if self.kind in ("alu", "unary", "shift") and self.op.cc:
             return f"CC_OP_{self.op.cc}B + {MO[self.width]}"
         if self.kind in ("mul", "imul3"):
@@ -469,6 +483,10 @@ def specs():
                 yield from with_memory(Spec("unary", op, form, width))
     for op in SHIFT_OPS:
         for form in ("ri", "mi"):
+            for width in WIDTHS:
+                yield from with_memory(Spec("shift", op, form, width))
+    for op in SHIFT_OPS:
+        for form in ("rr", "mr"):
             for width in WIDTHS:
                 yield from with_memory(Spec("shift", op, form, width))
     for width in ROTATE_WIDTHS:
@@ -1060,7 +1078,7 @@ def shift_body(g, spec):
         g.define(R)
         g.write_reg(R, "d", 64)
         return
-    if spec.form == "mi":
+    if spec.form[0] == "m":
         g.ea(ADDR)
         g.load(A, ADDR, width)
         if op.signed:
@@ -1068,16 +1086,42 @@ def shift_body(g, spec):
     else:
         g.read_reg(A, "d")
         g.extend(A, width, op.signed)
-    count = g.word("imm")
-    g.emit(f"sub {T}, {count}, #1",
-           f"{op.a64} {B}, {A}, {T}",
+    by_cl = spec.form[1] == "r"
+    if by_cl:
+        # The count from CL, masked as x86 masks it.
+        g.read_reg(T, "s")
+        g.emit(f"and {T}, {T}, #{0x3f if width == 64 else 0x1f}")
+        count = T
+    else:
+        count = g.word("imm")
+    g.emit(f"sub {B}, {count}, #1",
+           f"{op.a64} {B}, {A}, {B}",
            f"{op.a64} {R}, {A}, {count}")
     g.define(B, R)
-    if spec.form == "mi":
+    if by_cl:
+        # Kept for after the write, which may use T.
+        g.emit(f"mov {A}, {T}")
+    if spec.form[0] == "m":
         g.store(R, ADDR, width)
     else:
         g.write_reg(R, "d", width)
+    if not by_cl:
+        g.write_cc(dst=R, src=B)
+        return
+    # A count of 0 keeps the flags state, storing cc_op as it was unless
+    # the translator did not know it, in which case env already has it.
+    zero, join = g._labels()
+    old = w(g.word("ccop"))
+    g.emit(f"cbz {A}, {zero}f",
+           f"mov {w(T)}, %[cc_op_{op.cc.lower()}b] + {WIDTHS.index(width)}",
+           f"str {w(T)}, [{g.env}, %[cc_op]]")
     g.write_cc(dst=R, src=B)
+    g.emit(f"{join}:")
+    g.cold += [f"{zero}:",
+               f"cmp {old}, %[cc_op_dynamic]",
+               f"b.eq {join}b",
+               f"str {old}, [{g.env}, %[cc_op]]",
+               f"b {join}b"]
 
 
 def mul_body(g, spec):
@@ -1240,6 +1284,9 @@ BODY_OPERANDS = {
     "eip": "offsetof(CPUX86State, eip)",
     "cc_z_p": "CC_Z | CC_P",
     "cc_op": "offsetof(CPUX86State, cc_op)",
+    "cc_op_shlb": "CC_OP_SHLB",
+    "cc_op_sarb": "CC_OP_SARB",
+    "cc_op_dynamic": "CC_OP_DYNAMIC",
     "cc_s": "CC_S",
     "eflags_0": "CC_O",
     "eflags_1": "CC_C",
@@ -1573,9 +1620,10 @@ def write_table(all_specs, out):
     p(" *")
     p(" * Its lazy flags. cc_op: the CC_OP it leaves, plus the width's MemOp")
     p(" * if by_width; -1 if none, and for ROR, whose CF and OF the")
-    p(" * translator computes. srcT: what the translator puts in cc_srcT")
-    p(" * after it, as gen_SUB and gen_NEG do. dst, src: whether it writes")
-    p(" * cc_dst and cc_src.")
+    p(" * translator computes. After a shift by CL, which writes cc_op, the")
+    p(" * translator records CC_OP_DYNAMIC instead. srcT: what the translator")
+    p(" * puts in cc_srcT after it, as gen_SUB and gen_NEG do. dst, src:")
+    p(" * whether it writes cc_dst and cc_src.")
     p(" */")
     p("typedef struct RCGFacts {")
     p("    RCGKind kind;")
@@ -1855,6 +1903,9 @@ def chain_cases():
                 "mov eax, ebx", "mov rax, rbx", "xor eax, eax", "pop rax"):
         yield Case(f"bswap rax; {use}", 64, a=0, b=3,
                    stack=use.startswith("pop"))
+    # A shift by CL reads RCX and the flags state.
+    for setup in ("bswap rcx", "bswap rax", "add rax, rbx"):
+        yield Case(f"{setup}; shl eax, cl", 64, a=0, b=3)
     # MUL reads RAX, keeps part of it at 8 bits and of RDX at 16, and
     # writes RDX above 8 bits.
     for reg in ("rax", "rdx"):
@@ -2075,6 +2126,38 @@ def shift_cases(op, width):
                        base_value=bv, operand=target, writes=True)
     yield Case(f"{op.name} {rip_relative(width)}, 1", width, mem=True,
                writes=True)
+    yield from shift_cl_cases(op, width)
+
+
+def shift_cl_cases(op, width):
+    """ Shifts by CL, with CL taking every value, so that some counts mask
+    to 0: on registers and memory, and after each lazy-flags state, which a
+    count of 0 keeps. """
+    for n in (3, 10):
+        yield Case(f"{op.name} {reg_name(n, width)}, cl", width, a=n, b=1)
+    for shape in EA_SHAPES:
+        for seg in SEGS:
+            # The index is RSI, as RCX holds the count.
+            text, base, index, bv, iv = memory_operand(width, shape, seg,
+                                                       index=6)
+            yield Case(f"{op.name} {text}, cl", width, b=1, mem=True,
+                       base=base, index=index, base_value=bv, index_value=iv,
+                       writes=True)
+    if width > 8:
+        for target in MISALIGNED:
+            text, base, _, bv, _ = memory_operand(width, "b", None,
+                                                  target=target)
+            yield Case(f"{op.name} {text}, cl", width, b=1, mem=True,
+                       base=base, base_value=bv, operand=target, writes=True)
+    yield Case(f"{op.name} {rip_relative(width)}, cl", width, b=1, mem=True,
+               writes=True)
+    for setters in flag_setters(width).values():
+        yield Case(f"{setters[0]}; {op.name} {reg_name(0, width)}, cl", width,
+                   a=0, b=1)
+    for setter in ("mov ah, 0xd5; sahf", "imul rax, rbx"):
+        yield Case(f"{setter}; {op.name} {reg_name(0, width)}, cl", width,
+                   b=1)
+    yield Case(f"{op.name} {reg_name(1, width)}, cl", width, a=1)
 
 
 def flag_setters(width):
@@ -2220,6 +2303,14 @@ def fault_cases():
             for count in (1, 3):
                 yield mem(f"{op.name} {PTR[width]} ptr [rbx], {count}", width,
                           writes=True)
+    # By CL with RCX as the base: CL is the address's low byte, 0 where the
+    # access starts on the upper page, a count of 0, which still writes.
+    for op in SHIFT_OPS:
+        for width in WIDTHS:
+            yield mem(f"{op.name} {PTR[width]} ptr [rbx], cl", width,
+                      writes=True)
+            yield Case(f"{op.name} {PTR[width]} ptr [rcx], cl", width,
+                       mem=True, base=1, moved=1, writes=True)
     for op in MUL_OPS:
         for width in WIDTHS:
             yield mem(f"{op.name} {PTR[width]} ptr [rbx]", width, a=0)

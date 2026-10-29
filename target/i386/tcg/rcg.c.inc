@@ -139,13 +139,11 @@ static uint64_t rcg_reg(int n)
 }
 
 /*
- * Adds v's temp to list unless it is already there. Each list has room for
+ * Adds g to list unless it is already there. Each list has room for
  * RCG_MAX_WORDS.
  */
-static void rcg_note(TCGTemp **list, unsigned *n, TCGv v)
+static void rcg_note_temp(TCGTemp **list, unsigned *n, TCGTemp *g)
 {
-    TCGTemp *g = tcgv_tl_temp(v);
-
     for (unsigned i = 0; i < *n; i++) {
         if (list[i] == g) {
             return;
@@ -153,6 +151,12 @@ static void rcg_note(TCGTemp **list, unsigned *n, TCGv v)
     }
     tcg_debug_assert(*n < RCG_MAX_WORDS);
     list[(*n)++] = g;
+}
+
+/* The same for v's temp. */
+static void rcg_note(TCGTemp **list, unsigned *n, TCGv v)
+{
+    rcg_note_temp(list, n, tcgv_tl_temp(v));
 }
 
 /* The RCG_CC_* index of lazy-flags state cc_op, or -1 if no gadget reads it. */
@@ -427,14 +431,18 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
     }
     case RCG_KIND_SHIFT: {
         /*
-         * By an immediate count, or 1; a count in CL is left to TCG. So is
-         * a count that masks to 0: TCG then keeps the flags but still
-         * writes the operand back, which zero-extends a 32-bit register.
+         * By an immediate count, or 1, or CL. An immediate that masks to 0
+         * is left to TCG, which then keeps the flags but still writes the
+         * operand back, zero-extending a 32-bit register; a gadget by CL
+         * does the same for a count of 0 itself. ROL and ROR by CL are left
+         * to TCG.
          */
         char a = rcg_kind(s, first);
 
         *ot = first->ot;
-        if (second->unit == X86_OP_IMM) {
+        if (second->unit == X86_OP_INT) {
+            return a && op != RCG_OP_ROR ? rcg_form(a, 'r') : -1;
+        } else if (second->unit == X86_OP_IMM) {
             *imm = second->imm & (*ot <= MO_32 ? 0x1f : 0x3f);
         } else if (second->unit == X86_OP_SKIP) {
             *imm = 1;
@@ -494,7 +502,7 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     const RCGFacts *facts;
     uint64_t imm = 0;
     int form, shape = 0, seg = -1;
-    bool ordered = false, rotate_left = false;
+    bool ordered = false, rotate_left = false, by_cl;
     const RCGSlot *slot;
     const RCGGadget *g;
     uint64_t words[RCG_MAX_WORDS];
@@ -517,6 +525,8 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     if (form < 0) {
         return NULL;
     }
+    /* A shift by CL leaves a flags state only the gadget knows. */
+    by_cl = facts->kind == RCG_KIND_SHIFT && second->unit == X86_OP_INT;
     slot = &rcg_slots[op][form];
     if (!slot->gadgets) {
         return NULL;
@@ -602,6 +612,13 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     if (facts->src) {
         rcg_note(outs, &nb_outs, cpu_cc_src);
     }
+    if (by_cl) {
+        /* With a count of 0 it keeps the flags state, cc_op included. */
+        rcg_note_temp(outs, &nb_outs, tcgv_i32_temp(cpu_cc_op));
+        rcg_note(ins, &nb_ins, cpu_cc_dst);
+        rcg_note(ins, &nb_ins, cpu_cc_src);
+        rcg_note_temp(ins, &nb_ins, tcgv_i32_temp(cpu_cc_op));
+    }
 
     /* The words, in the order the gadget takes them, and what it reads. */
     for (n = 0; n < RCG_MAX_WORDS && g->words[n] != RCG_W_END; n++) {
@@ -655,6 +672,10 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
         case RCG_W_TLB:
             words[n] = TCTI_TLB_FAST_OFS(s->mem_index);
             break;
+        case RCG_W_CCOP:
+            /* The state before, which a shift by CL keeps for a count of 0. */
+            words[n] = s->cc_op;
+            break;
         default:
             g_assert_not_reached();
         }
@@ -678,8 +699,13 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
         s->base.is_jmp = DISAS_JUMP;
     }
 
-    /* Record the lazy-flags state the gadget left. */
-    if (facts->cc_op >= 0) {
+    /*
+     * Record the lazy-flags state the gadget left. After a shift by CL it
+     * is in env, which the gadget wrote.
+     */
+    if (by_cl) {
+        assume_cc_op(s, CC_OP_DYNAMIC);
+    } else if (facts->cc_op >= 0) {
         set_cc_op(s, facts->cc_op + (facts->by_width ? ot : 0));
         if (facts->srcT == RCG_SRCT_SUM) {
             tcg_gen_add_tl(s->cc_srcT, cpu_cc_dst, cpu_cc_src);
