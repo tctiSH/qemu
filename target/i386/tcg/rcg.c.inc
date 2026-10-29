@@ -42,6 +42,9 @@ static const struct {
     { gen_AND,    RCG_OP_AND,   1,  2, X86_SPECIAL_HasLock },
     { gen_OR,     RCG_OP_OR,    1,  2, X86_SPECIAL_HasLock },
     { gen_XOR,    RCG_OP_XOR,   1,  2, X86_SPECIAL_HasLock },
+    /* ADC and SBB also read CF, which rcg_emit() puts in cc_src2. */
+    { gen_ADC,    RCG_OP_ADC,   1,  2, X86_SPECIAL_HasLock },
+    { gen_SBB,    RCG_OP_SBB,   1,  2, X86_SPECIAL_HasLock },
     { gen_MOV,    RCG_OP_MOV,   0,  1, X86_SPECIAL_None },
     { gen_LEA,    RCG_OP_LEA,   0,  1, X86_SPECIAL_NoLoadEA },
     { gen_PUSH,   RCG_OP_PUSH, -1,  1, -1 },
@@ -588,7 +591,7 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     const RCGFacts *facts;
     uint64_t imm = 0;
     int form, shape = 0, seg = -1;
-    bool ordered = false, rotate_left = false, by_cl;
+    bool ordered = false, rotate_left = false, by_cl, carry;
     const RCGSlot *slot;
     const RCGGadget *g;
     uint64_t words[RCG_MAX_WORDS];
@@ -653,6 +656,25 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
      */
     if (!g->gadget) {
         return NULL;
+    }
+    carry = op == RCG_OP_ADC || op == RCG_OP_SBB;
+    if (carry) {
+        /*
+         * gen_ADC and gen_SBB leave another flags state for an immediate
+         * of 0 (CC_OP_ADD or CC_OP_SUB) and for SBB of a register with
+         * itself (CC_OP_SBB_SELF), so those cases stay with TCG.
+         *
+         * CF is written to cc_src2 before the gadget runs. A fault in the
+         * gadget restores the flags state from before the instruction, and
+         * if that state uses cc_src2, its value would already be lost. So
+         * a gadget that accesses memory is refused after such a state.
+         */
+        if (((form == RCG_FORM_RI || form == RCG_FORM_MI) && !imm) ||
+            (op == RCG_OP_SBB && form == RCG_FORM_RR &&
+             first->n == second->n) ||
+            (slot->access && (cc_op_live(s->cc_op) & USES_CC_SRC2))) {
+            return NULL;
+        }
     }
     if (slot->access) {
         /*
@@ -791,6 +813,14 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
         default:
             g_assert_not_reached();
         }
+    }
+    if (carry) {
+        /* CF, from the state before the instruction, goes in cc_src2. */
+        TCGv cf = tcg_temp_new();
+
+        gen_compute_eflags_c(s, cf);
+        tcg_gen_mov_tl(cpu_cc_src2, cf);
+        rcg_note(ins, &nb_ins, cpu_cc_src2);
     }
     tcg_gen_rich(g->gadget, words, n, slot->access ? TCG_RICH_MAY_FAULT : 0,
                  outs, nb_outs, ins, nb_ins);

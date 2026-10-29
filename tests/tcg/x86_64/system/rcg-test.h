@@ -67,14 +67,18 @@ struct rcg_state {
 
 struct rcg_state rcg_in, rcg_out, rcg_host;
 
-/* What a case's _sub function compares with 1 before the instruction. */
+/*
+ * What a case's _sub function compares with 1 before the instruction, and
+ * its _adc function adds 1 to.
+ */
 uint64_t rcg_sub_in;
 
 /*
  * A case, as rcg-gen.py describes it. fn runs the instruction from the
- * flags in rcg_in, and fn_sub from the state a CMP leaves (see rcg_starts);
- * insn and insn_sub are where the instruction is in each, and end and
- * end_sub where it ends.
+ * flags in rcg_in, fn_sub from the state a CMP leaves (see rcg_starts), and
+ * fn_adc, which only rcg-faults has, from the state an ADC leaves; insn,
+ * insn_sub and insn_adc are where the instruction is in each, and end,
+ * end_sub and end_adc where it ends.
  *
  * The registers a and b take the values tested (b may be the memory
  * operand instead, mem), and base and index make the memory operand's
@@ -92,6 +96,8 @@ struct rcg_case {
     const char *insn, *end;
     void (*fn_sub)(void);
     const char *insn_sub, *end_sub;
+    void (*fn_adc)(void);
+    const char *insn_adc, *end_adc;
     int width;
     int a, b;
     bool mem;
@@ -222,6 +228,27 @@ asm(
         "    rcg_leave\n"                                       \
         "    .popsection\n");
 
+/*
+ * A case's function name_adc, with the labels name_adc_insn and
+ * name_adc_end. It adds 1 to rcg_sub_in with ADC first, after loading the
+ * registers, so that the instruction runs from the state an ADC leaves,
+ * which uses cc_src2, in the same TB.
+ */
+#define RCG_ADC_CASE(name, insn)                                \
+    void name##_adc(void);                                      \
+    extern const char name##_adc_insn[], name##_adc_end[];      \
+    asm("    .pushsection .text\n"                              \
+        #name "_adc:\n"                                         \
+        "    rcg_enter\n"                                       \
+        "    adcq $1, rcg_sub_in(%rip)\n"                       \
+        "    .intel_syntax noprefix\n"                          \
+        #name "_adc_insn:\n"                                    \
+        "    " insn "\n"                                        \
+        #name "_adc_end:\n"                                     \
+        "    .att_syntax prefix\n"                              \
+        "    rcg_leave\n"                                       \
+        "    .popsection\n");
+
 /* The values every operand is tested with: the edges of each width. */
 static const uint64_t rcg_values[] = {
     0, 1, 0x7f, 0x80, 0xff, 0x7fff, 0x8000, 0xffff,
@@ -237,12 +264,14 @@ static const uint64_t rcg_values[] = {
  * The rest then compare sub_in with 1, leaving a SUB state with cc_dst,
  * cc_src and the first operand live. That shows when an instruction that
  * should leave the flags alone does not. The values give a borrow (CF and
- * SF), a signed overflow (OF) and equality (ZF).
+ * SF), a signed overflow (OF) and equality (ZF). adc instead adds 1 to
+ * sub_in with ADC (see RCG_ADC_CASE()), which only rcg-faults does.
  */
 struct rcg_start {
     uint64_t flags;
     bool sub;
     uint64_t sub_in;
+    bool adc;
 };
 
 static const struct rcg_start rcg_starts[] = {
@@ -257,21 +286,21 @@ static const struct rcg_start rcg_starts[] = {
 /* Runs case c from the start s, set up with rcg_setup(). */
 static inline void rcg_run(const struct rcg_case *c, const struct rcg_start *s)
 {
-    (s->sub ? c->fn_sub : c->fn)();
+    (s->adc ? c->fn_adc : s->sub ? c->fn_sub : c->fn)();
 }
 
 /* The address of the instruction rcg_run() runs. */
 static inline uint64_t rcg_insn_addr(const struct rcg_case *c,
                                      const struct rcg_start *s)
 {
-    return (uint64_t)(s->sub ? c->insn_sub : c->insn);
+    return (uint64_t)(s->adc ? c->insn_adc : s->sub ? c->insn_sub : c->insn);
 }
 
 /* The address of the end of the instruction rcg_run() runs. */
 static inline uint64_t rcg_insn_end(const struct rcg_case *c,
                                     const struct rcg_start *s)
 {
-    return (uint64_t)(s->sub ? c->end_sub : c->end);
+    return (uint64_t)(s->adc ? c->end_adc : s->sub ? c->end_sub : c->end);
 }
 
 static inline uint8_t *rcg_bytes(uint64_t addr)

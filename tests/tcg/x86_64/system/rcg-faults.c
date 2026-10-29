@@ -17,7 +17,8 @@
  *
  * Each case also runs misaligned on the lower page, across a 16-byte
  * boundary, where it must not fault. Every run starts from the flags POPF
- * loads and again from the state a CMP leaves, where a write to the
+ * loads, again from the state a CMP leaves, and again from the state an
+ * ADC leaves, which also uses cc_src2. From the last two, a write to the
  * lazy-flags state before the fault would show in the flags at the fault.
  */
 
@@ -41,10 +42,16 @@
 /* The flags each case starts from: some of the arithmetic ones set. */
 #define FLAGS_IN (0x2 | 0xc5)
 
-/* The starts: the flags from POPF, then a CMP of 0 with 1 (a borrow). */
+/*
+ * The starts: the flags from POPF, then a CMP of 0 with 1 (a borrow), then
+ * an ADC of 1 to 0xf with CF set. That ADC sets AF, which TCG works out
+ * from cc_src2, the carry in: had cc_src2 been written before the fault,
+ * AF at the fault would be clear.
+ */
 static const struct rcg_start starts[] = {
     { FLAGS_IN, false, 0 },
     { FLAGS_IN, true, 0 },
+    { FLAGS_IN, false, 0xf, true },
 };
 #define NB_STARTS (sizeof(starts) / sizeof(starts[0]))
 
@@ -155,6 +162,16 @@ static uint64_t sub_flags(uint64_t v)
     return flags;
 }
 
+/* The flags an ADC of 1 to v leaves with CF set, as the ADC start's does. */
+static uint64_t adc_flags(uint64_t v)
+{
+    uint64_t flags;
+
+    asm volatile("stc\n\tadcq $1, %1\n\tpushfq\n\tpopq %0"
+                 : "=r"(flags), "+r"(v) : : "cc");
+    return flags;
+}
+
 struct result {
     struct rcg_state out;
     uint8_t window[2 * WINDOW];
@@ -212,7 +229,9 @@ static void check(bool ok, const struct rcg_case *c, const struct rcg_start *s,
     if (!ok) {
         failed++;
         ml_printf("FAIL: %s%s, %d bytes below the boundary, upper page %s: "
-                  "%s\n", c->name, s->sub ? " after a CMP" : "", below,
+                  "%s\n", c->name,
+                  s->adc ? " after an ADC" : s->sub ? " after a CMP" : "",
+                  below,
                   how == MAPPED ? "mapped" :
                   how == ABSENT ? "absent" : "read-only", what);
     }
@@ -222,7 +241,8 @@ static void check(bool ok, const struct rcg_case *c, const struct rcg_start *s,
 static void check_fault(const struct rcg_case *c, const struct rcg_start *s,
                         int below, enum upper how, uint64_t rsp)
 {
-    uint64_t flags_in = s->sub ? sub_flags(s->sub_in) : FLAGS_IN;
+    uint64_t flags_in = s->adc ? adc_flags(s->sub_in) :
+                        s->sub ? sub_flags(s->sub_in) : FLAGS_IN;
     bool same = true;
 
     check(fault_rip == rcg_insn_addr(c, s), c, s, below, how,

@@ -110,8 +110,11 @@ def ea_words(shape, seg):
 class Alu:
     """ A two-operand ALU instruction: dest = dest op src. The result is
     written back unless writes is false (CMP and TEST). cc is the lazy-flags
-    state it leaves, as TCG's gen_<name> does: "ADD", "SUB" or "LOGIC", for
-    CC_OP_<cc>B plus the width's MemOp. """
+    state it leaves, as TCG's gen_<name> does: "ADD", "SUB", "LOGIC", "ADC"
+    or "SBB", for CC_OP_<cc>B plus the width's MemOp.
+
+    ADC and SBB also add or subtract CF. The translator puts CF in cc_src2
+    before the gadget, and CC_OP_ADCB and CC_OP_SBBB keep it there. """
 
     def __init__(self, name, a64, cc, writes, forms):
         self.name = name
@@ -131,6 +134,8 @@ ALU_OPS = (
     Alu("xor",  "eor", "LOGIC", True,  ALU_FORMS),
     Alu("cmp",  "sub", "SUB",   False, ALU_FORMS),
     Alu("test", "and", "LOGIC", False, ("rr", "mr", "ri", "mi")),
+    Alu("adc",  "add", "ADC",   True,  ALU_FORMS),
+    Alu("sbb",  "sub", "SBB",   True,  ALU_FORMS),
 )
 
 # MOV's forms: dest = src, flags untouched.
@@ -473,10 +478,11 @@ class Spec:
     @property
     def cc_writes(self):
         """ Which of cc_dst, cc_src and cc_src2 the gadget writes, as TCG's
-        decode.cc_dst, cc_src and cc_src2 say for the instruction. After a
-        "SUB" one, the translator must also keep cc_srcT = cc_dst + cc_src,
-        the original first operand, as TCG's gen_SUB does (0 after NEG,
-        which is the same sum). """
+        decode.cc_dst, cc_src and cc_src2 say for the instruction, except
+        that the translator writes ADC's and SBB's cc_src2 before the
+        gadget. After a "SUB" one, the translator must also keep cc_srcT =
+        cc_dst + cc_src, the original first operand, as TCG's gen_SUB does
+        (0 after NEG, which is the same sum). """
         if self.kind == "zero":
             return ("cc_src",)
         if self.kind == "alu":
@@ -1003,6 +1009,11 @@ def alu_body(g, spec):
     # Whole registers, as TCG computes: only the flags state and the
     # write-back look at the width.
     g.emit(f"{op.a64} {R}, {A}, {B}")
+    # ADC and SBB then add or subtract CF, which the translator has put in
+    # cc_src2.
+    if op.cc in ("ADC", "SBB"):
+        g.emit(f"ldr {T}, [{g.env}, %[cc_src2]]",
+               f"{op.a64} {R}, {R}, {T}")
     g.define(R)
 
     if op.writes:
@@ -1443,6 +1454,7 @@ BODY_OPERANDS = {
     "tlb_page_mask": "TCTI_TLB_PAGE_MASK",
     "cc_dst": "offsetof(CPUX86State, cc_dst)",
     "cc_src": "offsetof(CPUX86State, cc_src)",
+    "cc_src2": "offsetof(CPUX86State, cc_src2)",
     "rax": "offsetof(CPUX86State, regs[R_EAX])",
     "rdx": "offsetof(CPUX86State, regs[R_EDX])",
     "rsp": f"offsetof(CPUX86State, regs[{R_ESP}])",
@@ -1587,11 +1599,11 @@ class TctiHarness(Harness):
 
 
 # The ops and forms as the translator names them, in the table's order.
-OP_NAMES = ("add", "sub", "and", "or", "xor", "cmp", "test", "zero", "mov",
-            "lea", "push", "pop", "movzxb", "movzxw", "movsxb", "movsxw",
-            "movsxd", "not", "neg", "shl", "shr", "sar", "ror", "mul", "imul",
-            "imul3", "bt", "bts", "btr", "btc", "cbw", "cwd", "xchg", "leave",
-            "call", "jmp", "ret")
+OP_NAMES = ("add", "sub", "and", "or", "xor", "cmp", "test", "adc", "sbb",
+            "zero", "mov", "lea", "push", "pop", "movzxb", "movzxw", "movsxb",
+            "movsxw", "movsxd", "not", "neg", "shl", "shr", "sar", "ror",
+            "mul", "imul", "imul3", "bt", "bts", "btr", "btc", "cbw", "cwd",
+            "xchg", "leave", "call", "jmp", "ret")
 FORM_NAMES = ("rr", "rm", "mr", "ri", "mi", "r", "i", "m", "rri", "rmi")
 KIND_NAMES = ("alu", "zero", "mov", "lea", "push", "pop", "extend", "unary",
               "shift", "mul", "imul3", "bt", "cbw", "cwd", "xchg", "leave",
@@ -1603,8 +1615,8 @@ MAX_WORDS = len(WORD_REGS)
 # The gadget source files, split by op or kind so they compile in parallel;
 # "other" takes the ops with no file.
 # Must match target/i386/tcg/meson.build.
-GADGET_FILES = ("add", "sub", "and", "or", "xor", "cmp", "test", "mov",
-                "other", "shift", "mul", "bt", "jcc", "setcc", "cmov")
+GADGET_FILES = ("add", "sub", "and", "or", "xor", "cmp", "test", "adc", "sbb",
+                "mov", "other", "shift", "mul", "bt", "jcc", "setcc", "cmov")
 
 
 def op_name(spec):
@@ -2063,6 +2075,7 @@ def insn_cases():
     for op in BT_OPS:
         for width in BT_WIDTHS:
             yield from bt_cases(op, width)
+    yield from carry_cases()
     yield from move_cases()
     yield from high_byte_cases()
     yield from addr32_cases()
@@ -2694,6 +2707,29 @@ def bt_cases(op, width):
                    f"mov ecx, 1; 1:", width, a=0, b=3)
 
 
+def carry_cases():
+    """ ADC and SBB with CF from each lazy-flags state of
+    flag_setters(), from SHL, MUL, ADC and SBB, and from CLC, STC, CMC and
+    SAHF, which stay with TCG. A memory form follows ADC, whose state uses
+    cc_src2, and CMP, whose state does not; after ADC it stays with TCG,
+    as the translator writes cc_src2 before a gadget that may fault.
+    alu_cases() covers the forms themselves. """
+    text, base, _, bv, _ = memory_operand(64, "b", None)
+    for name in ("adc", "sbb"):
+        for width in (8, 64):
+            ra, rb = reg_name(0, width), reg_name(3, width)
+            setters = [s[0] for s in flag_setters(width).values()]
+            setters += [f"shl {ra}, 1", f"mul {rb}", f"adc {ra}, {rb}",
+                        f"sbb {ra}, {rb}"]
+            for setter in setters:
+                yield Case(f"{setter}; {name} {rb}, {ra}", width, a=0, b=3)
+        for flag in ("clc", "stc", "cmc", "mov ah, 0xd5; sahf"):
+            yield Case(f"{flag}; {name} rbx, rax", 64, a=0, b=3)
+        for setter in ("adc rax, rcx", "cmp rax, rcx"):
+            yield Case(f"{setter}; {name} rdx, {text}", 64, a=0, mem=True,
+                       base=base, base_value=bv)
+
+
 def move_cases():
     """ CBW and CWD and their wider forms, and XCHG of registers (with
     memory, it is locked, which is TCG's). """
@@ -2756,24 +2792,31 @@ def high_byte_cases():
         yield Case(f"cmp eax, ebx; set{CONDS[cond]} ah", 32, a=0, b=3)
 
 
-def write_cases(cases, out, prefix):
+def write_cases(cases, out, prefix, adc=False):
     """ The cases as rcg-test.h's RCG_CASE() macros, one per case, which
     make the functions that run the instruction, then a table of the
-    cases. """
+    cases. adc adds RCG_ADC_CASE()'s function, which runs the instruction
+    after an ADC. """
     cases = list(cases)
     print("/* Automatically generated by rcg-gen.py. Do not edit. */\n",
           file=out)
     for i, c in enumerate(cases):
         print(f'RCG_CASE({prefix}{i}, "{c.insn}")', file=out)
+        if adc:
+            print(f'RCG_ADC_CASE({prefix}{i}, "{c.insn}")', file=out)
     print(f"\nstatic const struct rcg_case {prefix}cases[] = {{", file=out)
     for i, c in enumerate(cases):
         name = f"{prefix}{i}"
+        if adc:
+            fn_adc = f"{name}_adc, {name}_adc_insn, {name}_adc_end"
+        else:
+            fn_adc = "NULL, NULL, NULL"
         print(f'    {{ "{c.insn}", {name}, {name}_insn, {name}_end, '
-              f'{name}_sub, {name}_sub_insn, {name}_sub_end, {c.width}, '
-              f'{c.a}, {c.b}, {int(c.mem)}, {c.base}, {c.index}, '
-              f'{c.base_value:#x}, {c.index_value}, {int(c.stack)}, '
-              f'{int(c.writes)}, {c.operand:#x}, {c.rsp:#x}, {c.moved}, '
-              f'{c.target} }},', file=out)
+              f'{name}_sub, {name}_sub_insn, {name}_sub_end, {fn_adc}, '
+              f'{c.width}, {c.a}, {c.b}, {int(c.mem)}, {c.base}, '
+              f'{c.index}, {c.base_value:#x}, {c.index_value}, '
+              f'{int(c.stack)}, {int(c.writes)}, {c.operand:#x}, {c.rsp:#x}, '
+              f'{c.moved}, {c.target} }},', file=out)
     print("};", file=out)
 
 
@@ -2856,7 +2899,7 @@ def main():
             write_cases(insn_cases(), out, "rcg_insn_")
     if args.fault_tests:
         with open(args.fault_tests, "w") as out:
-            write_cases(fault_cases(), out, "rcg_fault_")
+            write_cases(fault_cases(), out, "rcg_fault_", adc=True)
     if args.coverage:
         order, nm, *traces = args.coverage
         if not check_coverage(order, nm, traces):
