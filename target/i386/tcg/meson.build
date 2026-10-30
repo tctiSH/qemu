@@ -24,7 +24,8 @@ if get_option('tcg_threaded_interpreter') or \
    get_option('tcg_hybrid') in ['tcti', 'runtime']
   rcg_outputs = ['rcg-table.c.inc']
   foreach f : ['add', 'sub', 'and', 'or', 'xor', 'cmp', 'test', 'adc', 'sbb',
-              'mov', 'other', 'shift', 'mul', 'bt', 'jcc', 'setcc', 'cmov']
+              'mov', 'other', 'shift', 'mul', 'bt', 'jcc', 'setcc', 'cmov',
+              'fused']
     rcg_outputs += 'rcg_gadgets_@0@.c'.format(f)
   endforeach
   rcg_gadgets = custom_target('rcg-gadgets',

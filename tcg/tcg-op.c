@@ -359,6 +359,50 @@ void tcg_gen_rich_br(const void *gadget, const uint64_t *words,
     op->args[4] = label_arg(l);
     add_as_label_use(l, op);
 }
+
+const void *tcg_rich_gadget(TCGOp *op)
+{
+    if (op && op->opc == INDEX_op_rich &&
+        !(op->args[3] & TCG_RICH_MAY_FAULT)) {
+        return (const void *)op->args[0];
+    }
+    return NULL;
+}
+
+void tcg_gen_rich_br_join(TCGOp *prev, const void *gadget,
+                          const uint64_t *words, unsigned nb_words,
+                          TCGLabel *l, const void *jumps,
+                          TCGTemp **outs, unsigned nb_outs,
+                          TCGTemp **ins, unsigned nb_ins)
+{
+    unsigned first = TCGOP_RICH_FIRST(prev);
+    unsigned prev_words = prev->args[2];
+    unsigned prev_outs = TCGOP_RICHO(prev), prev_ins = TCGOP_RICHI(prev);
+    uint64_t *all = tcg_malloc((prev_words + nb_words) * sizeof(uint64_t));
+    TCGTemp **o = tcg_malloc((prev_outs + nb_outs) * sizeof(TCGTemp *));
+    TCGTemp **i = tcg_malloc((prev_ins + nb_ins) * sizeof(TCGTemp *));
+    unsigned no = 0, ni = 0;
+
+    g_assert(tcg_rich_gadget(prev));
+    memcpy(all, (const uint64_t *)prev->args[1],
+           prev_words * sizeof(uint64_t));
+    memcpy(all + prev_words, words, nb_words * sizeof(uint64_t));
+    for (unsigned k = 0; k < prev_outs; k++) {
+        o[no++] = arg_temp(prev->args[first + k]);
+    }
+    for (unsigned k = 0; k < nb_outs; k++) {
+        o[no++] = outs[k];
+    }
+    for (unsigned k = 0; k < prev_ins; k++) {
+        i[ni++] = arg_temp(prev->args[first + prev_outs + k]);
+    }
+    for (unsigned k = 0; k < nb_ins; k++) {
+        i[ni++] = ins[k];
+    }
+    tcg_op_remove(tcg_ctx, prev);
+    tcg_gen_rich_br(gadget, all, prev_words + nb_words, l, jumps,
+                    o, no, i, ni);
+}
 #endif
 
 void tcg_gen_plugin_cb(unsigned from)

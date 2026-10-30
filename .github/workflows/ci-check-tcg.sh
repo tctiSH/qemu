@@ -24,13 +24,15 @@ status=0
 for target in $targets; do
   wrapper=$wrappers/qemu-system-$target
   # The RCG tests also pass if RCG takes nothing, so with RCG they trace
-  # each gadget it takes. The kernel is the last argument.
+  # each gadget it takes, and each jumps gadget TCTI swaps in. The kernel is
+  # the last argument.
   cat >"$wrapper" <<EOF
 #!/bin/sh
 trace=
 for kernel; do :; done
 case "$order:\${kernel##*/}" in
-?*:rcg-insns|?*:rcg-faults) trace="-trace rcg_insn -D $wrappers/trace.\$\$" ;;
+?*:rcg-insns|?*:rcg-faults)
+  trace="-trace rcg_insn -trace rcg_jumps -D $wrappers/trace.\$\$" ;;
 esac
 exec $build/qemu-system-$target -accel tcg,$accel \$trace "\$@"
 EOF

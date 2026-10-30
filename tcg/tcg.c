@@ -4284,12 +4284,13 @@ liveness_pass_1(TCGContext *s)
 
             /*
              * The gadget reads its inputs from memory and writes its
-             * outputs there whole, so an output's value before it is dead
-             * unless it is an input too. A gadget that may fault needs
-             * every global in memory; rich_br needs what any conditional
-             * branch does. Inputs that die here stay TS_DEAD, so earlier
-             * ops leave them in memory only, as tcg_reg_alloc_rich() frees
-             * no input.
+             * outputs there whole, so an output's value before it is dead,
+             * unless it is an input too or the gadget needs it in memory.
+             * A gadget that may fault needs every global in memory, and
+             * rich_br needs what any conditional branch does, outputs
+             * included. Inputs that die here stay TS_DEAD, so earlier ops
+             * leave them in memory only, as tcg_reg_alloc_rich() frees no
+             * input.
              */
             for (int i = 0; i < nb_oargs; i++) {
                 ts = arg_temp(op->args[TCGOP_RICH_FIRST(op) + i]);

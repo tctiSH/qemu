@@ -19,7 +19,10 @@
  */
 
 #include "rcg-test.h"
-#include "rcg-insns.h"
+#ifndef RCG_INSN_CASES
+#define RCG_INSN_CASES "rcg-insns.h"
+#endif
+#include RCG_INSN_CASES
 
 #define NB_CASES (sizeof(rcg_insn_cases) / sizeof(rcg_insn_cases[0]))
 

@@ -112,6 +112,33 @@ void tcg_gen_rich_br(const void *gadget, const uint64_t *words,
                      unsigned nb_words, TCGLabel *l, const void *jumps,
                      TCGTemp **outs, unsigned nb_outs,
                      TCGTemp **ins, unsigned nb_ins);
+
+/**
+ * tcg_rich_gadget() - the gadget of a rich op that cannot fault
+ * @op: an op, or NULL
+ *
+ * Returns @op's gadget if @op is a rich op without TCG_RICH_MAY_FAULT,
+ * else NULL.
+ */
+const void *tcg_rich_gadget(TCGOp *op);
+
+/**
+ * tcg_gen_rich_br_join() - output an RCG gadget that may branch, in place
+ * of an earlier rich op
+ * @prev: a rich op for which tcg_rich_gadget() is not NULL
+ * @gadget, @words, @nb_words, @l, @jumps, @outs, @nb_outs, @ins, @nb_ins:
+ *       as for tcg_gen_rich_br()
+ *
+ * As tcg_gen_rich_br(), but @gadget and @jumps first do @prev's work, and
+ * @prev is removed. They take @prev's words, then @words. The op writes
+ * @prev's outputs and @outs, and reads @prev's inputs and @ins. Nothing
+ * between @prev and the new op may read or write those globals.
+ */
+void tcg_gen_rich_br_join(TCGOp *prev, const void *gadget,
+                          const uint64_t *words, unsigned nb_words,
+                          TCGLabel *l, const void *jumps,
+                          TCGTemp **outs, unsigned nb_outs,
+                          TCGTemp **ins, unsigned nb_ins);
 #endif
 
 /**

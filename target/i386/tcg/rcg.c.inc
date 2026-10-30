@@ -241,6 +241,44 @@ static int rcg_cc_index(CCOp cc_op)
 }
 
 /*
+ * The rich op of a CMP or TEST right before this instruction that a Jcc
+ * can join, with *setter its index in rcg_fused_setter, or NULL. Only
+ * set_cc_op()'s discards and CMP's update of cc_srcT may come between the
+ * setter and the Jcc. Nothing reads what the discards drop before the
+ * joined gadget writes it. This function removes the update: the Jcc does
+ * not read cc_srcT, and it is dead once the Jcc ends the TB.
+ */
+static TCGOp *rcg_fused_setter_op(DisasContext *s, int *setter)
+{
+    TCGOp *op, *srct = NULL;
+    const void *gadget;
+
+    if (tcg_last_op() != s->base.insn_start) {
+        return NULL;
+    }
+    for (op = QTAILQ_PREV(s->base.insn_start, link); op;
+         op = QTAILQ_PREV(op, link)) {
+        if (op->opc == INDEX_op_add && !srct &&
+            arg_temp(op->args[0]) == tcgv_tl_temp(s->cc_srcT)) {
+            srct = op;
+        } else if (op->opc != INDEX_op_discard) {
+            break;
+        }
+    }
+    gadget = tcg_rich_gadget(op);
+    for (int i = 0; gadget && i < RCG_NB_FUSED; i++) {
+        if (rcg_fused_setter[i] == gadget) {
+            if (srct) {
+                tcg_op_remove(tcg_ctx, srct);
+            }
+            *setter = i;
+            return op;
+        }
+    }
+    return NULL;
+}
+
+/*
  * Jcc, SETcc and CMOVcc, when an earlier instruction in this TB left a
  * lazy-flags state the gadgets read. Returns the gadget emitted, or NULL.
  */
@@ -261,18 +299,31 @@ static const void *rcg_translate_cond(DisasContext *s,
         TCGTemp *out = tcgv_i32_temp(cpu_cc_op);
         uint64_t word = s->cc_op;
         TCGLabel *taken;
+        TCGOp *setter_op;
+        int setter;
 
         if (!gadget) {
             return NULL;
         }
         /*
          * As gen_Jcc, but the gadget always stores CC_OP, even where it is
-         * already clean (after COMISS, FCOMI or PUSHF, for example).
+         * already clean (after COMISS, FCOMI or PUSHF, for example). Right
+         * after a CMP or TEST of registers or an immediate, one gadget
+         * does both, branching on the values it compared rather than
+         * reloading cc_dst and cc_src.
          */
         taken = gen_new_label();
         gen_bnd_jmp(s);
-        tcg_gen_rich_br(gadget, &word, 1, taken, rcg_jccgoto[cc][cond],
-                        &out, 1, flags_in, 2);
+        setter_op = rcg_fused_setter_op(s, &setter);
+        if (setter_op) {
+            gadget = rcg_fjcc[setter][cond];
+            tcg_gen_rich_br_join(setter_op, gadget, &word, 1, taken,
+                                 rcg_fjccgoto[setter][cond], &out, 1,
+                                 NULL, 0);
+        } else {
+            tcg_gen_rich_br(gadget, &word, 1, taken, rcg_jccgoto[cc][cond],
+                            &out, 1, flags_in, 2);
+        }
         s->cc_op_dirty = false;
         gen_conditional_jump_labels(s, decode->immediate, NULL, taken);
         return gadget;

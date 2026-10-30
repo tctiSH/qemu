@@ -41,6 +41,7 @@
 #include "tcg/tcg-ldst.h"
 #include "tcg/tcg-inline-fp.h"
 #include "tcti-gadget-defs.h"
+#include "trace/trace-accel_tcg.h"
 
 /* Grab our gadget headers. */
 #include "tcti_gadgets.h"
@@ -1150,6 +1151,7 @@ static void tcti_join_rich_br(TCGContext *s, tcg_insn_unit *start)
         *(uint64_t *)br->end == (uintptr_t)gadget_addi_env_goto_tb) {
         *(uint64_t *)br->start = (uintptr_t)br->jumps;
         br->end = NULL;
+        trace_rcg_jumps(br->jumps);
     }
 }
 #endif

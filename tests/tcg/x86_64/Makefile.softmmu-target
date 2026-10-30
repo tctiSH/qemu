@@ -43,21 +43,24 @@ run-tlb-next-page: QEMU_OPTS := -m 256M $(QEMU_OPTS)
 RCG_GEN=$(SRC_PATH)/target/i386/tcg/rcg-gen.py
 RCG_GEN_DEPS=$(RCG_GEN) $(SRC_PATH)/tcg/aarch64-tcti/tcti_memory.py \
 	$(X64_SYSTEM_SRC)/rcg-test.h
-CLEANFILES += rcg-insns.h rcg-faults.h
+CLEANFILES += rcg-insns.h rcg-jcc.h rcg-jcc.ref rcg-faults.h
 
 rcg-insns.h: $(RCG_GEN_DEPS)
 	$(call quiet-command, $(PYTHON) $< --check --insn-tests $@, GEN, $@)
+rcg-jcc.h: $(RCG_GEN_DEPS)
+	$(call quiet-command, $(PYTHON) $< --jcc-tests $@, GEN, $@)
 rcg-faults.h: $(RCG_GEN_DEPS)
 	$(call quiet-command, $(PYTHON) $< --fault-tests $@, GEN, $@)
 
 rcg-insns: rcg-insns.h rcg-test.h
+rcg-jcc: rcg-jcc.h rcg-insns.c rcg-test.h
 rcg-faults: rcg-faults.h rcg-test.h
-rcg-insns rcg-faults: CFLAGS += -I.
+rcg-insns rcg-jcc rcg-faults: CFLAGS += -I.
 
 # RCG_MEM, as rcg-test.h explains.
 RCG_MEM=$(shell sed -n 's/^\#define RCG_MEM \(0x[0-9a-f]*\)$$/\1/p' \
 	$(X64_SYSTEM_SRC)/rcg-test.h)
-rcg-insns rcg-faults: LDFLAGS += -Wl,--defsym=rcg_mem=$(RCG_MEM)
+rcg-insns rcg-jcc rcg-faults: LDFLAGS += -Wl,--defsym=rcg_mem=$(RCG_MEM)
 
 # rcg-insns prints a hash of each case's results, which must match TCG's,
 # held in rcg-insns.ref. It runs for about two minutes under TCTI on an M2
@@ -69,6 +72,19 @@ run-rcg-insns: rcg-insns
 		  -chardev file$(COMMA)path=$<.out$(COMMA)id=output \
 		  $(QEMU_OPTS) $<)
 	$(call diff-out, $<, $(X64_SYSTEM_SRC)/rcg-insns.ref)
+
+# rcg-jcc runs rcg-insns' Jcc cases without goto_tb, so that they run the
+# plain gadgets; see rcg-jcc.c. Their hashes are rcg-insns.ref's lines for
+# the cases jcc_cases() in rcg-gen.py picks.
+run-rcg-jcc: TIMEOUT=600
+run-rcg-jcc: rcg-jcc
+	$(call run-test, $<, \
+	  $(QEMU) -d nochain -monitor none -display none \
+		  -chardev file$(COMMA)path=$<.out$(COMMA)id=output \
+		  $(QEMU_OPTS) $<)
+	@grep -E '(^|; )j[a-z]+ 1f; mov ecx, 1; 1:: ' \
+		$(X64_SYSTEM_SRC)/rcg-insns.ref > $<.ref
+	$(call diff-out, $<, $<.ref)
 
 ifeq ($(CONFIG_PLUGIN),y)
 run-plugin-patch-target-with-libpatch.so:		\
