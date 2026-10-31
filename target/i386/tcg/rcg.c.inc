@@ -92,14 +92,21 @@ static const struct {
      * aligned.
      */
     { gen_MOVDQ,  RCG_OP_MOVDQU, 0,  2, -1 },
+    /* MOVSD and MOVSS from memory, between registers, and to memory. */
+    { gen_VMOVSD_ld,  RCG_OP_MOVSD, 0, 2, -1 },
+    { gen_VMOVLPx,    RCG_OP_MOVSD, 0, 2, -1 },
+    { gen_VMOVLPx_st, RCG_OP_MOVSD, 0, 2, -1 },
+    { gen_VMOVSS_ld,  RCG_OP_MOVSS, 0, 2, -1 },
+    { gen_VMOVSS,     RCG_OP_MOVSS, 0, 2, -1 },
+    { gen_VMOVSS_st,  RCG_OP_MOVSS, 0, 2, -1 },
 };
 
 static bool sse_needs_alignment(DisasContext *s, X86DecodedInsn *decode,
                                 MemOp ot);
 
 /*
- * An operand's kind, as a form names it: register, memory, immediate or a
- * 16-byte XMM register, or 0 if no form takes it.
+ * An operand's kind, as a form names it: register, memory, immediate or an
+ * XMM register, or 0 if no form takes it.
  */
 static char rcg_kind(DisasContext *s, X86DecodedOp *op)
 {
@@ -114,8 +121,11 @@ static char rcg_kind(DisasContext *s, X86DecodedOp *op)
     case X86_OP_IMM:
         return 'i';
     case X86_OP_SSE:
-        /* A VEX encoding may also clear the upper half of the YMM. */
-        return op->ot == MO_128 && !(s->prefix & PREFIX_VEX) ? 'x' : 0;
+        /*
+         * rcg_operands() takes the width from the RCG op. A VEX encoding
+         * may clear the upper half of the YMM, which no gadget does.
+         */
+        return s->prefix & PREFIX_VEX ? 0 : 'x';
     default:
         return 0;
     }
@@ -564,8 +574,8 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
          */
         char a = rcg_kind(s, first), b = rcg_kind(s, second);
 
-        *ot = MO_128;
-        if (!a || !b || ((a == 'm' || b == 'm') &&
+        *ot = op == RCG_OP_MOVSD ? MO_64 : op == RCG_OP_MOVSS ? MO_32 : MO_128;
+        if (!a || !b || (*ot == MO_128 && (a == 'm' || b == 'm') &&
                          !(cpuinfo & CPUINFO_LSE2))) {
             return -1;
         }
@@ -778,7 +788,7 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
         bar |= slot->access & RCG_STORE ? TCG_MO_LD_ST | TCG_MO_ST_ST : 0;
         ordered = tcg_gen_rich_mo(bar);
         memop = (facts->src_ot >= 0 ? facts->src_ot : ot) | MO_LE;
-        if (facts->kind == RCG_KIND_VMOV) {
+        if (facts->kind == RCG_KIND_VMOV && ot == MO_128) {
             /* As gen_ldo_env_A0() and gen_sto_env_A0() make it. */
             memop |= (s->cpuid_ext_features & CPUID_EXT_AVX
                       ? MO_ATOM_IFALIGN : MO_ATOM_IFALIGN_PAIR) |

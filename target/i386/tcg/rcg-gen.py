@@ -109,16 +109,22 @@ def ea_words(shape, seg):
 #
 
 class VMov:
-    """ A 16-byte move between XMM registers and memory, as gen_MOVDQ does:
-    MOVDQA and MOVAPS (aligned, which a memory operand must be), and
-    MOVDQU and MOVUPS. """
+    """ A move of width bits between XMM registers and memory. At 128 bits,
+    as gen_MOVDQ does: MOVDQA and MOVAPS (aligned, which a memory operand
+    must be), and MOVDQU and MOVUPS. At 64 and 32 bits, the low lane, as
+    MOVSD and MOVSS do: from memory, the rest of the register is cleared
+    (gen_VMOVSD_ld, gen_VMOVSS_ld); between registers, it is kept
+    (gen_VMOVLPx, gen_VMOVSS); to memory, only the lane is stored
+    (gen_VMOVLPx_st, gen_VMOVSS_st). """
 
-    def __init__(self, name, aligned):
+    def __init__(self, name, width, aligned=False):
         self.name = name
+        self.width = width
         self.aligned = aligned
 
 
-VMOV_OPS = (VMov("movdqa", True), VMov("movdqu", False))
+VMOV_OPS = (VMov("movdqa", 128, aligned=True), VMov("movdqu", 128),
+            VMov("movsd", 64), VMov("movss", 32))
 
 
 class Alu:
@@ -618,7 +624,7 @@ def specs():
     yield from with_memory(Spec("ret", None, "i", 64))
     for op in VMOV_OPS:
         for form in ("xx", "xm", "mx"):
-            yield from with_memory(Spec("vmov", op, form, 128))
+            yield from with_memory(Spec("vmov", op, form, op.width))
 
 
 def with_memory(spec):
@@ -1177,11 +1183,15 @@ def alu_body(g, spec):
 
 def vmov_body(g, spec):
     # gen_MOVDQ: the 16 bytes of the source, an XMM register in env or
-    # memory, to the destination. Each form has at most one memory access,
-    # and nothing is written before it.
+    # memory, to the destination (MOVSD and MOVSS: scalar_vmov_body()).
+    # Each form has at most one memory access, and nothing is written
+    # before it.
     aligned = spec.op.aligned
     if spec.has_mem:
         g.ea(ADDR)
+    if spec.width < 128:
+        scalar_vmov_body(g, spec)
+        return
     if spec.form[1] == "m":
         g.load128(A, B, ADDR, aligned)
     else:
@@ -1193,6 +1203,26 @@ def vmov_body(g, spec):
     else:
         g.emit(f"add {T}, {g.env}, {g.word('d')}",
                f"stp {A}, {B}, [{T}]")
+
+
+def scalar_vmov_body(g, spec):
+    # MOVSD and MOVSS, once vmov_body has formed the address: the low lane of
+    # the source to the destination. A load clears the rest of the register:
+    # one STP stores the lane, zero-extended, and XZR above it.
+    width = spec.width
+    lane = w if width == 32 else (lambda r: r)
+    if spec.form[1] == "m":
+        g.load(A, ADDR, width)
+    else:
+        g.emit(f"ldr {lane(A)}, [{g.env}, {g.word('s')}]")
+        g.define(A)
+    if spec.form[0] == "m":
+        g.store(A, ADDR, width)
+    elif spec.form[1] == "m":
+        g.emit(f"add {T}, {g.env}, {g.word('d')}",
+               f"stp {A}, xzr, [{T}]")
+    else:
+        g.emit(f"str {lane(A)}, [{g.env}, {g.word('d')}]")
 
 
 def zero_body(g, spec):
@@ -1786,7 +1816,8 @@ OP_NAMES = ("add", "sub", "and", "or", "xor", "cmp", "test", "adc", "sbb",
             "zero", "mov", "lea", "push", "pop", "movzxb", "movzxw", "movsxb",
             "movsxw", "movsxd", "not", "neg", "shl", "shr", "sar", "ror",
             "mul", "imul", "imul3", "bt", "bts", "btr", "btc", "cbw", "cwd",
-            "xchg", "leave", "call", "jmp", "ret", "movdqa", "movdqu")
+            "xchg", "leave", "call", "jmp", "ret", "movdqa", "movdqu", "movsd",
+            "movss")
 FORM_NAMES = ("rr", "rm", "mr", "ri", "mi", "r", "i", "m", "rri", "rmi",
               "xx", "xm", "mx")
 KIND_NAMES = ("alu", "zero", "mov", "lea", "push", "pop", "extend", "unary",
@@ -2302,6 +2333,7 @@ def insn_cases():
     yield from high_byte_cases()
     yield from addr32_cases()
     yield from vmov_cases()
+    yield from scalar_vmov_cases()
     yield from cond_cases()
     yield from branch_cases()
     yield from chain_cases()
@@ -2805,6 +2837,11 @@ def fault_cases():
                  "movntpd"):
         yield mem(f"{insn} xmmword ptr [rbx], xmm2", 128, writes=True,
                   xmm=True, aligned=True)
+    # MOVSD and MOVSS, loads and stores, across the boundary.
+    for width, insn in ((64, "movsd"), (32, "movss")):
+        m = f"{PTR[width]} ptr [rbx]"
+        yield mem(f"{insn} xmm1, {m}", width, xmm=True)
+        yield mem(f"{insn} {m}, xmm2", width, writes=True, xmm=True)
     yield mem("push qword ptr [rbx]", 64, stack=True)
     yield mem("call qword ptr [rbx]", 64, stack=True, target=RCG_TARGET_MEM)
     yield mem("jmp qword ptr [rbx]", 64, target=RCG_TARGET_MEM)
@@ -3064,6 +3101,45 @@ def vmov_cases():
     yield Case(f"movdqu xmm9, {text}; movdqa xmm1, xmm9", 128, a=0, **mem)
     yield Case(f"movdqa xmm10, xmm2; movdqu {text}, xmm10", 128, a=0,
                writes=True, **mem)
+
+
+def scalar_vmov_cases():
+    """ MOVSD and MOVSS: between XMM registers in both encodings, which keeps
+    the rest of the destination, and with memory at every operand shape and
+    segment override, RIP-relative and misaligned, where a load clears it.
+    MOVLPS and MOVLPD to memory store as MOVSD does, and MOVLPD between
+    registers, which QEMU decodes as moving a register to itself, takes the
+    MOVSD gadget. MOVNTSD and MOVNTSS need SSE4A, which the test's CPU does
+    not have. """
+    for width, insn in ((64, "movsd"), (32, "movss")):
+        yield Case(f"{insn} xmm1, xmm2", width, a=0, xmm=True)
+        yield Case(f"{{store}} {insn} xmm1, xmm2", width, a=0, xmm=True)
+        yield Case(f"{insn} xmm3, xmm3", width, a=0, xmm=True)
+        for shape in EA_SHAPES:
+            for seg in SEGS:
+                text, base, index, bv, iv = memory_operand(width, shape, seg)
+                mem = dict(mem=True, base=base, index=index, base_value=bv,
+                           index_value=iv, xmm=True)
+                yield Case(f"{insn} xmm1, {text}", width, a=0, **mem)
+                yield Case(f"{insn} {text}, xmm2", width, a=0, writes=True,
+                           **mem)
+        yield Case(f"{insn} xmm0, {rip_relative(width)}", width, a=0,
+                   mem=True, xmm=True)
+        yield Case(f"{insn} {rip_relative(width)}, xmm3", width, a=0,
+                   mem=True, writes=True, xmm=True)
+        for target in MISALIGNED:
+            text, base, _, bv, _ = memory_operand(width, "b", None,
+                                                  target=target)
+            mem = dict(mem=True, base=base, base_value=bv, operand=target,
+                       xmm=True)
+            yield Case(f"{insn} xmm0, {text}", width, a=0, **mem)
+            yield Case(f"{insn} {text}, xmm3", width, a=0, writes=True,
+                       **mem)
+    text, base, _, bv, _ = memory_operand(64, "b", None)
+    for insn in ("movlps", "movlpd"):
+        yield Case(f"{insn} {text}, xmm2", 64, a=0, mem=True, base=base,
+                   base_value=bv, writes=True, xmm=True)
+    yield Case(".byte 0x66, 0x0f, 0x12, 0xca", 64, a=0, xmm=True)
 
 
 def addr32_cases():

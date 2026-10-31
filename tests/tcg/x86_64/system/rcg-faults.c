@@ -293,7 +293,9 @@ static void check_fault(const struct rcg_case *c, const struct rcg_start *s,
 /*
  * A case with XMM registers loads XMM1 or stores XMM2, at addr. A run across
  * the boundary goes through the helper, which rcg-insns' cases need not
- * reach, so compare the result with memory, rather than with TCG's.
+ * reach, so compare the result with memory, rather than with TCG's. A
+ * narrower load clears the rest of XMM1, and a narrower store leaves the
+ * memory after it alone.
  */
 static void check_xmm_access(const struct rcg_case *c,
                              const struct rcg_start *s, int below,
@@ -309,6 +311,12 @@ static void check_xmm_access(const struct rcg_case *c,
         same &= mem[i] == reg[i];
     }
     check(same, c, s, below, MAPPED, "XMM and memory differ");
+    same = true;
+    for (int i = c->width / 8; i < 16; i++) {
+        same &= c->writes ? mem[i] == start_window[off + i] : reg[i] == 0;
+    }
+    check(same, c, s, below, MAPPED,
+          c->writes ? "wrote beyond the lane" : "did not clear above the lane");
 }
 
 /*
