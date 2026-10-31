@@ -244,10 +244,11 @@ Function call
 
      - | As rich, with 'jumps' in place of the flags, then 'label', where
          the gadget branches if its condition holds. It ends a basic block,
-         as brcond does, and raises no exception. 'jumps', if not 0, is a
-         gadget that takes the same words and also does the
-         addi_env_goto_tb that starts each way, which TCTI may use in its
-         place. See ``tcg_gen_rich_br()``.
+         as brcond does. It raises no exception unless it was joined to a
+         rich op with TCG_RICH_MAY_FAULT; see ``tcg_gen_rich_br_join()``.
+         'jumps', if not 0, is a gadget that takes the same words and also
+         does the addi_env_goto_tb that starts each way, which TCTI may use
+         in its place. See ``tcg_gen_rich_br()``.
 
 Jumps/Labels
 ------------

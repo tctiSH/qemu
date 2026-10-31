@@ -27,6 +27,7 @@ rcg-table.c.inc, the translator's table of them, to a directory.
     rcg-gen.py --insn-tests FILE
     rcg-gen.py --jcc-tests FILE
     rcg-gen.py --fault-tests FILE
+    rcg-gen.py --jcc-fault-tests FILE
     rcg-gen.py --check
     rcg-gen.py --gadgets DIR
     rcg-gen.py --coverage ordered|plain NM TRACE...
@@ -370,40 +371,59 @@ def cond_specs():
 
 
 class FusedSpec:
-    """ A CMP or TEST of two registers, or of a register and an immediate,
-    and the Jcc right after it, in one gadget: kind "fjcc" (as "jcc") or
-    "fjccgoto" (as "jccgoto"). setter is the CMP's or TEST's Spec, and cond
-    the Jcc's condition. The gadget does the setter's work, then the Jcc's
-    with the condition worked out from the registers the setter compared,
-    rather than from cc_dst and cc_src reloaded from env. Its words are the
-    setter's, then the Jcc's. """
+    """ A CMP or TEST (fused_setters()) and the Jcc right after it, in one
+    gadget: kind "fjcc" (as "jcc") or "fjccgoto" (as "jccgoto"). setter is
+    the CMP's or TEST's Spec, and cond the Jcc's condition. The gadget does
+    the setter's work, then the Jcc's with the condition worked out from
+    the registers the setter compared, rather than from cc_dst and cc_src
+    reloaded from env. Its words are the setter's, then the Jcc's. A memory
+    setter's gadget may fault in its load, before it writes anything. """
 
     def __init__(self, kind, setter, cond):
         self.kind = kind
         self.setter = setter
         self.cond = cond
         self.cls = "sub" if setter.op.cc == "SUB" else "logic"
-        self.has_mem = False
-        self.shape = None
-        self.ordered = False
+        self.has_mem = setter.has_mem
+        self.shape = setter.shape
+        self.seg = setter.seg
+        self.ordered = setter.ordered
 
     @property
     def name(self):
         return f"{self.kind}_{self.setter.name}_{CONDS[self.cond]}"
 
     @property
+    def accesses_memory(self):
+        return self.setter.accesses_memory
+
+    @property
     def words(self):
         return [*self.setter.words, "ccop"]
 
 
+# The widths of the fused gadgets' memory forms: 16 bits is rare there.
+FUSED_MEMORY_WIDTHS = (8, 32, 64)
+
+
 def fused_setters():
-    """ The gadgets a Jcc right after them can join, in the translator's
-    table's order. """
+    """ The setters a Jcc right after them can join, in rcg_fused_setter's
+    order: CMP and TEST of two registers, of a register and an immediate,
+    and with memory at shape b with no segment base. Nearly all memory CMPs
+    and TESTs use shape b. """
     for op in ALU_OPS:
         if op.name in ("cmp", "test"):
             for form in ("rr", "ri"):
                 for width in WIDTHS:
                     yield Spec("alu", op, form, width)
+    for op in ALU_OPS:
+        if op.name in ("cmp", "test"):
+            for form in op.forms:
+                if "m" in form:
+                    for width in FUSED_MEMORY_WIDTHS:
+                        for ordered in (False, True):
+                            yield Spec("alu", op, form, width, "b", False,
+                                       ordered)
 
 
 def fused_specs():
@@ -712,15 +732,18 @@ class Harness:
         """ The lines that end the gadget, going on to what follows it. """
         raise NotImplementedError
 
-    def branch(self, arm):
+    def branch(self, arm, labels):
         """ The lines that make the gadget go on at its target instead, if
-        the host's condition arm holds. """
+        the host's condition arm holds. labels are numeric labels reserved
+        for these lines, so they cannot clash with those of a load in the
+        same body. """
         raise NotImplementedError
 
-    def jumps(self, arm):
+    def jumps(self, arm, labels):
         """ The lines on the way through and the slow-path lines of a branch
         if arm holds that also makes the jump to the next TB each way, for
-        jccgoto and fjccgoto (see tcg_gen_rich_br()). """
+        jccgoto and fjccgoto (see tcg_gen_rich_br()), with labels as for
+        branch(). """
         raise NotImplementedError
 
     def assemble(self, words, hot, cold):
@@ -1112,11 +1135,11 @@ class Body:
 
     def branch(self, arm):
         """ The harness's branch to the gadget's target if arm holds. """
-        self.emit(*self.h.branch(arm))
+        self.emit(*self.h.branch(arm, self._labels()))
 
     def jumps(self, arm):
         """ The harness's branch if arm holds, then the jump each way. """
-        hot, cold = self.h.jumps(arm)
+        hot, cold = self.h.jumps(arm, (*self._labels(), *self._labels()))
         self.emit(*hot)
         self.cold += cold
 
@@ -1710,10 +1733,10 @@ class CheckHarness(Harness):
     def leave(self):
         return ["// leave"]
 
-    def branch(self, arm):
+    def branch(self, arm, labels):
         return [f"// branch if {arm}"]
 
-    def jumps(self, arm):
+    def jumps(self, arm, labels):
         return [f"// jumps if {arm}"], []
 
 
@@ -1768,22 +1791,25 @@ class TctiHarness(Harness):
     def leave(self):
         return ["ldr x27, [x28], #8", "br x27"]
 
-    def branch(self, arm):
+    def branch(self, arm, labels):
         # tcg_out_rich_br() writes the target after the words. Branching,
         # rather than a CSEL into x28, lets the gadgets that follow run
         # ahead on the predicted path instead of waiting for the condition.
-        return ["ldr x27, [x28], #8", f"b.{ARM_INVERT[arm]} 1f",
-                "mov x28, x27", "1:"]
+        skip = labels[0]
+        return ["ldr x27, [x28], #8", f"b.{ARM_INVERT[arm]} {skip}f",
+                "mov x28, x27", f"{skip}:"]
 
-    def jumps(self, arm):
+    def jumps(self, arm, labels):
         # tcti_join_rich_br() swaps this gadget in for the jcc or fjcc gadget
         # when the code at the target and the code after the target word in
         # the stream both start with an addi_env_goto_tb gadget. This one skips
         # that gadget's address and does its work for the way it goes, and
         # each way leaves by a separate branch.
-        hot = ["ldr x27, [x28], #8", f"b.{arm} 9f",
-               "add x28, x28, #8", *self._goto_tb(8)]
-        cold = ["9:", "add x28, x27, #8", *self._goto_tb(7), *self.leave()]
+        taken, past, past_taken = labels[:3]
+        hot = ["ldr x27, [x28], #8", f"b.{arm} {taken}f",
+               "add x28, x28, #8", *self._goto_tb(past)]
+        cold = [f"{taken}:", "add x28, x27, #8", *self._goto_tb(past_taken),
+                *self.leave()]
         return hot, cold
 
     def _goto_tb(self, label):
@@ -2658,6 +2684,22 @@ def cond_cases():
             for cond in range(16):
                 yield Case(f"{setter}; j{CONDS[cond]} 1f; mov ecx, 1; 1:",
                            width, a=0)
+    # CMP and TEST with memory, by a base register and a displacement.
+    for width in FUSED_MEMORY_WIDTHS:
+        text, base, _, bv, _ = memory_operand(width, "b", None)
+        rd = reg_name(2, width)
+        for setter in (f"cmp {text}, {rd}", f"cmp {rd}, {text}",
+                       f"cmp {text}, 1", f"test {text}, {rd}",
+                       f"test {text}, -1"):
+            for cond in range(16):
+                yield Case(f"{setter}; j{CONDS[cond]} 1f; mov ecx, 1; 1:",
+                           width, a=2, mem=True, base=base, base_value=bv)
+        # RIP-relative, which is shape b on env's eip.
+        m = rip_relative(width)
+        for setter in (f"cmp {m}, {rd}", f"test {m}, -1"):
+            for cond in (4, 5):
+                yield Case(f"{setter}; j{CONDS[cond]} 1f; mov ecx, 1; 1:",
+                           width, a=2, mem=True)
     # Registers that are not RAX and RBX, which reach a joined gadget as its
     # words, RSP among them.
     for width in WIDTHS:
@@ -2781,6 +2823,14 @@ def fault_cases():
             yield mem(f"{op.name} {m}, {reg_name(2, width)}", width, a=2,
                       writes=op.writes)
             yield mem(f"{op.name} {m}, 0x55", width, writes=op.writes)
+    # A CMP or TEST that the Jcc after it joins: the fault is the setter's.
+    # The ADC start's TCG ops leave cc_src and cc_src2 in host registers, so
+    # the discards after a CMP or TEST must not come before the gadget.
+    for width in FUSED_MEMORY_WIDTHS:
+        m, rd = f"{PTR[width]} ptr [rbx]", reg_name(2, width)
+        for setter in (f"cmp {m}, {rd}", f"cmp {rd}, {m}", f"cmp {m}, 0x55",
+                       f"test {m}, {rd}", f"test {m}, 0x55"):
+            yield mem(f"{setter}; jne 1f; mov ecx, 1; 1:", width, a=2)
     for width in WIDTHS:
         m = f"{PTR[width]} ptr [rbx]"
         yield mem(f"mov {reg_name(0, width)}, {m}", width, a=0)
@@ -3221,6 +3271,13 @@ def jcc_cases():
             if re.search(r"(^|; )j[a-z]+ 1f; mov ecx, 1; 1:$", c.insn))
 
 
+def jcc_fault_cases():
+    """ The cases of rcg-faults-jcc: rcg-faults' cases that end in a Jcc
+    forward. """
+    return (c for c in fault_cases()
+            if re.search(r"(^|; )j[a-z]+ 1f; mov ecx, 1; 1:$", c.insn))
+
+
 def check_coverage(order, nm, traces):
     """ Checks that the rcg_insn and rcg_jumps trace events in traces, from
     runs of QEMU's x86_64 system emulator, took every gadget that the
@@ -3238,7 +3295,11 @@ def check_coverage(order, nm, traces):
         if len(parts) == 3 and parts[2].lstrip("_").startswith("rcg_gadget_"):
             names[int(parts[0], 16)] = parts[2].lstrip("_")[11:]
     taken = set()
-    setters = {spec.name for spec in fused_setters()}
+    # What a setter's Jcc would be called. A Jcc of another state ran after
+    # a TCG instruction, which the trace does not show, set the flags again.
+    setters = {spec.name: (f"jcc_{'sub' if spec.op.cc == 'SUB' else 'logic'}"
+                           f"{spec.width}_")
+               for spec in fused_setters()}
     unjoined = set()
     for path in traces:
         picked = []
@@ -3261,7 +3322,7 @@ def check_coverage(order, nm, traces):
         taken |= {names[g - slides[0]] for g in seen}
         gadgets = [names[g - slides[0]] for g in picked]
         unjoined |= {(a, b) for a, b in zip(gadgets, gadgets[1:])
-                     if a in setters and b.startswith("jcc_")}
+                     if a in setters and b.startswith(setters[a])}
 
     want = {spec.name
             for spec in [*specs(), *cond_specs(), *fused_specs()]
@@ -3284,6 +3345,8 @@ def main():
                         help="write rcg-insns.c's cases to FILE")
     parser.add_argument("--jcc-tests", metavar="FILE",
                         help="write rcg-jcc.c's cases to FILE")
+    parser.add_argument("--jcc-fault-tests", metavar="FILE",
+                        help="write rcg-faults-jcc's cases to FILE")
     parser.add_argument("--fault-tests", metavar="FILE",
                         help="write rcg-faults.c's cases to FILE")
     parser.add_argument("--check", action="store_true",
@@ -3297,7 +3360,8 @@ def main():
                              "plain)")
     args = parser.parse_args()
     if not (args.insn_tests or args.jcc_tests or args.fault_tests or
-            args.check or args.gadgets or args.coverage):
+            args.jcc_fault_tests or args.check or args.gadgets or
+            args.coverage):
         parser.error("nothing to do")
     if args.coverage and (len(args.coverage) < 3 or
                           args.coverage[0] not in ("ordered", "plain")):
@@ -3316,6 +3380,9 @@ def main():
     if args.fault_tests:
         with open(args.fault_tests, "w") as out:
             write_cases(fault_cases(), out, "rcg_fault_", adc=True)
+    if args.jcc_fault_tests:
+        with open(args.jcc_fault_tests, "w") as out:
+            write_cases(jcc_fault_cases(), out, "rcg_fault_", adc=True)
     if args.coverage:
         order, nm, *traces = args.coverage
         if not check_coverage(order, nm, traces):

@@ -101,7 +101,7 @@ bool tcg_gen_rich_mo(TCGBar type);
  *
  * As tcg_gen_rich() with no flags, but the gadget may branch to @l, so it
  * ends a basic block as brcond does: every global is synced before it. It
- * must not raise an exception.
+ * must not raise an exception, except as tcg_gen_rich_br_join() allows.
  *
  * TCTI may emit @jumps instead when the code at @l and the code after this
  * op both start with an addi_env_goto_tb gadget: an add of a constant to a
@@ -114,25 +114,31 @@ void tcg_gen_rich_br(const void *gadget, const uint64_t *words,
                      TCGTemp **ins, unsigned nb_ins);
 
 /**
- * tcg_rich_gadget() - the gadget of a rich op that cannot fault
+ * tcg_rich_gadget() - the gadget of a rich op
  * @op: an op, or NULL
  *
- * Returns @op's gadget if @op is a rich op without TCG_RICH_MAY_FAULT,
- * else NULL.
+ * Returns @op's gadget if @op is a rich op (not rich_br), else NULL.
  */
 const void *tcg_rich_gadget(TCGOp *op);
 
 /**
  * tcg_gen_rich_br_join() - output an RCG gadget that may branch, in place
  * of an earlier rich op
- * @prev: a rich op for which tcg_rich_gadget() is not NULL
+ * @prev: a rich op
  * @gadget, @words, @nb_words, @l, @jumps, @outs, @nb_outs, @ins, @nb_ins:
  *       as for tcg_gen_rich_br()
  *
  * As tcg_gen_rich_br(), but @gadget and @jumps first do @prev's work, and
  * @prev is removed. They take @prev's words, then @words. The op writes
  * @prev's outputs and @outs, and reads @prev's inputs and @ins. Nothing
- * between @prev and the new op may read or write those globals.
+ * emitted between @prev and this call may read or write those globals,
+ * apart from discards.
+ *
+ * The op takes @prev's place, so it belongs to @prev's instruction and runs
+ * before the ops that followed @prev, such as discards. If @prev has
+ * TCG_RICH_MAY_FAULT, the op may fault as @prev may. It writes nothing
+ * before its last access that may fault, and every global is synced before
+ * it, so a fault leaves the guest as it was before @prev's instruction.
  */
 void tcg_gen_rich_br_join(TCGOp *prev, const void *gadget,
                           const uint64_t *words, unsigned nb_words,

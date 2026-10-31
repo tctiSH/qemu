@@ -23,7 +23,10 @@
  */
 
 #include "rcg-test.h"
-#include "rcg-faults.h"
+#ifndef RCG_FAULT_CASES
+#define RCG_FAULT_CASES "rcg-faults.h"
+#endif
+#include RCG_FAULT_CASES
 
 #define NB_CASES (sizeof(rcg_fault_cases) / sizeof(rcg_fault_cases[0]))
 

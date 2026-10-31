@@ -338,9 +338,9 @@ static const void *rcg_translate_cond(DisasContext *s,
         /*
          * As gen_Jcc, but the gadget always stores CC_OP, even where it is
          * already clean (after COMISS, FCOMI or PUSHF, for example). Right
-         * after a CMP or TEST of registers or an immediate, one gadget
-         * does both, branching on the values it compared rather than
-         * reloading cc_dst and cc_src.
+         * after a setter in rcg_fused_setter, one gadget does both,
+         * branching on the values it compared rather than reloading cc_dst
+         * and cc_src.
          */
         taken = gen_new_label();
         gen_bnd_jmp(s);
