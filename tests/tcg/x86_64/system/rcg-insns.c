@@ -10,8 +10,8 @@
  * Each runs over every pair of values from rcg_values (or each single
  * value, where the form takes one operand), from every start in
  * rcg_starts. The registers, the arithmetic flags, SETcc's result for each
- * condition and the memory the case can reach are hashed, and a case
- * prints its hash.
+ * condition, XMM0 to XMM3 for a case that uses them, and the memory the
+ * case can reach are hashed, and a case prints its hash.
  *
  * rcg-insns.ref holds TCG's hashes. To regenerate it after rcg-gen.py
  * changes the cases, run the test under TCG (in a build with TCTI, with
@@ -48,6 +48,9 @@ static uint64_t run(const struct rcg_case *c)
                 h = rcg_hash(h, rcg_out.r, sizeof(rcg_out.r));
                 h = rcg_hash(h, &flags, sizeof(flags));
                 h = rcg_hash(h, rcg_out.cc, sizeof(rcg_out.cc));
+                if (c->xmm) {
+                    h = rcg_hash(h, rcg_out.x, sizeof(rcg_out.x));
+                }
                 h = rcg_hash(h, rcg_bytes(RCG_MEM), RCG_MEM_SIZE);
                 h = rcg_hash(h, rcg_bytes(RCG_STACK - RCG_STACK_SIZE),
                              2 * RCG_STACK_SIZE);

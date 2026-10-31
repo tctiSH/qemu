@@ -12,6 +12,7 @@
 #if defined(TARGET_X86_64) && defined(TCG_HAVE_RCG)
 
 #include "target/i386/trace.h"
+#include "host/cpuinfo.h"
 #include "tcti-gadget-defs.h"
 #include "tcg/rcg-table.c.inc"
 
@@ -86,11 +87,19 @@ static const struct {
     { gen_CALL_m, RCG_OP_CALL, -1,  1, -1 },
     { gen_JMP_m,  RCG_OP_JMP,  -1,  1, -1 },
     { gen_RET,    RCG_OP_RET,  -1, -1, -1 },
+    /*
+     * MOVDQU and MOVUPS; rcg_select() picks MOVDQA for those that must be
+     * aligned.
+     */
+    { gen_MOVDQ,  RCG_OP_MOVDQU, 0,  2, -1 },
 };
 
+static bool sse_needs_alignment(DisasContext *s, X86DecodedInsn *decode,
+                                MemOp ot);
+
 /*
- * An operand's kind, as a form names it: register, memory or immediate, or
- * 0 if no form takes it.
+ * An operand's kind, as a form names it: register, memory, immediate or a
+ * 16-byte XMM register, or 0 if no form takes it.
  */
 static char rcg_kind(DisasContext *s, X86DecodedOp *op)
 {
@@ -104,6 +113,9 @@ static char rcg_kind(DisasContext *s, X86DecodedOp *op)
         return 'r';
     case X86_OP_IMM:
         return 'i';
+    case X86_OP_SSE:
+        /* A VEX encoding may also clear the upper half of the YMM. */
+        return op->ot == MO_128 && !(s->prefix & PREFIX_VEX) ? 'x' : 0;
     default:
         return 0;
     }
@@ -115,7 +127,8 @@ static int rcg_form(char a, char b)
         [RCG_FORM_RR] = "rr", [RCG_FORM_RM] = "rm", [RCG_FORM_MR] = "mr",
         [RCG_FORM_RI] = "ri", [RCG_FORM_MI] = "mi", [RCG_FORM_R] = "r",
         [RCG_FORM_I] = "i", [RCG_FORM_M] = "m", [RCG_FORM_RRI] = "rri",
-        [RCG_FORM_RMI] = "rmi",
+        [RCG_FORM_RMI] = "rmi", [RCG_FORM_XX] = "xx", [RCG_FORM_XM] = "xm",
+        [RCG_FORM_MX] = "mx",
     };
     const char want[] = { a, b, 0 };
 
@@ -169,10 +182,12 @@ static void rcg_note_temp(TCGTemp **list, unsigned *n, TCGTemp *g)
     list[(*n)++] = g;
 }
 
-/* The same for v's temp. */
+/* The same for v's temp. An XMM register has no global: v is NULL. */
 static void rcg_note(TCGTemp **list, unsigned *n, TCGv v)
 {
-    rcg_note_temp(list, n, tcgv_tl_temp(v));
+    if (v) {
+        rcg_note_temp(list, n, tcgv_tl_temp(v));
+    }
 }
 
 /*
@@ -207,10 +222,15 @@ static bool rcg_takes_xh(RCGOp op)
 
 /*
  * A register operand's env offset, as a gadget takes it, and *v, the
- * global it is in: AH to BH are the second byte of RAX to RBX.
+ * global it is in: AH to BH are the second byte of RAX to RBX. An XMM
+ * register is in env alone, so *v is NULL.
  */
 static uint64_t rcg_reg_op(DisasContext *s, X86DecodedOp *op, TCGv *v)
 {
+    if (op->unit == X86_OP_SSE) {
+        *v = NULL;
+        return offsetof(CPUX86State, xmm_regs[op->n]);
+    }
     if (rcg_is_xh(s, op)) {
         *v = cpu_regs[op->n - 4];
         return rcg_reg(op->n - 4) + 1;
@@ -412,7 +432,7 @@ static void rcg_rotate_flags(DisasContext *s, MemOp ot, int n, bool left,
  * The op for decode's instruction, and its first and second operands as
  * rcg_insns[] describes them; or false if RCG has no op for it.
  */
-static bool rcg_select(X86DecodedInsn *decode, RCGOp *op,
+static bool rcg_select(DisasContext *s, X86DecodedInsn *decode, RCGOp *op,
                        X86DecodedOp **first, X86DecodedOp **second)
 {
     X86GenFunc gen = decode->e.gen;
@@ -461,7 +481,10 @@ static bool rcg_select(X86DecodedInsn *decode, RCGOp *op,
     *second = rcg_insns[i].second >= 0 ? &decode->op[rcg_insns[i].second]
                                        : NULL;
 
-    if (*op == RCG_OP_SUB && !writes) {
+    if (*op == RCG_OP_MOVDQU &&
+        sse_needs_alignment(s, decode, decode->op[0].ot)) {
+        *op = RCG_OP_MOVDQA;
+    } else if (*op == RCG_OP_SUB && !writes) {
         *op = RCG_OP_CMP;
     } else if (*op == RCG_OP_AND && !writes) {
         *op = RCG_OP_TEST;
@@ -533,6 +556,21 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
     case RCG_KIND_CBW:
         *ot = first->ot;
         return rcg_form(rcg_kind(s, first), 0);
+    case RCG_KIND_VMOV: {
+        /*
+         * A 16-byte gadget with memory needs LSE2 to make its access
+         * single-copy atomic, as TCTI's qemu_ld_i128 and qemu_st_i128
+         * gadgets do.
+         */
+        char a = rcg_kind(s, first), b = rcg_kind(s, second);
+
+        *ot = MO_128;
+        if (!a || !b || ((a == 'm' || b == 'm') &&
+                         !(cpuinfo & CPUINFO_LSE2))) {
+            return -1;
+        }
+        return rcg_form(a, b);
+    }
     case RCG_KIND_LEAVE:
         /* Only a 64-bit RBP. */
         *ot = mo_pushpop(s, s->dflag);
@@ -667,7 +705,7 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     if (gen == gen_Jcc || gen == gen_SETcc || gen == gen_CMOVcc) {
         return rcg_translate_cond(s, decode);
     }
-    if (!rcg_select(decode, &op, &first, &second)) {
+    if (!rcg_select(s, decode, &op, &first, &second)) {
         return NULL;
     }
     facts = &rcg_facts[op];
@@ -740,6 +778,12 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
         bar |= slot->access & RCG_STORE ? TCG_MO_LD_ST | TCG_MO_ST_ST : 0;
         ordered = tcg_gen_rich_mo(bar);
         memop = (facts->src_ot >= 0 ? facts->src_ot : ot) | MO_LE;
+        if (facts->kind == RCG_KIND_VMOV) {
+            /* As gen_ldo_env_A0() and gen_sto_env_A0() make it. */
+            memop |= (s->cpuid_ext_features & CPUID_EXT_AVX
+                      ? MO_ATOM_IFALIGN : MO_ATOM_IFALIGN_PAIR) |
+                     (op == RCG_OP_MOVDQA ? MO_ALIGN_16 : 0);
+        }
     }
     g += ordered;
     tcg_debug_assert(g->gadget);

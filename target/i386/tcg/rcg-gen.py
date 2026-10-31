@@ -61,8 +61,8 @@ REGS64 = ("rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
 R_ESP = 4
 
 WIDTHS = (8, 16, 32, 64)
-PTR = {8: "byte", 16: "word", 32: "dword", 64: "qword"}
-MO = {8: "MO_8", 16: "MO_16", 32: "MO_32", 64: "MO_64"}
+PTR = {8: "byte", 16: "word", 32: "dword", 64: "qword", 128: "xmmword"}
+MO = {8: "MO_8", 16: "MO_16", 32: "MO_32", 64: "MO_64", 128: "MO_128"}
 
 
 def reg_name(n, width):
@@ -107,6 +107,19 @@ def ea_words(shape, seg):
 #
 # The tables: what there is a gadget for.
 #
+
+class VMov:
+    """ A 16-byte move between XMM registers and memory, as gen_MOVDQ does:
+    MOVDQA and MOVAPS (aligned, which a memory operand must be), and
+    MOVDQU and MOVUPS. """
+
+    def __init__(self, name, aligned):
+        self.name = name
+        self.aligned = aligned
+
+
+VMOV_OPS = (VMov("movdqa", True), VMov("movdqu", False))
+
 
 class Alu:
     """ A two-operand ALU instruction: dest = dest op src. The result is
@@ -402,13 +415,13 @@ class Spec:
 
     kind is "alu", "zero" (XOR of a register with itself), "mov", "lea",
     "push", "pop", "extend", "unary", "shift", "mul", "imul3", "bt", "cbw",
-    "cwd", "xchg", "leave", "call", "jmp" or "ret". form is the
-    destination's kind then the source's (r, m or i), then for IMUL3 an i
-    if it takes an immediate too; for MUL and IMUL with one operand it is
-    the source's, for CBW the destination's, for CALL and JMP the target's
-    (i for CALL rel32), for RET i and for LEAVE r. shape and seg are the
-    memory operand's, if any. ordered is for the twin that keeps the
-    guest's memory order (tcg_ldst_ordered()).
+    "cwd", "xchg", "leave", "call", "jmp", "ret" or "vmov". form is the
+    destination's kind then the source's (r, m or i, or x for an XMM
+    register), then for IMUL3 an i if it takes an immediate too; for MUL
+    and IMUL with one operand it is the source's, for CBW the destination's,
+    for CALL and JMP the target's (i for CALL rel32), for RET i and for
+    LEAVE r. shape and seg are the memory operand's, if any. ordered is for
+    the twin that keeps the guest's memory order (tcg_ldst_ordered()).
     """
 
     def __init__(self, kind, op, form, width, shape=None, seg=False,
@@ -457,7 +470,7 @@ class Spec:
         if self.kind in ("pop", "ret", "leave"):
             return True
         return (self.has_mem and self.kind != "lea" and
-                not (self.kind == "mov" and self.form[0] == "m"))
+                not (self.kind in ("mov", "vmov") and self.form[0] == "m"))
 
     @property
     def stores(self):
@@ -466,7 +479,7 @@ class Spec:
         if self.kind in ("push", "call"):
             return True
         return (self.has_mem and self.form[0] == "m" and
-                (self.kind in ("mov", "unary", "shift") or
+                (self.kind in ("mov", "vmov", "unary", "shift") or
                  self.kind in ("alu", "bt") and self.op.writes))
 
     @property
@@ -503,9 +516,10 @@ class Spec:
         elif self.kind in ("pop", "unary", "cbw"):
             operands = ["d" if self.form == "r" else self.form]
         else:
-            operands = ["d" if self.form[0] == "r" else self.form[0]]
+            operands = ["d" if self.form[0] in "rx" else self.form[0]]
             if self.kind != "zero":
-                operands.append("s" if self.form[1] == "r" else self.form[1])
+                operands.append("s" if self.form[1] in "rx"
+                                else self.form[1])
             if (self.kind in ("alu", "bt") and not self.op.writes and
                     operands[0] == "d"):
                 operands[0] = "s1"
@@ -602,6 +616,9 @@ def specs():
     for form in ("r", "m"):
         yield from with_memory(Spec("jmp", None, form, 64))
     yield from with_memory(Spec("ret", None, "i", 64))
+    for op in VMOV_OPS:
+        for form in ("xx", "xm", "mx"):
+            yield from with_memory(Spec("vmov", op, form, 128))
 
 
 def with_memory(spec):
@@ -804,6 +821,80 @@ class Body:
                 addr=addr, ordered=size if ordered else None,
                 miss_label=miss, env=self.env, retaddr=self.h.retaddr,
                 save=save, restore=restore),
+            f"b {join}b",
+        ]
+
+    def load128(self, lo, hi, addr, aligned):
+        """ lo and hi = the 16 bytes of guest memory at addr, as TCTI's
+        qemu_ld_i128 gadgets load them: one LDP. The translator requires
+        LSE2, which makes an aligned LDP single-copy atomic. aligned
+        says the access must be on a 16-byte boundary: one that is not goes
+        to the helper, which raises the fault. The ordered twin orders it
+        before what follows with DMB ISHLD, as those gadgets do. """
+        t, out, page = tcti_memory.TMP
+        miss, join = self._labels()
+        if aligned:
+            self.emit(f"tst {addr}, #15", f"b.ne {miss}f")
+        self.emit(*tcti_memory.create_tlb_fastpath(
+            is_write=False, size=16, addr=addr, miss_label=miss,
+            env=self.env, tlb=self.word("tlb"), cmp_operand="tlb_cmp_read"),
+                  f"add {out}, {out}, {addr}",
+                  f"ldp {lo}, {hi}, [{out}]",
+                  f"{join}:")
+        if self.spec.ordered:
+            self.emit("dmb ishld")
+        save, restore = self._save(self.used | set(self.word_regs.values()))
+        self.cold += [
+            f"{miss}:",
+            f"mov {out}, {addr}",
+            *save,
+            f"mov x0, {self.env}",
+            f"mov x1, {out}",
+            self._memop().format("x2"),
+            f"mov x3, {self.h.retaddr}",
+            "bl _helper_ld16_mmu",
+            # Int128 comes back in x0 and x1, which restore may reload.
+            f"mov {t}, x0",
+            f"mov {page}, x1",
+            *restore,
+            f"mov {lo}, {t}",
+            f"mov {hi}, {page}",
+            f"b {join}b",
+        ]
+        self.define(lo, hi)
+
+    def store128(self, lo, hi, addr, aligned):
+        """ The 16 bytes of lo and hi to guest memory at addr, as load128()
+        loads them, with one STP; the ordered twin puts DMB ISHST before
+        it. """
+        t, out, page = tcti_memory.TMP
+        miss, join = self._labels()
+        if aligned:
+            self.emit(f"tst {addr}, #15", f"b.ne {miss}f")
+        self.emit(*tcti_memory.create_tlb_fastpath(
+            is_write=True, size=16, addr=addr, miss_label=miss,
+            env=self.env, tlb=self.word("tlb"), cmp_operand="tlb_cmp_write"),
+                  f"add {out}, {out}, {addr}",
+                  *(["dmb ishst"] if self.spec.ordered else []),
+                  f"stp {lo}, {hi}, [{out}]",
+                  f"{join}:")
+        save, restore = self._save(self.used | set(self.word_regs.values()))
+        self.cold += [
+            f"{miss}:",
+            # Out of the way of the helper's arguments.
+            f"mov {t}, {addr}",
+            f"mov {out}, {lo}",
+            f"mov {page}, {hi}",
+            *save,
+            f"mov x0, {self.env}",
+            f"mov x1, {t}",
+            f"mov x2, {out}",
+            f"mov x3, {page}",
+            self._memop().format("x4"),
+            f"mov x5, {self.h.retaddr}",
+            *(["dmb ishst"] if self.spec.ordered else []),
+            "bl _helper_st16_mmu",
+            *restore,
             f"b {join}b",
         ]
 
@@ -1082,6 +1173,26 @@ def alu_body(g, spec):
         g.write_cc(dst=R)
     else:
         g.write_cc(dst=R, src=B)
+
+
+def vmov_body(g, spec):
+    # gen_MOVDQ: the 16 bytes of the source, an XMM register in env or
+    # memory, to the destination. Each form has at most one memory access,
+    # and nothing is written before it.
+    aligned = spec.op.aligned
+    if spec.has_mem:
+        g.ea(ADDR)
+    if spec.form[1] == "m":
+        g.load128(A, B, ADDR, aligned)
+    else:
+        g.emit(f"add {T}, {g.env}, {g.word('s')}",
+               f"ldp {A}, {B}, [{T}]")
+        g.define(A, B)
+    if spec.form[0] == "m":
+        g.store128(A, B, ADDR, aligned)
+    else:
+        g.emit(f"add {T}, {g.env}, {g.word('d')}",
+               f"stp {A}, {B}, [{T}]")
 
 
 def zero_body(g, spec):
@@ -1486,6 +1597,7 @@ def cmov_body(g, spec):
 BODIES = {
     "jcc": jcc_body,
     "jccgoto": jccgoto_body,
+    "vmov": vmov_body,
     "fjcc": fused_body,
     "fjccgoto": fused_body,
     "setcc": setcc_body,
@@ -1674,11 +1786,12 @@ OP_NAMES = ("add", "sub", "and", "or", "xor", "cmp", "test", "adc", "sbb",
             "zero", "mov", "lea", "push", "pop", "movzxb", "movzxw", "movsxb",
             "movsxw", "movsxd", "not", "neg", "shl", "shr", "sar", "ror",
             "mul", "imul", "imul3", "bt", "bts", "btr", "btc", "cbw", "cwd",
-            "xchg", "leave", "call", "jmp", "ret")
-FORM_NAMES = ("rr", "rm", "mr", "ri", "mi", "r", "i", "m", "rri", "rmi")
+            "xchg", "leave", "call", "jmp", "ret", "movdqa", "movdqu")
+FORM_NAMES = ("rr", "rm", "mr", "ri", "mi", "r", "i", "m", "rri", "rmi",
+              "xx", "xm", "mx")
 KIND_NAMES = ("alu", "zero", "mov", "lea", "push", "pop", "extend", "unary",
               "shift", "mul", "imul3", "bt", "cbw", "cwd", "xchg", "leave",
-              "call", "jmp", "ret")
+              "call", "jmp", "ret", "vmov")
 WORD_NAMES = ("d", "s", "s1", "base", "index", "disp", "seg", "imm", "oi",
               "tlb", "ccop")
 MAX_WORDS = len(WORD_REGS)
@@ -1688,7 +1801,7 @@ MAX_WORDS = len(WORD_REGS)
 # Must match target/i386/tcg/meson.build.
 GADGET_FILES = ("add", "sub", "and", "or", "xor", "cmp", "test", "adc", "sbb",
                 "mov", "other", "shift", "mul", "bt", "jcc", "setcc", "cmov",
-                "fused")
+                "fused", "sse")
 
 
 def op_name(spec):
@@ -1703,6 +1816,8 @@ def gadget_file(spec):
     name = op_name(spec)
     if spec.kind in ("shift", "mul", "bt"):
         return spec.kind
+    if spec.kind == "vmov":
+        return "sse"
     if spec.kind == "imul3":
         return "mul"
     return name if name in GADGET_FILES else "other"
@@ -1711,7 +1826,7 @@ def gadget_file(spec):
 def table_index(spec, nb_shapes):
     """ Where spec is in its op and form's gadgets, which are indexed by
     width (MemOp), shape, segment base and memory order. """
-    width = WIDTHS.index(spec.width)
+    width = list(MO).index(spec.width)
     shape = EA_SHAPES.index(spec.shape) if spec.has_mem else 0
     return ((width * nb_shapes + shape) * 2 + spec.seg) * 2 + spec.ordered
 
@@ -1927,7 +2042,8 @@ def write_table(all_specs, out):
     access, reads_d = {}, {}
     for (op, form), group in slots.items():
         nb_shapes = len(EA_SHAPES) if group[0].has_mem else 1
-        entries = [None] * (len(WIDTHS) * nb_shapes * 4)
+        nb_widths = max(list(MO).index(spec.width) for spec in group) + 1
+        entries = [None] * (nb_widths * nb_shapes * 4)
         for spec in group:
             assert spec.accesses_memory == (spec.loads or spec.stores)
             entries[table_index(spec, nb_shapes)] = spec
@@ -2082,12 +2198,15 @@ class Case:
     branch in rcg-faults, is where it finds the address to go to: a
     register, RCG_TARGET_MEM (its memory operand) or RCG_TARGET_STACK (the
     top of the stack); the address is that of the end of the instruction.
+    xmm says that it uses XMM0 to XMM3, which rcg-insns then compares.
+    aligned says that its access must be on a 16-byte boundary, for
+    rcg-faults.
     """
 
     def __init__(self, insn, width, a=-1, b=-1, mem=False, base=-1,
                  index=-1, base_value=0, index_value=0, stack=False,
                  writes=False, operand=OPERAND, rsp=STACK, moved=-1,
-                 target=-1):
+                 target=-1, xmm=False, aligned=False):
         self.insn = insn
         self.width = width
         self.a = a
@@ -2103,6 +2222,8 @@ class Case:
         self.rsp = rsp
         self.moved = moved
         self.target = target
+        self.xmm = xmm
+        self.aligned = aligned
 
 
 def memory_operand(width, shape, seg, base=3, index=1, target=None):
@@ -2180,6 +2301,7 @@ def insn_cases():
     yield from move_cases()
     yield from high_byte_cases()
     yield from addr32_cases()
+    yield from vmov_cases()
     yield from cond_cases()
     yield from branch_cases()
     yield from chain_cases()
@@ -2672,6 +2794,17 @@ def fault_cases():
         m = f"{PTR[width]} ptr [rbx]"
         yield mem(f"imul {reg_name(0, width)}, {m}", width, a=0)
         yield mem(f"imul {reg_name(0, width)}, {m}, 0x55", width, a=0)
+    # 16 bytes: MOVDQU, which may cross the boundary, and the moves that must
+    # be aligned, which run_aligned() in rcg-faults.c treats apart.
+    yield mem("movdqu xmm1, xmmword ptr [rbx]", 128, xmm=True)
+    yield mem("movdqu xmmword ptr [rbx], xmm2", 128, writes=True, xmm=True)
+    for insn in ("movdqa", "movaps", "movapd"):
+        yield mem(f"{insn} xmm1, xmmword ptr [rbx]", 128, xmm=True,
+                  aligned=True)
+    for insn in ("movdqa", "movaps", "movapd", "movntdq", "movntps",
+                 "movntpd"):
+        yield mem(f"{insn} xmmword ptr [rbx], xmm2", 128, writes=True,
+                  xmm=True, aligned=True)
     yield mem("push qword ptr [rbx]", 64, stack=True)
     yield mem("call qword ptr [rbx]", 64, stack=True, target=RCG_TARGET_MEM)
     yield mem("jmp qword ptr [rbx]", 64, target=RCG_TARGET_MEM)
@@ -2889,6 +3022,50 @@ def move_cases():
     yield Case("xchg rax, r8", 64, a=0, b=8)
 
 
+def vmov_cases():
+    """ MOVDQA and MOVDQU, with MOVAPS, MOVUPS, MOVAPD and MOVUPD, which
+    decode the same: between XMM registers in both encodings, and with
+    memory at every operand shape and segment override and RIP-relative.
+    The unaligned ones also run misaligned, as a misaligned MOVDQA raises
+    #GP, which rcg-insns does not catch. """
+    for insn in ("movdqa", "movdqu", "movaps", "movups", "movapd", "movupd"):
+        yield Case(f"{insn} xmm1, xmm2", 128, a=0, xmm=True)
+        yield Case(f"{{store}} {insn} xmm1, xmm2", 128, a=0, xmm=True)
+    yield Case("movdqa xmm3, xmm3", 128, a=0, xmm=True)
+    for insn in ("movdqa", "movdqu"):
+        for shape in EA_SHAPES:
+            for seg in SEGS:
+                text, base, index, bv, iv = memory_operand(128, shape, seg)
+                mem = dict(mem=True, base=base, index=index, base_value=bv,
+                           index_value=iv, xmm=True)
+                yield Case(f"{insn} xmm1, {text}", 128, a=0, **mem)
+                yield Case(f"{insn} {text}, xmm2", 128, a=0, writes=True,
+                           **mem)
+        yield Case(f"{insn} xmm0, {rip_relative(128)}", 128, a=0, mem=True,
+                   xmm=True)
+    for target in MISALIGNED:
+        text, base, _, bv, _ = memory_operand(128, "b", None, target=target)
+        mem = dict(mem=True, base=base, base_value=bv, operand=target,
+                   xmm=True)
+        yield Case(f"movups xmm0, {text}", 128, a=0, **mem)
+        yield Case(f"movdqu {text}, xmm3", 128, a=0, writes=True, **mem)
+    # The same gadgets by other decodings, and XMM8 to XMM15 by way of the
+    # registers the test compares.
+    text, base, index, bv, iv = memory_operand(128, "b", None)
+    mem = dict(mem=True, base=base, index=index, base_value=bv,
+               index_value=iv, xmm=True)
+    for insn in ("movaps", "movups", "movapd", "movupd", "lddqu"):
+        yield Case(f"{insn} xmm1, {text}", 128, a=0, **mem)
+    for insn in ("movaps", "movups", "movapd", "movupd", "movntdq",
+                 "movntps", "movntpd"):
+        yield Case(f"{insn} {text}, xmm2", 128, a=0, writes=True, **mem)
+    yield Case("movdqa xmm8, xmm1; movdqa xmm2, xmm8", 128, a=0, xmm=True)
+    yield Case("movups xmm15, xmm3; movups xmm0, xmm15", 128, a=0, xmm=True)
+    yield Case(f"movdqu xmm9, {text}; movdqa xmm1, xmm9", 128, a=0, **mem)
+    yield Case(f"movdqa xmm10, xmm2; movdqu {text}, xmm10", 128, a=0,
+               writes=True, **mem)
+
+
 def addr32_cases():
     """ Instructions with the 32-bit address size and no memory operand,
     where it changes nothing. With one, they stay with TCG (see
@@ -2940,9 +3117,10 @@ def write_cases(cases, out, prefix, adc=False):
     print("/* Automatically generated by rcg-gen.py. Do not edit. */\n",
           file=out)
     for i, c in enumerate(cases):
-        print(f'RCG_CASE({prefix}{i}, "{c.insn}")', file=out)
+        print(f'RCG_CASE({prefix}{i}, "{c.insn}", {int(c.xmm)})', file=out)
         if adc:
-            print(f'RCG_ADC_CASE({prefix}{i}, "{c.insn}")', file=out)
+            print(f'RCG_ADC_CASE({prefix}{i}, "{c.insn}", {int(c.xmm)})',
+                  file=out)
     print(f"\nstatic const struct rcg_case {prefix}cases[] = {{", file=out)
     for i, c in enumerate(cases):
         name = f"{prefix}{i}"
@@ -2955,7 +3133,8 @@ def write_cases(cases, out, prefix, adc=False):
               f'{c.width}, {c.a}, {c.b}, {int(c.mem)}, {c.base}, '
               f'{c.index}, {c.base_value:#x}, {c.index_value}, '
               f'{int(c.stack)}, {int(c.writes)}, {c.operand:#x}, {c.rsp:#x}, '
-              f'{c.moved}, {c.target} }},', file=out)
+              f'{c.moved}, {c.target}, {int(c.xmm)}, {int(c.aligned)} }},',
+              file=out)
     print("};", file=out)
 
 

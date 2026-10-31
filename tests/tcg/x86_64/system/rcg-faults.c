@@ -79,7 +79,12 @@ static uint64_t region_pt[512] __attribute__((aligned(PAGE)));
 static int faults;
 static uint64_t fault_rip, fault_rflags, fault_rsp, fault_cr2;
 static uint64_t fault_r[15];
+static uint64_t fault_x[4][2];
+static uint64_t fault_vector;
 static uint8_t fault_window[2 * WINDOW];
+
+/* Where to go on after a #GP that the case should raise; 0 if it should not. */
+static uint64_t gp_resume;
 
 /* The window as the run started, for check_fault() to compare with. */
 static uint8_t start_window[2 * WINDOW];
@@ -109,10 +114,15 @@ static void invlpg(uint64_t addr)
 
 bool rcg_exception(struct rcg_frame *f)
 {
-    if (f->vector != 14) {
+    if (f->vector != 14 && !(f->vector == 13 && gp_resume)) {
         return false;
     }
     faults++;
+    fault_vector = f->vector;
+    asm volatile("movups %%xmm0, %0\n\tmovups %%xmm1, %1\n\t"
+                 "movups %%xmm2, %2\n\tmovups %%xmm3, %3"
+                 : "=m"(fault_x[0]), "=m"(fault_x[1]), "=m"(fault_x[2]),
+                   "=m"(fault_x[3]));
     fault_rip = f->rip;
     fault_rflags = f->rflags;
     fault_rsp = f->rsp;
@@ -120,8 +130,12 @@ bool rcg_exception(struct rcg_frame *f)
     for (int i = 0; i < 15; i++) {
         fault_r[i] = f->r[i];
     }
-    UPPER_PTE |= PTE_P | PTE_W;
-    invlpg(BOUNDARY);
+    if (f->vector == 13) {
+        f->rip = gp_resume;
+    } else {
+        UPPER_PTE |= PTE_P | PTE_W;
+        invlpg(BOUNDARY);
+    }
     for (int i = 0; i < 2 * WINDOW; i++) {
         fault_window[i] = rcg_bytes(WINDOW_START)[i];
     }
@@ -209,6 +223,11 @@ static uint64_t run(const struct rcg_case *c, const struct rcg_start *s,
     }
 
     set_upper(how);
+    /*
+     * INVLPG may flush the whole TLB. Put the lower page back in it, so that
+     * an access within that page takes the gadget's fast path.
+     */
+    (void)*(volatile uint8_t *)WINDOW_START;
     faults = 0;
     rcg_run(c, s);
     set_upper(MAPPED);
@@ -250,8 +269,6 @@ static void check_fault(const struct rcg_case *c, const struct rcg_start *s,
     check((fault_rflags & RCG_FLAGS) == (flags_in & RCG_FLAGS), c, s, below,
           how, "flags changed before the fault");
     check(fault_rsp == rsp, c, s, below, how, "RSP changed before the fault");
-    check((fault_cr2 & ~(PAGE - 1ull)) == BOUNDARY, c, s, below, how,
-          "CR2 is not in the upper page");
 
     /* The frame has RAX to R15 without RSP. */
     for (int i = 0; i < 15; i++) {
@@ -263,6 +280,35 @@ static void check_fault(const struct rcg_case *c, const struct rcg_start *s,
         same &= fault_window[b] == start_window[b];
     }
     check(same, c, s, below, how, "memory changed before the fault");
+    if (c->xmm) {
+        same = true;
+        for (int i = 0; i < 4; i++) {
+            same &= fault_x[i][0] == rcg_in.x[i][0] &&
+                    fault_x[i][1] == rcg_in.x[i][1];
+        }
+        check(same, c, s, below, how, "XMM changed before the fault");
+    }
+}
+
+/*
+ * A case with XMM registers loads XMM1 or stores XMM2, at addr. A run across
+ * the boundary goes through the helper, which rcg-insns' cases need not
+ * reach, so compare the result with memory, rather than with TCG's.
+ */
+static void check_xmm_access(const struct rcg_case *c,
+                             const struct rcg_start *s, int below,
+                             uint64_t addr, const struct result *r)
+{
+    int off = addr - WINDOW_START;
+    const uint8_t *mem = (c->writes ? r->window : start_window) + off;
+    const uint8_t *reg = c->writes ? (const uint8_t *)rcg_in.x[2]
+                                   : (const uint8_t *)r->out.x[1];
+    bool same = true;
+
+    for (int i = 0; i < c->width / 8; i++) {
+        same &= mem[i] == reg[i];
+    }
+    check(same, c, s, below, MAPPED, "XMM and memory differ");
 }
 
 /*
@@ -278,6 +324,9 @@ static void run_at(const struct rcg_case *c, const struct rcg_start *s,
 
     run(c, s, addr, MAPPED, &want);
     check(faults == 0, c, s, below, MAPPED, "faulted");
+    if (c->xmm) {
+        check_xmm_access(c, s, below, addr, &want);
+    }
 
     for (enum upper how = ABSENT; how <= READ_ONLY; how++) {
         bool expect = touches_upper && (how == ABSENT || c->writes);
@@ -288,6 +337,8 @@ static void run_at(const struct rcg_case *c, const struct rcg_start *s,
               expect ? "did not fault once" : "faulted");
         taken += faults;
         if (faults == 1 && expect) {
+            check((fault_cr2 & ~(PAGE - 1ull)) == BOUNDARY, c, s, below, how,
+                  "CR2 is not in the upper page");
             check_fault(c, s, below, how, rsp);
         }
 
@@ -301,11 +352,46 @@ static void run_at(const struct rcg_case *c, const struct rcg_start *s,
             same &= got.out.cc[i] == want.out.cc[i];
         }
         check(same, c, s, below, how, "SETcc differs after the retry");
+        if (c->xmm) {
+            same = true;
+            for (int i = 0; i < 4; i++) {
+                same &= got.out.x[i][0] == want.out.x[i][0] &&
+                        got.out.x[i][1] == want.out.x[i][1];
+            }
+            check(same, c, s, below, how, "XMM differs after the retry");
+        }
         same = true;
         for (int b = 0; b < 2 * WINDOW; b++) {
             same &= got.window[b] == want.window[b];
         }
         check(same, c, s, below, how, "memory differs after the retry");
+    }
+}
+
+/*
+ * A move that must be aligned: on a 16-byte boundary it faults in the upper
+ * page or not at all. Off one it raises #GP, with nothing written, both
+ * across the boundary, where the helper checks it, and within the lower page,
+ * where the gadget must.
+ */
+static void run_aligned(const struct rcg_case *c, const struct rcg_start *s)
+{
+    run_at(c, s, 16, 0);
+    run_at(c, s, 16, 16);
+
+    for (int below = 8; below <= 24; below += 16) {
+        struct result r;
+        uint64_t rsp;
+
+        gp_resume = rcg_insn_end(c, s);
+        rsp = run(c, s, BOUNDARY - below, MAPPED, &r);
+        gp_resume = 0;
+        check(faults == 1 && fault_vector == 13, c, s, below, MAPPED,
+              "did not raise #GP once");
+        taken += faults;
+        if (faults == 1) {
+            check_fault(c, s, below, MAPPED, rsp);
+        }
     }
 }
 
@@ -323,6 +409,10 @@ int main(void)
         int size = c->moved == R_ESP ? 8 : c->width / 8;
 
         for (int s = 0; s < NB_STARTS; s++) {
+            if (c->aligned) {
+                run_aligned(c, &starts[s]);
+                continue;
+            }
             /* below is how many of the access's bytes are under BOUNDARY. */
             for (int below = 0; below <= size; below++) {
                 run_at(c, &starts[s], size, below);

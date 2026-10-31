@@ -58,12 +58,19 @@
 
 #define R_ESP 4
 
-/* The registers, the flags, and SETcc's result for each condition. */
+/*
+ * The registers, the flags, SETcc's result for each condition, and XMM0 to
+ * XMM3, as two 64-bit halves each.
+ */
 struct rcg_state {
     uint64_t r[16];
     uint64_t flags;
     uint8_t cc[16];
+    uint64_t x[4][2];
 };
+
+/* Where rcg_enter and rcg_leave find x. */
+_Static_assert(offsetof(struct rcg_state, x) == 152, "x moved");
 
 struct rcg_state rcg_in, rcg_out, rcg_host;
 
@@ -88,7 +95,9 @@ uint64_t rcg_sub_in;
  * and writes says that the access there writes memory. target is where
  * rcg-faults puts the address of the instruction's end for a branch: a
  * register, RCG_TARGET_MEM (the memory operand) or RCG_TARGET_STACK (the
- * top of the stack). -1 is no register.
+ * top of the stack). -1 is no register. xmm says that the case uses XMM0
+ * to XMM3, which rcg-insns then compares too. aligned says that its access
+ * must be on a 16-byte boundary, for rcg-faults.
  */
 struct rcg_case {
     const char *name;
@@ -109,16 +118,21 @@ struct rcg_case {
     uint64_t operand, rsp;
     int moved;
     int target;
+    bool xmm;
+    bool aligned;
 };
 
 asm(
     /*
-     * Keep the caller's registers, then load the case's. POPF ends the TB,
-     * and the next one, which runs the case's instruction, starts on a 512
-     * byte boundary, so that the instruction and the SETcc after it are
-     * never split across a page, which would end the TB between them.
+     * Keep the caller's registers, then load the case's, with XMM0 to XMM3
+     * if xmm is 1. POPF ends the TB, so the case's instruction starts the
+     * next one. The code from the XMM loads to the RET starts on a 512 byte
+     * boundary and fits in 512 bytes, so that the instruction and the SETcc
+     * after it are never split across a page, which would end the TB between
+     * them. The XMM loads and stores are left out of the other cases to keep
+     * that true.
      */
-    "    .macro rcg_enter\n"
+    "    .macro rcg_enter xmm\n"
     "    mov %rbx, rcg_host+3*8(%rip)\n"
     "    mov %rsp, rcg_host+4*8(%rip)\n"
     "    mov %rbp, rcg_host+5*8(%rip)\n"
@@ -128,6 +142,12 @@ asm(
     "    mov %r15, rcg_host+15*8(%rip)\n"
     "    pushq rcg_in+16*8(%rip)\n"
     "    .balign 512\n"
+    "    .if \\xmm\n"
+    "    movdqu rcg_in+152(%rip), %xmm0\n"
+    "    movdqu rcg_in+168(%rip), %xmm1\n"
+    "    movdqu rcg_in+184(%rip), %xmm2\n"
+    "    movdqu rcg_in+200(%rip), %xmm3\n"
+    "    .endif\n"
     "    popfq\n"
     "    mov rcg_in+0*8(%rip), %rax\n"
     "    mov rcg_in+1*8(%rip), %rcx\n"
@@ -148,10 +168,11 @@ asm(
     "    .endm\n"
 
     /*
-     * Store SETcc's results and the case's registers and flags, none of
-     * which SETcc and MOV change, then return with the caller's.
+     * Store SETcc's results, the case's registers and flags, which SETcc
+     * and MOV do not change, and XMM0 to XMM3 if xmm is 1. Then return with
+     * the caller's registers.
      */
-    "    .macro rcg_leave\n"
+    "    .macro rcg_leave xmm\n"
     "    seto rcg_out+17*8+0(%rip)\n"
     "    setno rcg_out+17*8+1(%rip)\n"
     "    setb rcg_out+17*8+2(%rip)\n"
@@ -187,6 +208,12 @@ asm(
     "    mov %r13, rcg_out+13*8(%rip)\n"
     "    mov %r14, rcg_out+14*8(%rip)\n"
     "    mov %r15, rcg_out+15*8(%rip)\n"
+    "    .if \\xmm\n"
+    "    movdqu %xmm0, rcg_out+152(%rip)\n"
+    "    movdqu %xmm1, rcg_out+168(%rip)\n"
+    "    movdqu %xmm2, rcg_out+184(%rip)\n"
+    "    movdqu %xmm3, rcg_out+200(%rip)\n"
+    "    .endif\n"
     "    mov rcg_host+3*8(%rip), %rbx\n"
     "    mov rcg_host+5*8(%rip), %rbp\n"
     "    mov rcg_host+12*8(%rip), %r12\n"
@@ -202,30 +229,31 @@ asm(
  * instruction raises points, and of its end, name_end and name_sub_end.
  * name_sub compares rcg_sub_in with 1 first, after loading the registers,
  * so that the instruction runs from the state a SUB leaves, in the same TB.
+ * xmm is 1 for a case that uses XMM0 to XMM3, and 0 otherwise.
  */
-#define RCG_CASE(name, insn)                                    \
+#define RCG_CASE(name, insn, xmm)                               \
     void name(void);                                            \
     void name##_sub(void);                                      \
     extern const char name##_insn[], name##_end[];              \
     extern const char name##_sub_insn[], name##_sub_end[];      \
     asm("    .pushsection .text\n"                              \
         #name ":\n"                                             \
-        "    rcg_enter\n"                                       \
+        "    rcg_enter " #xmm "\n"                              \
         "    .intel_syntax noprefix\n"                          \
         #name "_insn:\n"                                        \
         "    " insn "\n"                                        \
         #name "_end:\n"                                         \
         "    .att_syntax prefix\n"                              \
-        "    rcg_leave\n"                                       \
+        "    rcg_leave " #xmm "\n"                              \
         #name "_sub:\n"                                         \
-        "    rcg_enter\n"                                       \
+        "    rcg_enter " #xmm "\n"                              \
         "    cmpq $1, rcg_sub_in(%rip)\n"                       \
         "    .intel_syntax noprefix\n"                          \
         #name "_sub_insn:\n"                                    \
         "    " insn "\n"                                        \
         #name "_sub_end:\n"                                     \
         "    .att_syntax prefix\n"                              \
-        "    rcg_leave\n"                                       \
+        "    rcg_leave " #xmm "\n"                              \
         "    .popsection\n");
 
 /*
@@ -234,19 +262,19 @@ asm(
  * registers, so that the instruction runs from the state an ADC leaves,
  * which uses cc_src2, in the same TB.
  */
-#define RCG_ADC_CASE(name, insn)                                \
+#define RCG_ADC_CASE(name, insn, xmm)                           \
     void name##_adc(void);                                      \
     extern const char name##_adc_insn[], name##_adc_end[];      \
     asm("    .pushsection .text\n"                              \
         #name "_adc:\n"                                         \
-        "    rcg_enter\n"                                       \
+        "    rcg_enter " #xmm "\n"                              \
         "    adcq $1, rcg_sub_in(%rip)\n"                       \
         "    .intel_syntax noprefix\n"                          \
         #name "_adc_insn:\n"                                    \
         "    " insn "\n"                                        \
         #name "_adc_end:\n"                                     \
         "    .att_syntax prefix\n"                              \
-        "    rcg_leave\n"                                       \
+        "    rcg_leave " #xmm "\n"                              \
         "    .popsection\n");
 
 /* The values every operand is tested with: the edges of each width. */
@@ -336,6 +364,10 @@ static inline void rcg_setup(const struct rcg_case *c, uint64_t x, uint64_t y,
         rcg_in.r[i] = 0x1111111111111111ull * (i + 1) ^ 0x8040201008040201ull;
     }
     rcg_in.r[R_ESP] = c->rsp;
+    for (int i = 0; i < 4; i++) {
+        rcg_in.x[i][0] = x ^ 0x0101010101010101ull * (i + 1);
+        rcg_in.x[i][1] = y ^ 0x1010101010101010ull * (i + 1);
+    }
     rcg_in.flags = s->flags;
     rcg_sub_in = s->sub_in;
     rcg_fill(RCG_MEM, RCG_MEM_SIZE, 0x5a);
@@ -540,12 +572,13 @@ static inline void rcg_init_hi(void)
 }
 
 /*
- * Points the first 32 vectors at the stubs, on IST1, maps RCG_HI, and sets
- * FS's and GS's bases. Stops the test if the binary reaches the cases'
- * data.
+ * Points the first 32 vectors at the stubs, on IST1, maps RCG_HI, sets FS's
+ * and GS's bases, and turns SSE on. Stops the test if the binary reaches
+ * the cases' data.
  */
 static inline void rcg_init(void)
 {
+    uint64_t cr;
     uint16_t cs;
     struct rcg_table_reg idtr = { sizeof(rcg_idt) - 1, (uint64_t)rcg_idt };
 
@@ -570,6 +603,12 @@ static inline void rcg_init(void)
 
     wrmsr(MSR_FS_BASE, RCG_FS_BASE);
     wrmsr(MSR_GS_BASE, RCG_GS_BASE);
+
+    /* CR0.MP set and EM clear, CR4.OSFXSR and OSXMMEXCPT set. */
+    asm volatile("mov %%cr0, %0" : "=r"(cr));
+    asm volatile("mov %0, %%cr0" : : "r"((cr & ~4ull) | 2));
+    asm volatile("mov %%cr4, %0" : "=r"(cr));
+    asm volatile("mov %0, %%cr4" : : "r"(cr | 0x600));
 }
 
 #endif /* RCG_TEST_H */
