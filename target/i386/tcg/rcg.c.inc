@@ -52,6 +52,8 @@ static const struct {
     { gen_POP,    RCG_OP_POP,   0, -1, -1 },
     { gen_NOT,    RCG_OP_NOT,   0, -1, X86_SPECIAL_HasLock },
     { gen_NEG,    RCG_OP_NEG,   0, -1, X86_SPECIAL_HasLock },
+    { gen_INC,    RCG_OP_INC,   0, -1, X86_SPECIAL_HasLock },
+    { gen_DEC,    RCG_OP_DEC,   0, -1, X86_SPECIAL_HasLock },
     /* The second operand of a shift or rotate is its count. */
     { gen_SHL,    RCG_OP_SHL,   0,  2, -1 },
     { gen_SHR,    RCG_OP_SHR,   0,  2, -1 },
@@ -690,11 +692,12 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     const RCGFacts *facts;
     uint64_t imm = 0;
     int form, shape = 0, seg = -1;
-    bool ordered = false, rotate_left = false, by_cl, carry;
+    bool ordered = false, rotate_left = false, by_cl;
     const RCGSlot *slot;
     const RCGGadget *g;
     uint64_t words[RCG_MAX_WORDS];
     TCGTemp *outs[RCG_MAX_WORDS], *ins[RCG_MAX_WORDS];
+    TCGv cf = NULL;
     unsigned n, nb_outs = 0, nb_ins = 0;
     TCGv reg;
 
@@ -756,8 +759,7 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     if (!g->gadget) {
         return NULL;
     }
-    carry = op == RCG_OP_ADC || op == RCG_OP_SBB;
-    if (carry) {
+    if (facts->cf == RCG_CF_SRC2) {
         /*
          * gen_ADC and gen_SBB leave another flags state for an immediate
          * of 0 (CC_OP_ADD or CC_OP_SUB) and for SBB of a register with
@@ -919,16 +921,25 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
             g_assert_not_reached();
         }
     }
-    if (carry) {
-        /* CF, from the state before the instruction, goes in cc_src2. */
-        TCGv cf = tcg_temp_new();
-
+    /*
+     * CF, from the flags state before the instruction. ADC and SBB read it
+     * in cc_src2. INC and DEC keep it in cc_src, as gen_INC and gen_DEC do,
+     * written after the gadget, so that a fault in the gadget finds that
+     * state as it was.
+     */
+    if (facts->cf != RCG_CF_NONE) {
+        cf = tcg_temp_new();
         gen_compute_eflags_c(s, cf);
+    }
+    if (facts->cf == RCG_CF_SRC2) {
         tcg_gen_mov_tl(cpu_cc_src2, cf);
         rcg_note(ins, &nb_ins, cpu_cc_src2);
     }
     tcg_gen_rich(g->gadget, words, n, slot->access ? TCG_RICH_MAY_FAULT : 0,
                  outs, nb_outs, ins, nb_ins);
+    if (facts->cf == RCG_CF_SRC) {
+        tcg_gen_mov_tl(cpu_cc_src, cf);
+    }
 
     if (op == RCG_OP_ROR) {
         rcg_rotate_flags(s, ot, first->n, rotate_left, imm);
