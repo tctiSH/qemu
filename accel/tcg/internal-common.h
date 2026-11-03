@@ -83,9 +83,19 @@ bool tcg_exec_realizefn(CPUState *cpu, Error **errp);
 void tcg_exec_unrealizefn(CPUState *cpu);
 
 /*
+ * The log bits that make helper_lookup_tb_ptr() more than a lookup:
+ * curr_cflags()'s, below, and its own log_cpu_exec().
+ */
+#define TB_LOOKUP_LOG_MASK \
+    (CPU_LOG_TB_NOCHAIN | CPU_LOG_TB_CPU | CPU_LOG_EXEC)
+
+/*
  * Current cflags for hashing/comparison. Inline, as helper_lookup_tb_ptr()
  * asks on every indirect branch the guest takes, where the call alone was
  * 3-4% of samples in CPython and in a configure script.
+ *
+ * TCTI's lookup_tb gadget copies these tests: see tcg_lookup_key, and keep
+ * TB_LOOKUP_LOG_MASK in step.
  */
 static inline uint32_t curr_cflags(CPUState *cpu)
 {

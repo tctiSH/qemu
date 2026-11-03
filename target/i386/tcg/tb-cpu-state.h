@@ -10,10 +10,15 @@
 #include "cpu.h"
 #include "accel/tcg/tb-cpu-state.h"
 
+/* The eflags bits in a TB's flags. */
+#define X86_TB_EFLAGS_MASK \
+    (IOPL_MASK | TF_MASK | RF_MASK | VM_MASK | AC_MASK)
+
 /*
  * What x86_get_tb_cpu_state() returns, for callers that can see CPUX86State:
  * accel/tcg/cpu-exec.c when it is compiled for this target, where it runs on
- * every TB lookup. See the comment there.
+ * every TB lookup. See the comment there. tcg_x86_init() describes its
+ * 64-bit case in tcg_lookup_key, for TCTI's lookup gadget: change both.
  */
 static inline TCGTBCPUState x86_tb_cpu_state(CPUState *cs)
 {
@@ -21,8 +26,7 @@ static inline TCGTBCPUState x86_tb_cpu_state(CPUState *cs)
     uint32_t flags, cs_base;
     vaddr pc;
 
-    flags = env->hflags |
-        (env->eflags & (IOPL_MASK | TF_MASK | RF_MASK | VM_MASK | AC_MASK));
+    flags = env->hflags | (env->eflags & X86_TB_EFLAGS_MASK);
     if (env->hflags & HF_CS64_MASK) {
         cs_base = 0;
         pc = env->eip;
