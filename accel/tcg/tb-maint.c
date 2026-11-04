@@ -791,10 +791,20 @@ static void tb_remove(TranslationBlock *tb)
  */
 static QEMUBH *tctish_shrink_bh;
 
+/*
+ * Always flushes, where queue_tb_flush() skips the flush if another ran
+ * meanwhile. That other may have checked for a release just before this one
+ * was asked for, which would leave the release waiting for a later flush.
+ */
+static void tctish_shrink_work(CPUState *cpu, run_on_cpu_data data)
+{
+    tb_flush__exclusive_or_serial();
+}
+
 static void tctish_shrink_now(void *opaque)
 {
-    if (first_cpu != NULL) {
-        queue_tb_flush(first_cpu);
+    if (first_cpu != NULL && tcg_enabled()) {
+        async_safe_run_on_cpu(first_cpu, tctish_shrink_work, RUN_ON_CPU_NULL);
     }
 }
 
