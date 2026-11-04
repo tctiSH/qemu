@@ -578,8 +578,12 @@ static const VMStateDescription vmstate_uuid = {
  * a startup -loadvm or a loadvm has already reverted the disks and reset the
  * machine by then. Slots this machine doesn't have are refused.
  *
- * Sent whenever the slots fit in the mask; a stream without it, from before,
- * loads as it always did.
+ * Sent whenever the slots fit in the mask and the machine records them. x86's
+ * plug handler notes the vCPU in each slot, but Arm's and RISC-V's machines
+ * never do, so all of their slots look empty, and those machines can't plug a
+ * vCPU anyway. A stream without it, from before, loads as it always did. So
+ * does one that says no slots on such a machine, which older builds wrote,
+ * before they started leaving it out there.
  */
 static const CPUArchIdList *tctish_vcpu_slots(void)
 {
@@ -589,11 +593,21 @@ static const CPUArchIdList *tctish_vcpu_slots(void)
            mc->possible_cpu_arch_ids(current_machine) : NULL;
 }
 
+static bool tctish_vcpu_slots_recorded(const CPUArchIdList *slots)
+{
+    for (int i = 0; i < slots->len; i++) {
+        if (slots->cpus[i].cpu) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool tctish_vcpu_slots_needed(void *opaque)
 {
     const CPUArchIdList *slots = tctish_vcpu_slots();
 
-    return slots && slots->len <= 64;
+    return slots && slots->len <= 64 && tctish_vcpu_slots_recorded(slots);
 }
 
 static bool tctish_vcpu_slots_pre_save(void *opaque, Error **errp)
@@ -692,6 +706,10 @@ static bool tctish_match_vcpu_slots(uint64_t want, Error **errp)
 {
     const CPUArchIdList *slots = tctish_vcpu_slots();
     unsigned int plugged = 0, unplugged = 0;
+
+    if (!want && slots && !tctish_vcpu_slots_recorded(slots)) {
+        return true;
+    }
 
     if (!slots || slots->len > 64 || !want ||
         (slots->len < 64 && want >> slots->len)) {
