@@ -41,6 +41,10 @@
   tctish_backend_switches;
   tctish_backend_last_error;
 
+  /* Turning RCG on or off; see tcg/tcg.h. */
+  tctish_rcg_set;
+  tctish_rcg_enabled;
+
   /* The vCPU threads' QoS; see tcg/startup.h. */
   tctish_vcpu_set_qos;
 };

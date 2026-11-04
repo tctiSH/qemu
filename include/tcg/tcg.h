@@ -700,6 +700,19 @@ bool tctish_backend_switch(bool tcti);
 size_t tctish_backend_switches(void);
 char *tctish_backend_last_error(void);
 
+/*
+ * RCG (see tcg/rcg.h) while the VM runs, for the app (exported in
+ * system/qemu.symbols) and the monitor's tcg_rcg:
+ *  - rcg_set turns it on or off within milliseconds, and returns false if
+ *    TCG is not up yet. Under TCTI this discards all translated code; under
+ *    native code it applies from the next switch to TCTI.
+ *  - rcg_enabled says whether it is on. It changes when rcg_set takes
+ *    effect, not when it is called.
+ * Without TCTI, both return false.
+ */
+bool tctish_rcg_set(bool on);
+bool tctish_rcg_enabled(void);
+
 /**
  * tcg_tb_insert:
  * @tb: translation block to insert

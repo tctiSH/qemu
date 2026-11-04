@@ -13,6 +13,7 @@
 #include "monitor/monitor.h"
 #include "system/tcg.h"
 #include "tcg/tcg.h"
+#include "tcg/rcg.h"
 #include "internal-common.h"
 #include "monitor/hmp.h"
 #include "qobject/qdict.h"
@@ -49,5 +50,19 @@ void hmp_tcg_switch(Monitor *mon, const QDict *qdict)
         return;
     }
     monitor_printf(mon, "switching to %s\n", tcti ? "TCTI" : "native code");
+}
+#endif
+
+#ifdef TCG_HAVE_RCG
+void hmp_tcg_rcg(Monitor *mon, const QDict *qdict)
+{
+    bool on = qdict_get_bool(qdict, "on");
+
+    /* The same call as the app makes. */
+    if (!tcg_enabled() || !tctish_rcg_set(on)) {
+        monitor_printf(mon, "TCG is not running\n");
+        return;
+    }
+    monitor_printf(mon, "turning RCG %s\n", on ? "on" : "off");
 }
 #endif

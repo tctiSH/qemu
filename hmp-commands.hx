@@ -458,6 +458,28 @@ SRST
 ERST
 #endif
 
+/* The condition for TCG_HAVE_RCG; see tcg/rcg.h. */
+#if defined(CONFIG_TCG_HYBRID_RUNTIME) || \
+    defined(CONFIG_TCG_THREADED_INTERPRETER)
+    {
+        .name       = "tcg_rcg",
+        .args_type  = "on:b",
+        .params     = "on|off",
+        .help       = "turn RCG on or off under TCTI",
+        .cmd        = hmp_tcg_rcg,
+    },
+
+SRST
+``tcg_rcg on|off``
+  Turn RCG on or off in a running VM, as ``-accel tcg,rcg=`` does at
+  startup. Under TCTI this discards all translated code; under native code
+  it applies from the next switch to TCTI. It exists only in a QEMU with
+  TCTI (``--enable-tcg-threaded-interpreter``, or
+  ``--enable-tcg-hybrid=runtime`` or ``tcti``), and affects only x86-64
+  guests.
+ERST
+#endif
+
     {
         .name       = "one-insn-per-tb",
         .args_type  = "option:s?",

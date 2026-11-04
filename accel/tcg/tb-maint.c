@@ -38,6 +38,7 @@
 #include "qemu/main-loop.h"
 #include "qapi/error.h"
 #include "tcg/hybrid.h"
+#include "tcg/rcg.h"
 #ifdef CONFIG_USER_ONLY
 #include "user/page-protection.h"
 #define runstate_is_running()  true
@@ -975,6 +976,74 @@ char *tctish_backend_last_error(void)
 }
 #endif
 
+#ifdef TCG_HAVE_RCG
+/*
+ * Turns RCG on or off, for the app and the monitor. The change is made in
+ * safe work, where no vCPU is translating, because a translation must see
+ * one setting from start to end; tcg_gen_rich_op() asserts it. Callers may
+ * be on any thread, so tctish_rcg_set() goes through a bottom half, as the
+ * shrink does. If several requests come before it runs, the last one wins.
+ */
+static QEMUBH *tctish_rcg_bh;
+static bool tctish_rcg_to;
+
+static void tctish_rcg_work(CPUState *cpu, run_on_cpu_data data)
+{
+    bool on = data.host_int;
+
+    if (tcg_rcg_enabled == on) {
+        return;
+    }
+    qatomic_set(&tcg_rcg_enabled, on);
+
+    /*
+     * Discard what was translated with the old setting. Native code never
+     * uses RCG, so only TCTI needs this. While the code cache is being
+     * released or waits to be prepared again, the release flushes instead.
+     */
+    if (tcg_tcti_active() && tctish_code_cache_may_run()) {
+        tb_flush__exclusive_or_serial();
+    }
+}
+
+static void tctish_rcg_now(void *opaque)
+{
+    bool on = qatomic_read(&tctish_rcg_to);
+
+    /* Without a vCPU nothing is translating, so it can change at once. */
+    if (first_cpu == NULL) {
+        qatomic_set(&tcg_rcg_enabled, on);
+        return;
+    }
+    async_safe_run_on_cpu(first_cpu, tctish_rcg_work, RUN_ON_CPU_HOST_INT(on));
+}
+
+bool tctish_rcg_set(bool on)
+{
+    if (tctish_rcg_bh == NULL) {
+        return false;
+    }
+    qatomic_set(&tctish_rcg_to, on);
+    qemu_bh_schedule(tctish_rcg_bh);
+    return true;
+}
+
+bool tctish_rcg_enabled(void)
+{
+    return qatomic_read(&tcg_rcg_enabled);
+}
+#else
+bool tctish_rcg_set(bool on)
+{
+    return false;
+}
+
+bool tctish_rcg_enabled(void)
+{
+    return false;
+}
+#endif
+
 /*
  * Created at init, so a shrink -- or a switch -- never has to create one from
  * the wrong thread.
@@ -984,6 +1053,9 @@ void tctish_flush_init(void)
     tctish_shrink_bh = qemu_bh_new(tctish_shrink_now, NULL);
 #ifdef CONFIG_TCG_HYBRID_RUNTIME
     tctish_switch_bh = qemu_bh_new(tctish_switch_now, NULL);
+#endif
+#ifdef TCG_HAVE_RCG
+    tctish_rcg_bh = qemu_bh_new(tctish_rcg_now, NULL);
 #endif
 }
 

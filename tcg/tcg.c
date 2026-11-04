@@ -205,7 +205,7 @@ static TCGAtomAlign atom_and_align_for_opc(TCGContext *s, MemOp opc,
     __attribute__((unused));
 
 #ifdef CONFIG_TCG_HYBRID_RUNTIME
-/* Set once, from -accel tcg,tcti=, before tcg_init(). */
+/* Set from -accel tcg,tcti= before tcg_init(), and by tcg_hybrid_switch(). */
 bool tcg_hybrid_tcti;
 #endif
 
