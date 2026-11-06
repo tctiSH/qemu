@@ -680,6 +680,42 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
 }
 
 /*
+ * Packs the words of g, a gadget that accesses memory, into stream words,
+ * matching rcg-gen.py's stream_words(): the narrow words two to a stream
+ * word, the first in the low half, then the odd one out alone, then each
+ * of the others alone. Returns how many stream words there are. Only the
+ * RCG tests, which take every gadget (rcg-gen.py --coverage), check that
+ * the two layouts agree.
+ */
+static unsigned rcg_pack_words(const RCGGadget *g, uint64_t *words,
+                               unsigned n)
+{
+    uint64_t out[RCG_MAX_WORDS];
+    unsigned nb = 0, i;
+    bool odd = false;
+
+    for (i = 0; i < n; i++) {
+        if (!rcg_word_narrow(g->words[i])) {
+            continue;
+        }
+        tcg_debug_assert((int32_t)words[i] == (int64_t)words[i]);
+        if (odd) {
+            out[nb - 1] = deposit64(out[nb - 1], 32, 32, words[i]);
+        } else {
+            out[nb++] = words[i];
+        }
+        odd = !odd;
+    }
+    for (i = 0; i < n; i++) {
+        if (!rcg_word_narrow(g->words[i])) {
+            out[nb++] = words[i];
+        }
+    }
+    memcpy(words, out, nb * sizeof(uint64_t));
+    return nb;
+}
+
+/*
  * Emits the gadget for decode's instruction, if there is one, and returns
  * it, or NULL.
  */
@@ -861,7 +897,7 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
         rcg_note_temp(ins, &nb_ins, tcgv_i32_temp(cpu_cc_op));
     }
 
-    /* The words, in the order the gadget takes them, and what it reads. */
+    /* The words, in g->words' order, and what the gadget reads. */
     for (n = 0; n < RCG_MAX_WORDS && g->words[n] != RCG_W_END; n++) {
         AddressParts *a = &decode->mem;
 
@@ -934,6 +970,9 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     if (facts->cf == RCG_CF_SRC2) {
         tcg_gen_mov_tl(cpu_cc_src2, cf);
         rcg_note(ins, &nb_ins, cpu_cc_src2);
+    }
+    if (slot->access) {
+        n = rcg_pack_words(g, words, n);
     }
     tcg_gen_rich(g->gadget, words, n, slot->access ? TCG_RICH_MAY_FAULT : 0,
                  outs, nb_outs, ins, nb_ins);

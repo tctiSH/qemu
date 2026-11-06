@@ -105,6 +105,26 @@ def ea_words(shape, seg):
     return words
 
 
+# The operand words that always fit in 32 bits, signed: env offsets, the
+# MemOpIdx, the CPUTLBDescFast's offset and a CC_OP. disp and imm may not.
+NARROW_WORDS = ("d", "s", "s1", "base", "index", "seg", "oi", "tlb", "ccop")
+
+
+def stream_words(words):
+    """ How a Spec's words go in the stream, which rcg_pack_words() must
+    match: a list of stream words, each a tuple of the words it holds. A
+    gadget that accesses memory, which is one with a tlb word, has its
+    narrow words two to a stream word, the first in the low half, then an
+    odd one out alone, then each of the others alone. Any other gadget has
+    each word alone. A memory gadget splits the pairs while it waits for
+    the TLB entry; packing the others only made them slower. """
+    if "tlb" not in words:
+        return [(w,) for w in words]
+    narrow = [w for w in words if w in NARROW_WORDS]
+    return ([tuple(narrow[i:i + 2]) for i in range(0, len(narrow), 2)] +
+            [(w,) for w in words if w not in NARROW_WORDS])
+
+
 #
 # The tables: what there is a gadget for.
 #
@@ -365,6 +385,12 @@ class CondSpec:
             return ["d"]
         return ["d", "s"]
 
+    @property
+    def stream(self):
+        """ The words, each alone in a stream word: rcg_translate_cond()
+        never packs them. """
+        return [(w,) for w in self.words]
+
 
 def cond_specs():
     """ Every condition gadget there is: P and NP only from CC_OP_EFLAGS. """
@@ -409,6 +435,13 @@ class FusedSpec:
     @property
     def words(self):
         return [*self.setter.words, "ccop"]
+
+    @property
+    def stream(self):
+        """ The setter's stream words, then the Jcc's word alone:
+        tcg_gen_rich_br_join() appends it to the setter's packed words. Not
+        stream_words(self.words), which would pair it with the setter's. """
+        return [*self.setter.stream, ("ccop",)]
 
 
 # The widths of the fused gadgets' memory forms: 16 bits is rare there.
@@ -518,17 +551,24 @@ class Spec:
                  self.kind in ("alu", "bt") and self.op.writes))
 
     @property
+    def stream(self):
+        """ The stream words, from stream_words(). """
+        # rcg_emit() packs a gadget's words when its slot accesses memory,
+        # and stream_words() when they hold a tlb word.
+        assert ("tlb" in self.words) == self.accesses_memory, self.name
+        return stream_words(self.words)
+
+    @property
     def words(self):
-        """ The gadget's operand words, in the order the translator must give
-        them: the destination's, then the source's, then for a memory access
-        the MemOpIdx and the env offset of the MMU index's CPUTLBDescFast
-        (what TCTI_TLB_FAST_OFS() gives). A register operand is its env
+        """ The gadget's operand words, in the translator's order before
+        packing (see stream): the destination's, then the source's, then for
+        a memory access the MemOpIdx and the env offset of the MMU index's
+        CPUTLBDescFast (TCTI_TLB_FAST_OFS()). A register operand is its env
         offset in CPUX86State.regs[]: "d" if it is written, "s" if only read
         (or XCHG's source, which it writes too), and "s1" for CMP's, TEST's
-        and BT's first
-        operand, which is only read. A memory operand is the words of its
-        shape (ea_words()). An immediate is its value, sign-extended as
-        decode-new extends it.
+        and BT's first operand, which is only read. A memory operand is the
+        words of its shape (ea_words()). An immediate is its value,
+        sign-extended as decode-new extends it.
 
         CALL's imm is the return address less env's eip, and RET's how far
         it moves RSP. MUL and IMUL with one operand take no words for RAX
@@ -691,9 +731,9 @@ def with_memory(spec):
 # The host's side: the gadget bodies.
 #
 
-# A gadget's operand words arrive in these registers, in order. They are
-# none of x0-x4, which a slow path sets up as a helper's arguments before it
-# is done with the words.
+# A gadget's operand words arrive in these registers, in order, however the
+# spec's stream holds them. They are none of x0-x4, which a slow path sets
+# up as a helper's arguments before it is done with the words.
 WORD_REGS = ("x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12")
 
 # What a body computes in: the address, the first and second operands, the
@@ -749,8 +789,10 @@ class Harness:
     restore = tcti_memory.C_CALL_EPILOGUE
     scratch = (*(f"x{n}" for n in range(14)), *tcti_memory.TMP)
 
-    def enter(self, regs):
-        """ The lines that load the gadget's operand words into regs. """
+    def enter(self, stream):
+        """ The lines that load the gadget's operand words into their
+        registers: stream holds, for each of the spec's stream words, the
+        registers of its words. """
         raise NotImplementedError
 
     def leave(self):
@@ -771,10 +813,10 @@ class Harness:
         branch(). """
         raise NotImplementedError
 
-    def assemble(self, words, hot, cold):
-        """ The whole gadget, from the words' registers, the body's lines on
-        the way through and its slow paths. """
-        return [*self.enter(words), *hot, *self.leave(), *cold]
+    def assemble(self, stream, hot, cold):
+        """ The whole gadget, from the stream words' registers, the body's
+        lines on the way through and its slow paths. """
+        return [*self.enter(stream), *hot, *self.leave(), *cold]
 
 
 class Body:
@@ -807,8 +849,11 @@ class Body:
 
     def lines(self):
         """ The whole gadget. """
-        return self.h.assemble(list(self.word_regs.values()), self.hot,
-                               self.cold)
+        layout = self.spec.stream
+        assert sorted(sum(layout, ())) == sorted(self.spec.words), \
+            self.spec.name
+        stream = [tuple(map(self.word, words)) for words in layout]
+        return self.h.assemble(stream, self.hot, self.cold)
 
     def _labels(self):
         self.label += 2
@@ -1754,8 +1799,8 @@ class CheckHarness(Harness):
     """ A harness that only marks where a gadget is entered, branches and
     leaves, so that check() can render every body without building it. """
 
-    def enter(self, regs):
-        return [f"// enter: {', '.join(regs)}"]
+    def enter(self, stream):
+        return [f"// enter: {', '.join(r for regs in stream for r in regs)}"]
 
     def leave(self):
         return ["// leave"]
@@ -1805,14 +1850,23 @@ def check():
 
 class TctiHarness(Harness):
     """ TCTI's streams: tcg_out_rich() writes a gadget's address, then its
-    operand words. The gadget loads the words first, so x28, the return
-    address its slow paths pass, points past them. """
+    operand words, in the spec's stream words. The gadget loads the words
+    first, so x28, the return address its slow paths pass, points past
+    them. """
 
-    def enter(self, regs):
+    def enter(self, stream):
+        # Each stream word loads into its last word's register. A pair is
+        # then split: SXTW puts the low half in the first word's register,
+        # and ASR #32 leaves the high half in the second's.
+        regs = [words[-1] for words in stream]
         lines = [f"ldp {a}, {b}, [x28], #16"
                  for a, b in zip(regs[::2], regs[1::2])]
         if len(regs) % 2:
             lines.append(f"ldr {regs[-1]}, [x28], #8")
+        for words in stream:
+            if len(words) == 2:
+                lo, hi = words
+                lines += [f"sxtw {lo}, w{hi[1:]}", f"asr {hi}, {hi}, #32"]
         return lines
 
     def leave(self):
@@ -1855,13 +1909,13 @@ class TctiHarness(Harness):
                 "mov x28, x27",
                 f"{label}:"]
 
-    def assemble(self, words, hot, cold):
+    def assemble(self, stream, hot, cold):
         # A body with no slow path that leaves x27 and x28 alone loads the
         # next gadget's address before its body, as tcti-gadget-gen.py's
         # simple() does, so the dispatch target is known sooner.
         if cold or any(re.search(r"\b[xw]2[78]\b", line) for line in hot):
-            return super().assemble(words, hot, cold)
-        return [*self.enter(words), "ldr x27, [x28], #8", *hot, "br x27"]
+            return super().assemble(stream, hot, cold)
+        return [*self.enter(stream), "ldr x27, [x28], #8", *hot, "br x27"]
 
 
 # The ops and forms as the translator names them, in the table's order.
@@ -2047,6 +2101,11 @@ def write_table(all_specs, out):
         p(f"    RCG_W_{w.upper()},")
     p("};")
     p(f"#define RCG_MAX_WORDS {MAX_WORDS}\n")
+    p("/* Whether a word always fits in 32 bits, signed: rcg_pack_words(). */")
+    p("static inline bool rcg_word_narrow(uint8_t w)\n{\n    switch (w) {")
+    for w in NARROW_WORDS:
+        p(f"    case RCG_W_{w.upper()}:")
+    p("        return true;\n    default:\n        return false;\n    }\n}\n")
     p("typedef enum RCGOp {")
     for name in OP_NAMES:
         p(f"    RCG_OP_{name.upper()},")
