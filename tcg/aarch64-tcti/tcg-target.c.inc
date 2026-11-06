@@ -43,7 +43,7 @@
 #include "tcti-gadget-defs.h"
 #include "trace/trace-accel_tcg.h"
 
-/* The helper the lookup_tb gadget stands in for (accel/tcg/tcg-runtime.h). */
+/* The helper the lookup gadgets stand in for (accel/tcg/tcg-runtime.h). */
 const void *helper_lookup_tb_ptr(CPUArchState *env);
 
 /* Grab our gadget headers. */
@@ -812,6 +812,14 @@ static void tcg_out_rich_br(TCGContext *s, const void *gadget,
 }
 #endif
 
+/*
+ * The last lookup_tb gadget emitted, for tcg_out_goto_ptr(), specifying where
+ * its gadget address is and where its stream ends.
+ */
+static __thread struct {
+    tcg_insn_unit *start, *end;
+} tcti_last_lookup;
+
 static void tcg_out_call(TCGContext *s, const tcg_insn_unit *func,
                          const TCGHelperInfo *info)
 {
@@ -861,16 +869,19 @@ static void tcg_out_call(TCGContext *s, const tcg_insn_unit *func,
      * env from x14, so the gadget that set R0 to env goes. The key's hash is
      * softmmu's, for 4 KiB guest pages: user mode hashes otherwise, so the
      * gadget would always miss. A target that does not describe its state
-     * leaves pc_ofs 0.
+     * leaves pc_ofs 0. tcg_out_goto_ptr() may then turn the gadget into
+     * lookup_tb_predict.
      */
     if (func == (const void *)helper_lookup_tb_ptr && tcg_use_softmmu &&
         tcg_lookup_key.pc_ofs && TARGET_PAGE_BITS == TCG_LOOKUP_PAGE_BITS) {
         if (first >= 0 && top == 0 && offset[0] == 0) {
             tcti_rewind(s, tcti_env_args.e[first].start);
         }
+        tcti_last_lookup.start = s->code_ptr;
         tcg_out_gadget(s, gadget_lookup_tb);
         tcg_out64(s, (uintptr_t)func);
         tcg_out64(s, (uintptr_t)&tcg_lookup_key);
+        tcti_last_lookup.end = s->code_ptr;
         return;
     }
 
@@ -1058,6 +1069,7 @@ static void tcti_rewind(TCGContext *s, tcg_insn_unit *to)
     tcti_last_movi32.end = NULL;
     tcti_last_addi_env.end = NULL;
     tcti_last_zero_q.end = NULL;
+    tcti_last_lookup.end = NULL;
 }
 
 /*
@@ -1240,6 +1252,22 @@ static void tcg_out_goto_tb(TCGContext *s, int which)
  */
 static void tcg_out_goto_ptr(TCGContext *s, TCGReg a0)
 {
+    /*
+     * A goto_ptr on R0 straight after a lookup_tb gadget: lookup_tb_predict
+     * does the work of both, so it takes the lookup's place, with one more word
+     * after the key's address: the code its last jump-cache hit found or 0
+     * until one does. TCTI's code buffer is never split, so the gadget can
+     * write the word through the stream pointer.
+     */
+    if (a0 == TCG_REG_R0 && tcti_last_lookup.end == s->code_ptr &&
+        !tcti_label_within(s, tcti_last_lookup.start, s->code_ptr)) {
+        tcg_debug_assert(!tcg_splitwx_diff);
+        *(uint64_t *)tcti_last_lookup.start =
+            (uintptr_t)gadget_lookup_tb_predict;
+        tcg_out64(s, 0);
+        tcti_last_lookup.end = NULL;
+        return;
+    }
     tcg_out_unary_gadget(s, gadget_goto_ptr, a0);
 }
 
@@ -2878,6 +2906,7 @@ static void tcg_out_tb_start(TCGContext *s)
     tcti_last_addi_env.end = NULL;
     tcti_last_sti32.end = NULL;
     tcti_last_zero_q.end = NULL;
+    tcti_last_lookup.end = NULL;
 }
 
 /*
@@ -2894,6 +2923,7 @@ static void tcti_insn_start(TCGContext *s)
     tcti_last_addi_env.end = NULL;
     tcti_last_sti32.end = NULL;
     tcti_last_zero_q.end = NULL;
+    tcti_last_lookup.end = NULL;
 }
 
 /*

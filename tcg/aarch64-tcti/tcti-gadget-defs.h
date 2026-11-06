@@ -63,9 +63,9 @@ QEMU_BUILD_BUG_ON(sizeof_field(CPUTLBEntry, addr_write) != 8);
 QEMU_BUILD_BUG_ON(sizeof_field(CPUTLBEntry, addend) != 8);
 
 /*
- * The lookup_tb gadget's constants: a TCGLookupKey field's offset, which it
- * loads in pairs; tb_jmp_cache_hash_func() for 4 KiB pages; and the
- * TranslationBlock fields it compares, flags and cflags in one LDP.
+ * The lookup gadgets' constants: a TCGLookupKey field's offset, which they load
+ * in pairs; tb_jmp_cache_hash_func() for 4 KiB pages; and the TranslationBlock
+ * fields they compare, flags and cflags in one LDP.
  */
 #define TCTI_LK(field) ((int)offsetof(TCGLookupKey, field))
 #define TCTI_LK_HASH_SHIFT (TCG_LOOKUP_PAGE_BITS - TCG_LOOKUP_JC_BITS / 2)

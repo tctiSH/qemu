@@ -266,8 +266,8 @@ tb_lookup_slow(CPUState *cpu, TCGTBCPUState s, uint32_t hash)
  *
  * Always inlined, with misses out of line: helper_lookup_tb_ptr() calls
  * this on every indirect branch the guest takes, and as a call it passed
- * @s through memory. TCTI's lookup_tb gadget copies its probe and its
- * comparison: see tcg_lookup_key.
+ * @s through memory. TCTI's lookup gadgets copy its probe and its comparison:
+ * see tcg_lookup_key.
  *
  * Returns: an existing translation block or NULL.
  */
@@ -403,7 +403,7 @@ static bool check_for_breakpoints_slow(CPUState *cpu, vaddr pc,
     return false;
 }
 
-/* TCTI's lookup_tb gadget copies this test: see tcg_lookup_key. */
+/* TCTI's lookup gadgets copy this test: see tcg_lookup_key. */
 static inline bool check_for_breakpoints(CPUState *cpu, vaddr pc,
                                          uint32_t *cflags)
 {

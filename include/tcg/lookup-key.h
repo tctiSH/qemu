@@ -1,8 +1,8 @@
 /*
  * SPDX-License-Identifier: GPL-2.0-or-later
  *
- * helper_lookup_tb_ptr()'s common case, as data, for a back end that looks
- * up the next TB itself: TCTI's lookup_tb gadget.
+ * helper_lookup_tb_ptr()'s common case, as data, for a back end that looks up
+ * the next TB itself: TCTI's lookup gadgets.
  */
 
 #ifndef TCG_LOOKUP_KEY_H

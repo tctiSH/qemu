@@ -94,7 +94,7 @@ void tcg_exec_unrealizefn(CPUState *cpu);
  * asks on every indirect branch the guest takes, where the call alone was
  * 3-4% of samples in CPython and in a configure script.
  *
- * TCTI's lookup_tb gadget copies these tests: see tcg_lookup_key, and keep
+ * TCTI's lookup gadgets copy these tests: see tcg_lookup_key, and keep
  * TB_LOOKUP_LOG_MASK in step.
  */
 static inline uint32_t curr_cflags(CPUState *cpu)
