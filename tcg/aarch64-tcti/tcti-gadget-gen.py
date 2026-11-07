@@ -685,8 +685,9 @@ for n in range(8):
 #
 # lookup_tb_predict is lookup_tb and goto_ptr in one, with a third stream
 # word: the code its last jump-cache hit found, or 0. It loads the word before
-# the lookup and goes on with it if the lookup hits that code, so the CPU runs
-# the next TB's gadgets speculatively instead of waiting for the lookup. When
+# the lookup and goes on with it, past its exit check (see tb_entry()), if the
+# lookup hits that code, so the CPU runs the next TB's gadgets speculatively
+# instead of waiting for the lookup. When
 # the lookup hits other code, the gadget writes that code to the word and goes
 # on with it; when it calls the helper, it goes on with the helper's result and
 # leaves the word alone.
@@ -710,6 +711,26 @@ def lookup_way(fail):
         f"b.ne {fail}",
     ]
 
+# The operand of an exit check: the env offset of the word that is negative
+# when an exit has been requested.
+EXIT_OFS_OPERAND = '[exit_ofs] "i" (TCTI_EXIT_REQUEST_OFS)'
+
+def tb_entry(code):
+    """ The lines that enter the TB whose code is in the register named by
+    code, past its exit check, which they make instead; with an exit
+    requested, they enter at the check. A TB that counts instructions has
+    no check, by tcti_tb_has_exit_check(), and is entered at its start. The
+    TB's cflags, in w5, are cpu->tcg_cflags, which never has CF_NOIRQ, so
+    any other TB has the check. Clobbers w0. """
+    return (
+        f"mov x28, {code}",
+        "ldr w0, [x14, %[exit_ofs]]",
+        "tbnz w0, #31, 5f",
+        "tbnz w5, #%[icount_bit], 5f",
+        "add x28, x28, #%[exit_check_size]",
+        "5:",
+    )
+
 def lookup_gadget(name, predict):
     """ A lookup gadget: lookup_tb, or with predict lookup_tb_predict. """
     if predict:
@@ -724,11 +745,11 @@ def lookup_gadget(name, predict):
             "ldr x0, [x2, %[tb_tc_ptr]]",
             "cmp x0, x26",
             "b.ne 3f",
-            "mov x28, x26",
+            *tb_entry("x26"),
             *EPILOGUE,
             "3:",
             "str x0, [x28]",
-            "mov x28, x0",
+            *tb_entry("x0"),
         )
         result = "mov x28, x27"
     else:
@@ -809,6 +830,9 @@ def lookup_gadget(name, predict):
             '[tb_cs_base] "i" (offsetof(TranslationBlock, cs_base))',
             '[tb_flags] "i" (offsetof(TranslationBlock, flags))',
             '[tb_tc_ptr] "i" (offsetof(TranslationBlock, tc.ptr))',
+            EXIT_OFS_OPERAND,
+            '[icount_bit] "i" (__builtin_ctz(CF_USE_ICOUNT))',
+            '[exit_check_size] "i" (TCTI_EXIT_CHECK_SIZE)',
         ]))
 
 lookup_gadget("lookup_tb", predict=False)
@@ -910,11 +934,11 @@ simple("br",
 # goto_tb: continue with the stream word's target, which
 # tb_target_set_jmp_target() patches, unless an exit has been requested. Then
 # run the code after the word instead: the TB's exit_tb for this jump, which
-# returns to the main loop. A linked target is entered past its own exit
-# check, so every goto_tb has to make it. The check reads the same word as
-# tb_exit_check, but branches: an exit is rarely requested, so the dispatch
-# need not wait for the load. rcg-gen.py's TctiHarness._goto_tb() makes the
-# same check, after the same add as addi_env_goto_tb.
+# returns to the main loop. A linked target is entered past its exit check,
+# so every goto_tb makes the check, with a branch: an exit is rarely
+# requested, so the dispatch need not wait for the load. rcg-gen.py's
+# TctiHarness._goto_tb() makes the same check, after the same add as
+# addi_env_goto_tb.
 GOTO_TB = (
     "ldr w24, [x14, %[exit_ofs]]",
     "ldr x27, [x28], #8",
@@ -922,9 +946,8 @@ GOTO_TB = (
     "mov x28, x27",
     "1:",
 )
-GOTO_TB_OPERANDS = '[exit_ofs] "i" (TCTI_EXIT_REQUEST_OFS)'
 
-simple("goto_tb", *GOTO_TB, operands=GOTO_TB_OPERANDS)
+simple("goto_tb", *GOTO_TB, operands=EXIT_OFS_OPERAND)
 
 # A goto_tb right after an addi_env, as nearly every TB leaves: the guest pc
 # moved on by a constant, then the jump to the next TB, in one gadget. Every
@@ -937,7 +960,7 @@ simple("addi_env_goto_tb",
     "add x24, x24, x27",
     "str x24, [x14, x26]",
     *GOTO_TB,
-    operands=GOTO_TB_OPERANDS
+    operands=EXIT_OFS_OPERAND
 )
 
 # The same with an sti32_env just before, as x86 stores cc_op when a TB
@@ -951,7 +974,7 @@ simple("sti32_addi_env_goto_tb",
     "add x24, x24, x26",
     "str x24, [x14, x27]",
     *GOTO_TB,
-    operands=GOTO_TB_OPERANDS
+    operands=EXIT_OFS_OPERAND
 )
 
 # goto_ptr: continue with the gadget stream whose address is in a register --
@@ -960,18 +983,19 @@ simple("sti32_addi_env_goto_tb",
 with_d("goto_ptr", "mov x28, Xd")
 
 
-# The exit check at the start of every TB: a 32-bit load from env into Wd
-# and a branch if it is negative, as one gadget instead of a load and a
-# brcondi. The stream holds the env offset, then the branch target. Only
-# the main loop and goto_ptr run it: a linked goto_tb skips it, as
-# tcti_goto_tb_entry() relies on this layout.
-with_d("tb_exit_check",
-    "ldp x26, x27, [x28], #16",
-    "ldr Wd, [x14, x26]",
-    "tst Wd, Wd",
-    "b.ge 1f",
+# The exit check that tcg_out_tb_start() starts a TB with: a branch to the
+# stream word's target if an exit has been requested. Its stream holds just
+# the target; tcti_goto_tb_entry() and tb_entry() skip both words
+# (TCTI_EXIT_CHECK_SIZE). A linked goto_tb makes the check itself and skips
+# the gadget. So does lookup_tb_predict, unless it calls the helper or finds
+# an exit requested. The main loop and goto_ptr run it.
+simple("tb_exit_check",
+    "ldr w24, [x14, %[exit_ofs]]",
+    "ldr x27, [x28], #8",
+    "tbz w24, #31, 1f",
     "mov x28, x27",
-    "1:"
+    "1:",
+    operands=EXIT_OFS_OPERAND
 )
 
 # Exit from a translation buffer execution.
@@ -1054,8 +1078,8 @@ for i, condition in enumerate(ARCH_CONDITION_CODES):
     )
 
     # The same against a constant from the stream, which precedes the
-    # branch target: comparisons with zero are common, and each TB starts
-    # with one. d is unused, as for brcond: it spreads the branch sources.
+    # branch target: comparisons with zero are common. d is unused, as for
+    # brcond: it spreads the branch sources.
     with_dn(f'brcondi_i32_{condition}',
         "ldr x26, [x28], #8",
         "ldr x27, [x28], #8",

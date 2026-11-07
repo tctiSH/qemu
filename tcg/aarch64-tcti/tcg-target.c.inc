@@ -244,23 +244,28 @@ static void tcg_out_immediate(TCGContext *s, tcg_target_ulong v)
 /*
  * Where a goto_tb to the stream at addr continues: past the exit check a TB
  * starts with, if it has one, as the goto_tb gadgets make the check
- * themselves. The check is three stream words: a tb_exit_check gadget, the
- * offset of the word it reads, and its branch target. Anything else, such as
- * a TB without the check or a jump's own exit_tb, runs from the start.
+ * themselves. The check is two stream words: a tb_exit_check gadget and its
+ * branch target. Anything else, such as a TB without the check or a jump's
+ * exit_tb, runs from the start.
  */
 static uintptr_t tcti_goto_tb_entry(uintptr_t addr)
 {
     const uint64_t *stream = (const uint64_t *)addr;
 
-    if (stream[1] != (uint64_t)(int64_t)TCTI_EXIT_REQUEST_OFS) {
-        return addr;
-    }
-    for (int r = 0; r < TCG_TARGET_GP_REGS; r++) {
-        if (stream[0] == (uintptr_t)gadget_tb_exit_check[r]) {
-            return addr + 3 * sizeof(uint64_t);
-        }
+    if (stream[0] == (uintptr_t)gadget_tb_exit_check) {
+        return addr + TCTI_EXIT_CHECK_SIZE;
     }
     return addr;
+}
+
+/*
+ * Whether the TB being translated starts with tb_exit_check: whether it
+ * makes gen_tb_start()'s exit check and counts no instructions. tb_entry()
+ * in tcti-gadget-gen.py tests the same, and must change with this.
+ */
+static bool tcti_tb_has_exit_check(TCGContext *s)
+{
+    return s->exitreq_label && !(s->gen_tb->cflags & CF_USE_ICOUNT);
 }
 
 void tb_target_set_jmp_target(const TranslationBlock *tb, int n,
@@ -926,17 +931,6 @@ static void tcg_out_call(TCGContext *s, const tcg_insn_unit *func,
  * Generates LD instructions.
  */
 /*
- * The last 32-bit load from env emitted, so tgen_brcondi() can fuse it with
- * a following "branch if negative" into tb_exit_check: that pair starts
- * every TB. Per thread, as translation is.
- */
-static __thread struct {
-    tcg_insn_unit *start, *end;
-    TCGReg reg;
-    intptr_t offset;
-} tcti_last_env_ld32;
-
-/*
  * The last 64-bit load or store between a register and env emitted, so that
  * the next one, to the slot beside it, can join it in an ldp_env or stp_env
  * gadget: guest registers are adjacent in env, and are synced and reloaded
@@ -1063,7 +1057,6 @@ static void tcti_rewind(TCGContext *s, tcg_insn_unit *to)
 #endif
     s->code_ptr = to;
     tcti_env_args.n = 0;
-    tcti_last_env_ld32.end = NULL;
     tcti_last_env_ldst64.end = NULL;
     tcti_env_rmw.end = NULL;
     tcti_last_movi32.end = NULL;
@@ -1146,14 +1139,6 @@ static void tcg_out_ld(TCGContext *s, TCGType type, TCGReg ret, TCGReg arg1,
 {
     if (type == TCG_TYPE_I64 && arg1 == TCG_AREG0) {
         tcti_out_env_ldst64(s, false, ret, arg2);
-        return;
-    }
-    if (type == TCG_TYPE_I32 && arg1 == TCG_AREG0) {
-        tcti_last_env_ld32.start = s->code_ptr;
-        tcg_out_ldst_gadget(s, gadget_ld32u, ret, arg1, arg2);
-        tcti_last_env_ld32.end = s->code_ptr;
-        tcti_last_env_ld32.reg = ret;
-        tcti_last_env_ld32.offset = arg2;
         return;
     }
     if (type == TCG_TYPE_I32) {
@@ -1669,24 +1654,6 @@ static void tgen_brcondi(TCGContext *s, TCGType type, TCGCond cond,
         (type == TCG_TYPE_I32 ? tcti_brcondi_i32 : tcti_brcondi_i64)[cond];
 
     tcg_debug_assert(gadget);
-
-    /*
-     * A load of this register from env just before: the TB-start exit
-     * check. The fused gadget does the load too, so the register holds the
-     * same value either way.
-     */
-    if (type == TCG_TYPE_I32 && cond == TCG_COND_LT && arg1 == 0 &&
-        tcti_last_env_ld32.end == s->code_ptr &&
-        tcti_last_env_ld32.reg == arg0 &&
-        !tcti_label_within(s, tcti_last_env_ld32.start, s->code_ptr)) {
-        intptr_t offset = tcti_last_env_ld32.offset;
-
-        tcti_rewind(s, tcti_last_env_ld32.start);
-        tcg_out_unary_gadget(s, gadget_tb_exit_check, arg0);
-        tcg_out64(s, offset);
-        tcti_out_label(s, l);
-        return;
-    }
 
     tcg_out_gadget(s, (*gadget)[last_brcond][arg0]);
     last_brcond = (last_brcond + 1) % TCG_TARGET_GP_REGS;
@@ -2892,6 +2859,26 @@ static inline void tcg_target_qemu_prologue(TCGContext *s)
     tcg_out_imm64_gadget(s, gadget_exit_tb, 0);
 }
 
+/*
+ * Removes gen_tb_start()'s exit check, the TB's first two ops: a load from
+ * env and a branch to exitreq_label if the value is negative. tb_exit_check
+ * makes the check instead. Only a TB that counts instructions uses the value
+ * after the branch, and it has no tb_exit_check.
+ */
+static void tcti_remove_exit_check_ops(TCGContext *s)
+{
+    TCGOp *ld = QTAILQ_FIRST(&s->ops);
+    TCGOp *br = QTAILQ_NEXT(ld, link);
+
+    g_assert(ld->opc == INDEX_op_ld &&
+             arg_temp(ld->args[1]) == tcgv_ptr_temp(tcg_env) &&
+             (intptr_t)ld->args[2] == TCTI_EXIT_REQUEST_OFS);
+    g_assert(br->opc == INDEX_op_brcond && br->args[0] == ld->args[0] &&
+             arg_label(br->args[3]) == s->exitreq_label);
+    tcg_op_remove(s, br);
+    tcg_op_remove(s, ld);
+}
+
 static void tcg_out_tb_start(TCGContext *s)
 {
     /* Nothing from a previous (or restarted) translation may be fused. */
@@ -2899,7 +2886,6 @@ static void tcg_out_tb_start(TCGContext *s)
     tcti_last_rich_br.end = NULL;
 #endif
     tcti_env_args.n = 0;
-    tcti_last_env_ld32.end = NULL;
     tcti_last_env_ldst64.end = NULL;
     tcti_env_rmw.end = NULL;
     tcti_last_movi32.end = NULL;
@@ -2907,6 +2893,20 @@ static void tcg_out_tb_start(TCGContext *s)
     tcti_last_sti32.end = NULL;
     tcti_last_zero_q.end = NULL;
     tcti_last_lookup.end = NULL;
+
+    /*
+     * The exit check, first, so that a goto_tb or lookup_tb_predict that
+     * makes the check itself can skip the gadget. tb_entry() relies on a TB
+     * lacking it only if it counts instructions or has CF_NOIRQ, which no TB
+     * the lookup finds has.
+     */
+    g_assert(!s->exitreq_label == !!(s->gen_tb->cflags & CF_NOIRQ));
+    if (tcti_tb_has_exit_check(s)) {
+        tcti_remove_exit_check_ops(s);
+        tcg_out_gadget(s, gadget_tb_exit_check);
+        tcti_out_label(s, s->exitreq_label);
+        tcg_debug_assert(tcg_current_code_size(s) == TCTI_EXIT_CHECK_SIZE);
+    }
 }
 
 /*
@@ -2916,7 +2916,6 @@ static void tcg_out_tb_start(TCGContext *s)
 static void tcti_insn_start(TCGContext *s)
 {
     tcti_env_args.n = 0;
-    tcti_last_env_ld32.end = NULL;
     tcti_last_env_ldst64.end = NULL;
     tcti_env_rmw.end = NULL;
     tcti_last_movi32.end = NULL;

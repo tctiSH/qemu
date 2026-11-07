@@ -1,5 +1,5 @@
 _gadget_exit_tb
-_gadget_tb_exit_check_arg8
+_gadget_tb_exit_check
 _gadget_br
 _gadget_andi_env_arg8_arg8
 _gadget_sti32_env

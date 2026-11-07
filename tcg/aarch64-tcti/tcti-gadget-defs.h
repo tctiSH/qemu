@@ -46,12 +46,23 @@ QEMU_BUILD_BUG_ON(TCTI_TLB_FAST_OFS(TCTI_TLB_FAST_MMU_INDICES - 1) < -512);
 
 /*
  * The word every TB checks at its start, negative when an exit has been
- * requested: see gen_tb_start(). The goto_tb gadgets read it with LDUR.
+ * requested: see gen_tb_start(). The goto_tb gadgets, tb_exit_check and
+ * lookup_tb_predict read it with LDUR.
  */
 #define TCTI_EXIT_REQUEST_OFS                                           \
     ((int)(offsetof(CPUState, neg.icount_decr.u32) - sizeof(CPUState)))
 
 QEMU_BUILD_BUG_ON(TCTI_EXIT_REQUEST_OFS < -256);
+
+/*
+ * The size of the exit check that tcg_out_tb_start() starts a TB with: a
+ * tb_exit_check gadget and its branch target. A goto_tb or
+ * lookup_tb_predict that makes the check itself skips it.
+ */
+#define TCTI_EXIT_CHECK_SIZE (2 * sizeof(uint64_t))
+
+/* tb_entry() tests CF_USE_ICOUNT in a TB's cflags with one TBNZ. */
+QEMU_BUILD_BUG_ON(CF_USE_ICOUNT & (CF_USE_ICOUNT - 1));
 
 /* One LDP loads a CPUTLBDescFast's mask and table, in this order. */
 QEMU_BUILD_BUG_ON(offsetof(CPUTLBDescFast, mask) != 0);
