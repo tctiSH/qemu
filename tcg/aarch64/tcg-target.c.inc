@@ -1479,10 +1479,16 @@ static void inlfp2(TCGContext *s, uint32_t insn, int d, int n)
     tcg_out32(s, insn | n << 5 | d);
 }
 
-/* acc &= "every lane of x is zero or a normal finite number". */
-static void inlfp_check_normal(TCGContext *s, uint32_t dbl, int x)
+/*
+ * acc &= "every lane of x is zero or a normal finite number", or for a
+ * result, "every lane is zero, or finite and larger in magnitude than the
+ * smallest normal": a result of the smallest normal may have rounded up
+ * from a tiny value, an underflow.
+ */
+static void inlfp_check_normal(TCGContext *s, uint32_t dbl, int x, bool result)
 {
-    inlfp3(s, INLFP_FACGE | dbl, INLFP_T0, x, INLFP_MIN);
+    inlfp3(s, (result ? INLFP_FACGT : INLFP_FACGE) | dbl, INLFP_T0, x,
+           INLFP_MIN);
     inlfp3(s, INLFP_FACGT | dbl, INLFP_T1, INLFP_INF, x);
     inlfp3(s, INLFP_AND, INLFP_T0, INLFP_T0, INLFP_T1);
     inlfp2(s, INLFP_FCMEQZ | dbl, INLFP_T1, x);
@@ -1615,10 +1621,10 @@ static void tcg_out_inline_fp(TCGContext *s, const TCGInlineFP *fp,
                 inlfp3(s, INLFP_ORR, r, c, c);
                 inlfp3(s, INLFP_FMLA_V | dbl, r, a, b);
             }
-            inlfp_check_normal(s, dbl, a);
-            inlfp_check_normal(s, dbl, b);
-            inlfp_check_normal(s, dbl, c);
-            inlfp_check_normal(s, dbl, r);
+            inlfp_check_normal(s, dbl, a, false);
+            inlfp_check_normal(s, dbl, b, false);
+            inlfp_check_normal(s, dbl, c, false);
+            inlfp_check_normal(s, dbl, r, true);
             inlfp_check_underflow(s, dbl, r, a, b);
             continue;
         }
@@ -1645,10 +1651,10 @@ static void tcg_out_inline_fp(TCGContext *s, const TCGInlineFP *fp,
         }
 
         /* A scalar load or op zeroes the lanes above, which pass. */
-        inlfp_check_normal(s, dbl, a);
-        inlfp_check_normal(s, dbl, b);
+        inlfp_check_normal(s, dbl, a, false);
+        inlfp_check_normal(s, dbl, b, false);
         if (!minmax) {
-            inlfp_check_normal(s, dbl, r);
+            inlfp_check_normal(s, dbl, r, true);
         }
         if (fp->op == TCG_INLINE_FP_MUL) {
             inlfp_check_underflow(s, dbl, r, a, b);

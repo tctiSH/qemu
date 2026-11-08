@@ -875,8 +875,13 @@ def inline_fp(op, form, dbl, size, env):
                   "movz w16, #0x7f80, lsl #16", "dup v17.4s, w16"]
     lines += ["movi v18.2d, #0xffffffffffffffff"]
 
-    def normal(x):
-        return [f"facge v19.{t}, v{x}.{t}, v16.{t}", f"facgt v20.{t}, v17.{t}, v{x}.{t}",
+    # Every lane of x is zero or a normal finite number, or for a result, zero,
+    # or finite and larger in magnitude than the smallest normal: a result of
+    # the smallest normal may have rounded up from a tiny value, an underflow.
+    def normal(x, result=False):
+        cmp = "facgt" if result else "facge"
+        return [f"{cmp} v19.{t}, v{x}.{t}, v16.{t}",
+                f"facgt v20.{t}, v17.{t}, v{x}.{t}",
                 "and v19.16b, v19.16b, v20.16b", f"fcmeq v20.{t}, v{x}.{t}, #0.0",
                 "orr v19.16b, v19.16b, v20.16b", "and v18.16b, v18.16b, v19.16b"]
 
@@ -902,7 +907,9 @@ def inline_fp(op, form, dbl, size, env):
         else:
             lines += [f"f{op} v{r}.{t}, v{a}.{t}, v{b}.{t}"]
         # A scalar load or op zeroes the lanes above, which pass.
-        lines += normal(a) + normal(b) + ([] if minmax else normal(r))
+        lines += normal(a) + normal(b)
+        if not minmax:
+            lines += normal(r, result=True)
         if op == "mul":
             lines += underflow(r, a, b)
         elif op == "div":

@@ -16,9 +16,11 @@
  *    status_want, which is round-to-nearest-even, no flush to zero of
  *    inputs or outputs, and the inexact flag already raised, so that the
  *    operation cannot raise it anew.
- *  - Every lane of v, s and the result is zero or a normal finite number:
- *    then nothing but inexact can be raised, and the host computes the same
- *    value in round-to-nearest.
+ *  - Every lane of v and s is zero or a normal finite number, and every
+ *    lane of the result is zero, or finite and larger in magnitude than
+ *    the smallest normal: then nothing but inexact can be raised, and the
+ *    host computes the same value in round-to-nearest. A result of exactly
+ *    the smallest normal may have rounded up from a tiny one, an underflow.
  *  - For mul and div, no lane's result is zero unless v's is (and for mul,
  *    s's may be): a zero from nonzero operands is an underflow.
  *

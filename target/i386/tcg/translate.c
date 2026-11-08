@@ -3392,8 +3392,9 @@ static void gen_multi0F(DisasContext *s, X86DecodedInsn *decode)
 
 /*
  * The SSE float helpers a backend may inline (tcg/tcg-inline-fp.h): their
- * fast path is the one in ops_sse_host.h, narrowed to lanes that are zero
- * or normal, which the backend can check cheaply.
+ * fast path is the one in ops_sse_host.h, narrowed to what the backend can
+ * check cheaply: inputs that are zero or normal, and for arithmetic, results
+ * that are zero or larger in magnitude than the smallest normal.
  */
 static void x86_register_inline_fp(void)
 {
