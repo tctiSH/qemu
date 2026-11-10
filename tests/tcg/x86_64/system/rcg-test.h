@@ -742,12 +742,15 @@ static inline void rcg_init_hi(void)
 
 /*
  * Points the first 32 vectors at the stubs, on IST1, maps RCG_HI, sets FS's
- * and GS's bases, and turns SSE on. Stops the test if the binary reaches
- * the cases' data.
+ * and GS's bases, and turns SSE and AVX on. Stops the test if the binary
+ * reaches the cases' data, if the CPU lacks XSAVE or AVX, which the cases'
+ * VEX encodings need, or if it lacks XSAVEOPT, without which QEMU will not
+ * set CR4.OSXSAVE.
  */
 static inline void rcg_init(void)
 {
     uint64_t cr;
+    uint32_t eax = 1, ecx = 0;
     uint16_t cs;
     struct rcg_table_reg idtr = { sizeof(rcg_idt) - 1, (uint64_t)rcg_idt };
 
@@ -778,6 +781,31 @@ static inline void rcg_init(void)
     asm volatile("mov %0, %%cr0" : : "r"((cr & ~4ull) | 2));
     asm volatile("mov %%cr4, %0" : "=r"(cr));
     asm volatile("mov %0, %%cr4" : : "r"(cr | 0x600));
+
+    /*
+     * Checks for XSAVE and AVX, then sets CR4.OSXSAVE and enables x87, SSE
+     * and AVX in XCR0.
+     */
+    asm volatile("cpuid" : "+a"(eax), "+c"(ecx) : : "ebx", "edx");
+    if (!(ecx & (1 << 26)) || !(ecx & (1 << 28))) {
+        ml_printf("FAIL: the CPU has no XSAVE or AVX\n");
+        asm volatile("outw %w0, $0xf4" : : "a"(1));
+    }
+    /*
+     * QEMU treats CR4.OSXSAVE as reserved when CPUID leaf 0xD, subleaf 1
+     * lists none of XSAVEOPT, XSAVEC, XGETBV1 and XSAVES, and setting it
+     * loops on the MOV to CR4 instead of raising #GP.
+     */
+    eax = 0xd;
+    ecx = 1;
+    asm volatile("cpuid" : "+a"(eax), "+c"(ecx) : : "ebx", "edx");
+    if (!(eax & 0xf)) {
+        ml_printf("FAIL: the CPU has no XSAVEOPT\n");
+        asm volatile("outw %w0, $0xf4" : : "a"(1));
+    }
+    asm volatile("mov %%cr4, %0" : "=r"(cr));
+    asm volatile("mov %0, %%cr4" : : "r"(cr | 1ull << 18));
+    asm volatile("xsetbv" : : "a"(7), "d"(0), "c"(0));
 }
 
 #endif /* RCG_TEST_H */

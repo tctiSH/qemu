@@ -25,7 +25,7 @@ if get_option('tcg_threaded_interpreter') or \
   rcg_outputs = ['rcg-table.c.inc']
   foreach f : ['add', 'sub', 'and', 'or', 'xor', 'cmp', 'test', 'adc', 'sbb',
               'mov', 'other', 'shift', 'mul', 'bt', 'jcc', 'setcc', 'cmov',
-              'fused', 'sse', 'vfp']
+              'fused', 'sse', 'vfp', 'vex']
     rcg_outputs += 'rcg_gadgets_@0@.c'.format(f)
   endforeach
   rcg_gadgets = custom_target('rcg-gadgets',

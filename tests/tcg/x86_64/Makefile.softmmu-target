@@ -37,6 +37,12 @@ QEMU_OPTS+=-device isa-debugcon,chardev=output -device isa-debug-exit,iobase=0xf
 # tlb-next-page uses memory up to 194 MiB.
 run-tlb-next-page: QEMU_OPTS := -m 256M $(QEMU_OPTS)
 
+# rcg_init() turns AVX on for the RCG tests' VEX encodings, and AVX needs
+# XSAVE. QEMU also wants XSAVEOPT, or another CPUID 0xD.1 feature, before
+# it lets the guest set CR4.OSXSAVE.
+run-rcg-insns run-rcg-jcc run-rcg-faults run-rcg-faults-jcc: \
+	QEMU_OPTS := -cpu qemu64,+xsave,+xsaveopt,+avx $(QEMU_OPTS)
+
 # The RCG tests' cases come from the tables RCG's gadgets are made from,
 # with the data addresses rcg-test.h defines. Making rcg-insns.h also checks
 # every gadget's body.

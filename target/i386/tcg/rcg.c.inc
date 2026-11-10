@@ -103,8 +103,10 @@ static const struct {
     { gen_VMOVSS_st,  RCG_OP_MOVSS, 0, 2, -1 },
     /*
      * The SSE floating-point ops, by their ps op: rcg_select() picks pd, ss
-     * or sd by the prefix. op[1] is the destination again, as rcg_kind()
-     * refuses VEX encodings, but for packed SQRT, which has none.
+     * or sd by the prefix. op[1] is the destination again in the legacy
+     * encodings, and VEX.vvvv's register in the VEX ones, for which
+     * rcg_vex_op() picks the op. Packed SQRT has no op[1]:
+     * decode_sse_unary() leaves it out.
      */
     { gen_VADD,   RCG_OP_ADDPS, 0, 2, -1 },
     { gen_VSUB,   RCG_OP_SUBPS, 0, 2, -1 },
@@ -124,6 +126,14 @@ QEMU_BUILD_BUG_ON(RCG_OP_ADDSD != RCG_OP_ADDPS + 3 ||
                   RCG_OP_SQRTSD != RCG_OP_ADDPS + 19 ||
                   RCG_OP_UNPCKLPD != RCG_OP_UNPCKLPS + 1 ||
                   RCG_OP_UNPCKHPD != RCG_OP_UNPCKHPS + 1);
+
+/* The VEX encodings' ops, in the order of the legacy ones: rcg_vex_op(). */
+QEMU_BUILD_BUG_ON(RCG_OP_VMOVSS - RCG_OP_VMOVDQA !=
+                  RCG_OP_MOVSS - RCG_OP_MOVDQA ||
+                  RCG_OP_VSQRTSD - RCG_OP_VADDPS !=
+                  RCG_OP_SQRTSD - RCG_OP_ADDPS ||
+                  RCG_OP_VUNPCKHPD - RCG_OP_VUNPCKLPS !=
+                  RCG_OP_UNPCKHPD - RCG_OP_UNPCKLPS);
 
 static bool sse_needs_alignment(DisasContext *s, X86DecodedInsn *decode,
                                 MemOp ot);
@@ -146,10 +156,11 @@ static char rcg_kind(DisasContext *s, X86DecodedOp *op)
         return 'i';
     case X86_OP_SSE:
         /*
-         * rcg_operands() takes the width from the RCG op. A VEX encoding
-         * may clear the upper half of the YMM, which no gadget does.
+         * rcg_operands() takes the width from the RCG op. A VEX.256
+         * encoding works on the whole YMM register, which no gadget does;
+         * a VEX.128 one takes the op rcg_vex_op() picks.
          */
-        return s->prefix & PREFIX_VEX ? 0 : 'x';
+        return (s->prefix & PREFIX_VEX) && s->vex_l ? 0 : 'x';
     default:
         return 0;
     }
@@ -636,19 +647,22 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
     case RCG_KIND_VLANE: {
         /*
          * ss and sd take the low lane of the source, and ps and pd all 16
-         * bytes, which in memory must be aligned and, as for MOVDQA, need
-         * LSE2. The floating-point gadgets read float_status's flags
-         * directly; the unpacks raise nothing.
+         * bytes, which in memory need LSE2, as for MOVDQA, and must be
+         * aligned in the legacy encodings, whose gadgets require it, and
+         * may be misaligned in the VEX ones, whose gadgets allow it. The
+         * floating-point gadgets read float_status's flags directly; the
+         * unpacks raise nothing.
          */
         char a = rcg_kind(s, first), b = rcg_kind(s, second);
         bool fp = rcg_facts[op].kind == RCG_KIND_VFP;
+        bool vex = s->prefix & PREFIX_VEX;
         int type = fp ? (op - RCG_OP_ADDPS) % 4 : 0;
 
         *ot = type == 2 ? MO_32 : type == 3 ? MO_64 : MO_128;
         if (a != 'x' || !b ||
             (b == 'm' && *ot == MO_128 &&
              (!(cpuinfo & CPUINFO_LSE2) ||
-              !sse_needs_alignment(s, decode, MO_128))) ||
+              sse_needs_alignment(s, decode, MO_128) == vex)) ||
             (fp && !rcg_sse_flags_ok())) {
             return -1;
         }
@@ -787,6 +801,27 @@ static unsigned rcg_pack_words(const RCGGadget *g, uint64_t *words,
 }
 
 /*
+ * The op of a VEX.128 encoding of op, in form, or -1 if it has none. Its
+ * gadgets take VEX.vvvv's register as their first input where the
+ * instruction has one, and clear bits 128 to 255 of the destination
+ * register. A move to memory is the same as the legacy encoding and uses
+ * its gadgets.
+ */
+static int rcg_vex_op(RCGOp op, int form)
+{
+    switch (rcg_facts[op].kind) {
+    case RCG_KIND_VMOV:
+        return form == RCG_FORM_MX ? op : op - RCG_OP_MOVDQA + RCG_OP_VMOVDQA;
+    case RCG_KIND_VFP:
+        return op - RCG_OP_ADDPS + RCG_OP_VADDPS;
+    case RCG_KIND_VLANE:
+        return op - RCG_OP_UNPCKLPS + RCG_OP_VUNPCKLPS;
+    default:
+        return -1;
+    }
+}
+
+/*
  * Emits the gadget for decode's instruction, if there is one, and returns
  * it, or NULL.
  */
@@ -838,6 +873,15 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     if (((first && rcg_is_xh(s, first)) || (second && rcg_is_xh(s, second))) &&
         !rcg_takes_xh(op)) {
         return NULL;
+    }
+    if (s->prefix & PREFIX_VEX) {
+        int vex_op = rcg_vex_op(op, form);
+
+        if (vex_op < 0) {
+            return NULL;
+        }
+        op = vex_op;
+        facts = &rcg_facts[op];
     }
     /* A shift by CL leaves a flags state only the gadget knows. */
     by_cl = facts->kind == RCG_KIND_SHIFT && second->unit == X86_OP_INT;
@@ -899,10 +943,16 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
         memop = (facts->src_ot >= 0 ? facts->src_ot : ot) | MO_LE;
         if ((facts->kind == RCG_KIND_VMOV || facts->kind == RCG_KIND_VFP ||
              facts->kind == RCG_KIND_VLANE) && ot == MO_128) {
-            /* As gen_ldo_env_A0() and gen_sto_env_A0() make it. */
+            /*
+             * The atomicity of gen_ldo_env_A0() and gen_sto_env_A0(), with
+             * MO_ALIGN_16 where sse_needs_alignment() holds: for MOVDQA,
+             * MOVAPS and MOVAPD in either encoding, as rcg_select() picks
+             * them, and for the legacy encodings of the floating-point ops
+             * and unpacks, which rcg_operands() requires.
+             */
             memop |= (s->cpuid_ext_features & CPUID_EXT_AVX
                       ? MO_ATOM_IFALIGN : MO_ATOM_IFALIGN_PAIR) |
-                     (op == RCG_OP_MOVDQA || facts->kind != RCG_KIND_VMOV
+                     (sse_needs_alignment(s, decode, MO_128)
                       ? MO_ALIGN_16 : 0);
         }
     }
@@ -985,6 +1035,10 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
         case RCG_W_S:
             words[n] = rcg_reg_op(s, second, &reg);
             rcg_note(ins, &nb_ins, reg);
+            break;
+        case RCG_W_V:
+            /* VEX.vvvv's register, an XMM register, which is in env alone. */
+            words[n] = rcg_reg_op(s, &decode->op[1], &reg);
             break;
         case RCG_W_BASE:
             if (a->base == -2) {
