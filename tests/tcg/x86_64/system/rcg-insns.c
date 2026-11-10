@@ -9,9 +9,11 @@
  * (see rcg-test.h), with the neighbors of each form that are left to TCG.
  * Each runs over every pair of values from rcg_values (or each single
  * value, where the form takes one operand), from every start in
- * rcg_starts. The registers, the arithmetic flags, SETcc's result for each
- * condition, XMM0 to XMM3 for a case that uses them, and the memory the
- * case can reach are hashed, and a case prints its hash.
+ * rcg_starts (those marked fp only for the cases with floating-point
+ * values). The registers, the arithmetic flags, SETcc's result for each
+ * condition, XMM0 to XMM3 for a case that uses them, MXCSR for one with
+ * floating-point values, and the memory the case can reach are hashed, and
+ * a case prints its hash.
  *
  * rcg-insns.ref holds TCG's hashes. To regenerate it after rcg-gen.py
  * changes the cases, run the test under TCG (in a build with TCTI, with
@@ -38,6 +40,9 @@ static uint64_t run(const struct rcg_case *c)
     uint64_t h = RCG_HASH_INIT;
 
     for (int s = 0; s < RCG_NB_STARTS; s++) {
+        if (rcg_starts[s].fp && c->xmm < RCG_XMM_F64) {
+            continue;
+        }
         for (int x = 0; x < nx; x++) {
             for (int y = 0; y < ny; y++) {
                 uint64_t flags;
@@ -50,6 +55,9 @@ static uint64_t run(const struct rcg_case *c)
                 h = rcg_hash(h, rcg_out.cc, sizeof(rcg_out.cc));
                 if (c->xmm) {
                     h = rcg_hash(h, rcg_out.x, sizeof(rcg_out.x));
+                }
+                if (c->xmm >= RCG_XMM_F64) {
+                    h = rcg_hash(h, &rcg_out.mxcsr, sizeof(rcg_out.mxcsr));
                 }
                 h = rcg_hash(h, rcg_bytes(RCG_MEM), RCG_MEM_SIZE);
                 h = rcg_hash(h, rcg_bytes(RCG_STACK - RCG_STACK_SIZE),

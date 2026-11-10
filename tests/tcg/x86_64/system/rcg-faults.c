@@ -16,10 +16,14 @@
  * that memory is lost to it. A branch goes to the end of the instruction.
  *
  * Each case also runs misaligned on the lower page, across a 16-byte
- * boundary, where it must not fault. Every run starts from the flags POPF
- * loads, again from the state a CMP leaves, and again from the state an
- * ADC leaves, which also uses cc_src2. From the last two, a write to the
- * lazy-flags state before the fault would show in the flags at the fault.
+ * boundary, where it must not fault. A floating-point case's operand is
+ * the same wherever it is, and each run must end with the same XMM
+ * registers and MXCSR as a run wholly on the lower page. Every run starts
+ * from the flags POPF loads, again from the state a CMP leaves, and again
+ * from the state an ADC leaves, which also uses cc_src2. From the last two,
+ * a write to the lazy-flags state before the fault would show in the flags
+ * at the fault. A floating-point case also runs from the flags POPF loads
+ * with the default MXCSR, from which the gadgets call the helper.
  */
 
 #include "rcg-test.h"
@@ -49,12 +53,17 @@
  * The starts: the flags from POPF, then a CMP of 0 with 1 (a borrow), then
  * an ADC of 1 to 0xf with CF set. That ADC sets AF, which TCG works out
  * from cc_src2, the carry in: had cc_src2 been written before the fault,
- * AF at the fault would be clear.
+ * AF at the fault would be clear. These three set PE in MXCSR, which lets
+ * the floating-point gadgets take the host path where the values allow. A
+ * fourth, only for the cases with floating-point values, repeats the first
+ * with the default MXCSR, from which the gadgets call their helper after
+ * the load.
  */
 static const struct rcg_start starts[] = {
-    { FLAGS_IN, false, 0 },
-    { FLAGS_IN, true, 0 },
-    { FLAGS_IN, false, 0xf, true },
+    { FLAGS_IN, false, 0, false, 0x1fa0 },
+    { FLAGS_IN, true, 0, false, 0x1fa0 },
+    { FLAGS_IN, false, 0xf, true, 0x1fa0 },
+    { FLAGS_IN, false, 0, false, 0x1f80, true },
 };
 #define NB_STARTS (sizeof(starts) / sizeof(starts[0]))
 
@@ -73,6 +82,13 @@ static const struct rcg_start starts[] = {
 #define VALUE_A 0x0123456789abcdefull
 #define VALUE_B 0x1122334455667788ull
 
+/*
+ * The value a floating-point case's memory operand takes, by its place in
+ * rcg_values: the third, pi as a float or a double, which with XMM1's low
+ * lane keeps the scalar ops on the gadgets' fast path.
+ */
+#define VALUE_FP 0x7f
+
 static uint64_t region_pt[512] __attribute__((aligned(PAGE)));
 
 /* The upper page's entry, which the fault handler maps fully. */
@@ -83,6 +99,7 @@ static int faults;
 static uint64_t fault_rip, fault_rflags, fault_rsp, fault_cr2;
 static uint64_t fault_r[15];
 static uint64_t fault_x[4][2];
+static uint32_t fault_mxcsr;
 static uint64_t fault_vector;
 static uint8_t fault_window[2 * WINDOW];
 
@@ -126,6 +143,7 @@ bool rcg_exception(struct rcg_frame *f)
                  "movups %%xmm2, %2\n\tmovups %%xmm3, %3"
                  : "=m"(fault_x[0]), "=m"(fault_x[1]), "=m"(fault_x[2]),
                    "=m"(fault_x[3]));
+    asm volatile("stmxcsr %0" : "=m"(fault_mxcsr));
     fault_rip = f->rip;
     fault_rflags = f->rflags;
     fault_rsp = f->rsp;
@@ -214,6 +232,9 @@ static uint64_t run(const struct rcg_case *c, const struct rcg_start *s,
     }
     rsp = rcg_in.r[R_ESP];
     rcg_fill(WINDOW_START, 2 * WINDOW, WINDOW_SEED);
+    if (c->xmm >= RCG_XMM_F64) {
+        rcg_store_fp(c, addr, VALUE_FP);
+    }
     if (c->target == RCG_TARGET_MEM) {
         rcg_store64(c->moved == R_ESP ? c->operand : addr, end);
     } else if (c->target == RCG_TARGET_STACK) {
@@ -250,9 +271,11 @@ static void check(bool ok, const struct rcg_case *c, const struct rcg_start *s,
     checks++;
     if (!ok) {
         failed++;
-        ml_printf("FAIL: %s%s, %d bytes below the boundary, upper page %s: "
-                  "%s\n", c->name,
+        ml_printf("FAIL: %s%s%s%s, %d bytes below the boundary, upper page "
+                  "%s: %s\n", c->name,
+                  c->xmm >= RCG_XMM_F64N ? " on normal values" : "",
                   s->adc ? " after an ADC" : s->sub ? " after a CMP" : "",
+                  s->fp ? " with the default MXCSR" : "",
                   below,
                   how == MAPPED ? "mapped" :
                   how == ABSENT ? "absent" : "read-only", what);
@@ -291,6 +314,25 @@ static void check_fault(const struct rcg_case *c, const struct rcg_start *s,
         }
         check(same, c, s, below, how, "XMM changed before the fault");
     }
+    if (c->xmm >= RCG_XMM_F64) {
+        check(fault_mxcsr == rcg_in.mxcsr, c, s, below, how,
+              "MXCSR changed before the fault");
+    }
+}
+
+/* What a floating-point case gives wholly on the lower page. */
+static struct result fp_want;
+
+/* Whether r's XMM registers and MXCSR are fp_want's. */
+static bool same_fp(const struct result *r)
+{
+    bool same = r->out.mxcsr == fp_want.out.mxcsr;
+
+    for (int i = 0; i < 4; i++) {
+        same &= r->out.x[i][0] == fp_want.out.x[i][0] &&
+                r->out.x[i][1] == fp_want.out.x[i][1];
+    }
+    return same;
 }
 
 /*
@@ -335,8 +377,12 @@ static void run_at(const struct rcg_case *c, const struct rcg_start *s,
 
     run(c, s, addr, MAPPED, &want);
     check(faults == 0, c, s, below, MAPPED, "faulted");
-    if (c->xmm) {
+    if (c->xmm && c->xmm < RCG_XMM_F64) {
         check_xmm_access(c, s, below, addr, &want);
+    }
+    if (c->xmm >= RCG_XMM_F64) {
+        check(same_fp(&want), c, s, below, MAPPED,
+              "XMM or MXCSR differ from the run on the lower page");
     }
 
     for (enum upper how = ABSENT; how <= READ_ONLY; how++) {
@@ -371,6 +417,10 @@ static void run_at(const struct rcg_case *c, const struct rcg_start *s,
             }
             check(same, c, s, below, how, "XMM differs after the retry");
         }
+        if (c->xmm >= RCG_XMM_F64) {
+            check(got.out.mxcsr == want.out.mxcsr, c, s, below, how,
+                  "MXCSR differs after the retry");
+        }
         same = true;
         for (int b = 0; b < 2 * WINDOW; b++) {
             same &= got.window[b] == want.window[b];
@@ -380,10 +430,10 @@ static void run_at(const struct rcg_case *c, const struct rcg_start *s,
 }
 
 /*
- * A move that must be aligned: on a 16-byte boundary it faults in the upper
- * page or not at all. Off one it raises #GP, with nothing written, both
- * across the boundary, where the helper checks it, and within the lower page,
- * where the gadget must.
+ * A move or a floating-point op whose 16-byte access must be aligned: on a
+ * 16-byte boundary it faults in the upper page or not at all. Off one it
+ * raises #GP, with nothing written, both across the boundary, where the
+ * helper checks it, and within the lower page, where the gadget must.
  */
 static void run_aligned(const struct rcg_case *c, const struct rcg_start *s)
 {
@@ -420,6 +470,15 @@ int main(void)
         int size = c->moved == R_ESP ? 8 : c->width / 8;
 
         for (int s = 0; s < NB_STARTS; s++) {
+            if (starts[s].fp && c->xmm < RCG_XMM_F64) {
+                continue;
+            }
+            if (c->xmm >= RCG_XMM_F64) {
+                int at = c->aligned ? 16 : size;
+
+                run(c, &starts[s], BOUNDARY - at, MAPPED, &fp_want);
+                check(faults == 0, c, &starts[s], at, MAPPED, "faulted");
+            }
             if (c->aligned) {
                 run_aligned(c, &starts[s]);
                 continue;

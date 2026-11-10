@@ -101,7 +101,22 @@ static const struct {
     { gen_VMOVSS_ld,  RCG_OP_MOVSS, 0, 2, -1 },
     { gen_VMOVSS,     RCG_OP_MOVSS, 0, 2, -1 },
     { gen_VMOVSS_st,  RCG_OP_MOVSS, 0, 2, -1 },
+    /*
+     * The SSE floating-point ops, by their ps op: rcg_select() picks pd, ss
+     * or sd by the prefix. op[1] is the destination again, as rcg_kind()
+     * refuses VEX encodings.
+     */
+    { gen_VADD,   RCG_OP_ADDPS, 0, 2, -1 },
+    { gen_VSUB,   RCG_OP_SUBPS, 0, 2, -1 },
+    { gen_VMUL,   RCG_OP_MULPS, 0, 2, -1 },
+    { gen_VDIV,   RCG_OP_DIVPS, 0, 2, -1 },
 };
+
+/* Each op's ps, pd, ss and sd, in this order: see rcg_select(). */
+QEMU_BUILD_BUG_ON(RCG_OP_ADDSD != RCG_OP_ADDPS + 3 ||
+                  RCG_OP_SUBPS != RCG_OP_ADDPS + 4 ||
+                  RCG_OP_MULPS != RCG_OP_ADDPS + 8 ||
+                  RCG_OP_DIVSD != RCG_OP_ADDPS + 15);
 
 static bool sse_needs_alignment(DisasContext *s, X86DecodedInsn *decode,
                                 MemOp ot);
@@ -496,6 +511,10 @@ static bool rcg_select(DisasContext *s, X86DecodedInsn *decode, RCGOp *op,
     if (*op == RCG_OP_MOVDQU &&
         sse_needs_alignment(s, decode, decode->op[0].ot)) {
         *op = RCG_OP_MOVDQA;
+    } else if (rcg_facts[*op].kind == RCG_KIND_VFP) {
+        /* ps, pd, ss or sd, by the prefix: gen_fp_sse()'s choice. */
+        *op += s->prefix & PREFIX_REPZ ? 2 : s->prefix & PREFIX_REPNZ ? 3 :
+               s->prefix & PREFIX_DATA ? 1 : 0;
     } else if (*op == RCG_OP_SUB && !writes) {
         *op = RCG_OP_CMP;
     } else if (*op == RCG_OP_AND && !writes) {
@@ -507,6 +526,26 @@ static bool rcg_select(DisasContext *s, X86DecodedInsn *decode, RCGOp *op,
         *op = RCG_OP_ZERO;
     }
     return true;
+}
+
+/*
+ * Whether float_status keeps its exception flags in its first two bytes,
+ * where the SSE floating-point gadgets read them with LDRH.
+ */
+static bool rcg_sse_flags_ok(void)
+{
+    static int ok = -1;
+
+    if (ok < 0) {
+        float_status st = { 0 };
+        uint16_t flags;
+
+        set_float_exception_flags(float_flag_inexact | float_flag_invalid,
+                                  &st);
+        memcpy(&flags, &st, sizeof(flags));
+        ok = flags == (float_flag_inexact | float_flag_invalid);
+    }
+    return ok;
 }
 
 /*
@@ -579,6 +618,24 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
         *ot = op == RCG_OP_MOVSD ? MO_64 : op == RCG_OP_MOVSS ? MO_32 : MO_128;
         if (!a || !b || (*ot == MO_128 && (a == 'm' || b == 'm') &&
                          !(cpuinfo & CPUINFO_LSE2))) {
+            return -1;
+        }
+        return rcg_form(a, b);
+    }
+    case RCG_KIND_VFP: {
+        /*
+         * ss and sd take the low lane of the source, and ps and pd all 16
+         * bytes, which in memory must be aligned and, as for MOVDQA, need
+         * LSE2. The gadgets read float_status's flags directly.
+         */
+        char a = rcg_kind(s, first), b = rcg_kind(s, second);
+        int type = (op - RCG_OP_ADDPS) % 4;
+
+        *ot = type == 2 ? MO_32 : type == 3 ? MO_64 : MO_128;
+        if (a != 'x' || !b || !rcg_sse_flags_ok() ||
+            (b == 'm' && *ot == MO_128 &&
+             (!(cpuinfo & CPUINFO_LSE2) ||
+              !sse_needs_alignment(s, decode, MO_128)))) {
             return -1;
         }
         return rcg_form(a, b);
@@ -826,11 +883,13 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
         bar |= slot->access & RCG_STORE ? TCG_MO_LD_ST | TCG_MO_ST_ST : 0;
         ordered = tcg_gen_rich_mo(bar);
         memop = (facts->src_ot >= 0 ? facts->src_ot : ot) | MO_LE;
-        if (facts->kind == RCG_KIND_VMOV && ot == MO_128) {
+        if ((facts->kind == RCG_KIND_VMOV || facts->kind == RCG_KIND_VFP) &&
+            ot == MO_128) {
             /* As gen_ldo_env_A0() and gen_sto_env_A0() make it. */
             memop |= (s->cpuid_ext_features & CPUID_EXT_AVX
                       ? MO_ATOM_IFALIGN : MO_ATOM_IFALIGN_PAIR) |
-                     (op == RCG_OP_MOVDQA ? MO_ALIGN_16 : 0);
+                     (op == RCG_OP_MOVDQA || facts->kind == RCG_KIND_VFP
+                      ? MO_ALIGN_16 : 0);
         }
     }
     g += ordered;

@@ -59,18 +59,34 @@
 #define R_ESP 4
 
 /*
- * The registers, the flags, SETcc's result for each condition, and XMM0 to
- * XMM3, as two 64-bit halves each.
+ * The registers, the flags, SETcc's result for each condition, XMM0 to
+ * XMM3, as two 64-bit halves each, and MXCSR.
  */
 struct rcg_state {
     uint64_t r[16];
     uint64_t flags;
     uint8_t cc[16];
     uint64_t x[4][2];
+    uint32_t mxcsr;
 };
 
-/* Where rcg_enter and rcg_leave find x. */
+/* Where rcg_enter and rcg_leave find x and mxcsr. */
 _Static_assert(offsetof(struct rcg_state, x) == 152, "x moved");
+_Static_assert(offsetof(struct rcg_state, mxcsr) == 216, "mxcsr moved");
+
+/*
+ * A case's xmm: 0 if it uses no XMM register, 1 if it uses XMM0 to XMM3
+ * with the integer values, or one of these with floating-point values in
+ * their lanes, doubles or floats, and MXCSR from the start.
+ */
+#define RCG_XMM_F64 2
+#define RCG_XMM_F32 3
+/*
+ * The same with normal values only, from rcg_f64n and rcg_f32n, so that
+ * every lane of a packed operand can take the host's FPU in the gadgets.
+ */
+#define RCG_XMM_F64N 4
+#define RCG_XMM_F32N 5
 
 struct rcg_state rcg_in, rcg_out, rcg_host;
 
@@ -96,8 +112,8 @@ uint64_t rcg_sub_in;
  * rcg-faults puts the address of the instruction's end for a branch: a
  * register, RCG_TARGET_MEM (the memory operand) or RCG_TARGET_STACK (the
  * top of the stack). -1 is no register. xmm says that the case uses XMM0
- * to XMM3, which rcg-insns then compares too. aligned says that its access
- * must be on a 16-byte boundary, for rcg-faults.
+ * to XMM3 (see RCG_XMM_F64), which rcg-insns then compares too. aligned
+ * says that its access must be on a 16-byte boundary, for rcg-faults.
  */
 struct rcg_case {
     const char *name;
@@ -118,19 +134,19 @@ struct rcg_case {
     uint64_t operand, rsp;
     int moved;
     int target;
-    bool xmm;
+    uint8_t xmm;
     bool aligned;
 };
 
 asm(
     /*
-     * Keep the caller's registers, then load the case's, with XMM0 to XMM3
-     * if xmm is 1. POPF ends the TB, so the case's instruction starts the
-     * next one. The code from the XMM loads to the RET starts on a 512 byte
-     * boundary and fits in 512 bytes, so that the instruction and the SETcc
-     * after it are never split across a page, which would end the TB between
-     * them. The XMM loads and stores are left out of the other cases to keep
-     * that true.
+     * Keep the caller's registers, then load the case's, with XMM0 to XMM3 if
+     * xmm is not 0, and MXCSR too with floating-point values. POPF ends the
+     * TB, so the case's instruction starts the next one. The code from the
+     * XMM loads to the RET starts on a 512 byte boundary and fits in 512
+     * bytes, so that the instruction and the SETcc after it are never split
+     * across a page, which would end the TB between them. The XMM loads and
+     * stores are left out of the other cases to keep that true.
      */
     "    .macro rcg_enter xmm\n"
     "    mov %rbx, rcg_host+3*8(%rip)\n"
@@ -147,6 +163,9 @@ asm(
     "    movdqu rcg_in+168(%rip), %xmm1\n"
     "    movdqu rcg_in+184(%rip), %xmm2\n"
     "    movdqu rcg_in+200(%rip), %xmm3\n"
+    "    .ifge \\xmm-2\n"
+    "    ldmxcsr rcg_in+216(%rip)\n"
+    "    .endif\n"
     "    .endif\n"
     "    popfq\n"
     "    mov rcg_in+0*8(%rip), %rax\n"
@@ -169,8 +188,8 @@ asm(
 
     /*
      * Store SETcc's results, the case's registers and flags, which SETcc
-     * and MOV do not change, and XMM0 to XMM3 if xmm is 1. Then return with
-     * the caller's registers.
+     * and MOV do not change, and XMM0 to XMM3 if xmm is not 0, with MXCSR
+     * for floating-point values. Then return with the caller's registers.
      */
     "    .macro rcg_leave xmm\n"
     "    seto rcg_out+17*8+0(%rip)\n"
@@ -213,6 +232,9 @@ asm(
     "    movdqu %xmm1, rcg_out+168(%rip)\n"
     "    movdqu %xmm2, rcg_out+184(%rip)\n"
     "    movdqu %xmm3, rcg_out+200(%rip)\n"
+    "    .ifge \\xmm-2\n"
+    "    stmxcsr rcg_out+216(%rip)\n"
+    "    .endif\n"
     "    .endif\n"
     "    mov rcg_host+3*8(%rip), %rbx\n"
     "    mov rcg_host+5*8(%rip), %rbp\n"
@@ -229,7 +251,7 @@ asm(
  * instruction raises points, and of its end, name_end and name_sub_end.
  * name_sub compares rcg_sub_in with 1 first, after loading the registers,
  * so that the instruction runs from the state a SUB leaves, in the same TB.
- * xmm is 1 for a case that uses XMM0 to XMM3, and 0 otherwise.
+ * xmm is the case's xmm (see RCG_XMM_F64).
  */
 #define RCG_CASE(name, insn, xmm)                               \
     void name(void);                                            \
@@ -287,27 +309,144 @@ static const uint64_t rcg_values[] = {
 #define RCG_NB_VALUES (sizeof(rcg_values) / sizeof(rcg_values[0]))
 
 /*
+ * What a case with floating-point values puts in its lanes for each of
+ * rcg_values, by its place there: values whose sums and products stay
+ * normal, and the edges, the largest and smallest normals, denormals,
+ * zeros, infinities and NaNs, quiet and signaling. The value just below 1,
+ * times the smallest normal, rounds up to the smallest normal and raises
+ * UE; the last, squared, is near the smallest normal.
+ */
+static const uint64_t rcg_f64[] = {
+    0x3ff0000000000000ull,  /* 1 */
+    0xbff8000000000000ull,  /* -1.5 */
+    0x400921fb54442d18ull,  /* pi */
+    0x3fb999999999999aull,  /* 0.1 */
+    0x7fefffffffffffffull,  /* the largest */
+    0x0010000000000000ull,  /* the smallest normal */
+    0x000fffffffffffffull,  /* the largest denormal */
+    0x8000000000000001ull,  /* minus the smallest denormal */
+    0x0000000000000000ull,  /* 0 */
+    0x8000000000000000ull,  /* -0 */
+    0x7ff0000000000000ull,  /* infinity */
+    0xfff0000000000000ull,  /* minus infinity */
+    0x7ff8000000000000ull,  /* a quiet NaN */
+    0xfff4000000000000ull,  /* a signaling NaN */
+    0x3fefffffffffffffull,  /* 1 - 2^-53 */
+    0x2010000000000000ull,  /* 2^-510 */
+};
+
+static const uint32_t rcg_f32[] = {
+    0x3f800000, 0xbfc00000, 0x40490fdb, 0x3dcccccd,
+    0x7f7fffff, 0x00800000, 0x007fffff, 0x80000001,
+    0x00000000, 0x80000000, 0x7f800000, 0xff800000,
+    0x7fc00000, 0xffa00000,
+    0x3f7fffff,             /* 1 - 2^-24 */
+    0x20800000,             /* 2^-62 */
+};
+
+/*
+ * Normal values only, for RCG_XMM_F64N and RCG_XMM_F32N: nearly every pair
+ * gives a normal result, and the largest and smallest normals make some
+ * overflow or underflow.
+ */
+static const uint64_t rcg_f64n[] = {
+    0x3ff0000000000000ull,  /* 1 */
+    0xbff8000000000000ull,  /* -1.5 */
+    0x400921fb54442d18ull,  /* pi */
+    0x3fb999999999999aull,  /* 0.1 */
+    0x4202a05f20000000ull,  /* 1e10 */
+    0xbeff75104d551d69ull,  /* -3e-5 */
+    0x4000000000000000ull,  /* 2 */
+    0x3fe8000000000000ull,  /* 0.75 */
+    0x3fefffffffffffffull,  /* 1 - 2^-53 */
+    0x401c000000000000ull,  /* 7 */
+    0x0010000000000000ull,  /* the smallest normal */
+    0x3bc79ca10c924223ull,  /* 1e-20 */
+    0x54b249ad2594c37dull,  /* 1e100 */
+    0x7fefffffffffffffull,  /* the largest */
+    0x20b0000000000000ull,  /* 2^-500 */
+    0x44dfde9f10a8d361ull,  /* 6.02e23 */
+};
+
+static const uint32_t rcg_f32n[] = {
+    0x3f800000, 0xbfc00000, 0x40490fdb, 0x3dcccccd,
+    0x49742400,             /* 1e6 */
+    0xb7fba882,             /* -3e-5 */
+    0x40000000, 0x3f400000,
+    0x3f7fffff,             /* 1 - 2^-24 */
+    0x40e00000,
+    0x00800000,             /* the smallest normal */
+    0x358637bd,             /* 1e-6 */
+    0x4640e6b6,             /* 12345.678 */
+    0x7f7fffff,             /* the largest */
+    0x21800000,             /* 2^-60 */
+    0x4912f900,             /* 602000 */
+};
+
+_Static_assert(sizeof(rcg_f64) / sizeof(rcg_f64[0]) == RCG_NB_VALUES &&
+               sizeof(rcg_f32) / sizeof(rcg_f32[0]) == RCG_NB_VALUES &&
+               sizeof(rcg_f64n) / sizeof(rcg_f64n[0]) == RCG_NB_VALUES &&
+               sizeof(rcg_f32n) / sizeof(rcg_f32n[0]) == RCG_NB_VALUES,
+               "a floating-point value for each value");
+
+/* v's place in rcg_values, or for another value one picked from its bits. */
+static inline int rcg_value_index(uint64_t v)
+{
+    for (int i = 0; i < RCG_NB_VALUES; i++) {
+        if (rcg_values[i] == v) {
+            return i;
+        }
+    }
+    return (v ^ v >> 29) % RCG_NB_VALUES;
+}
+
+/* 64 bits of lanes for case c: value k, then for floats k + 7. */
+static inline uint64_t rcg_fp_bits(const struct rcg_case *c, int k)
+{
+    bool normal = c->xmm >= RCG_XMM_F64N;
+    const uint32_t *f32 = normal ? rcg_f32n : rcg_f32;
+
+    if (c->xmm == RCG_XMM_F64 || c->xmm == RCG_XMM_F64N) {
+        return (normal ? rcg_f64n : rcg_f64)[k % RCG_NB_VALUES];
+    }
+    return f32[k % RCG_NB_VALUES] |
+           (uint64_t)f32[(k + 7) % RCG_NB_VALUES] << 32;
+}
+
+/*
  * The states each case starts from. The first two load the flags with
  * POPF, the arithmetic ones clear and then set, which leaves CC_OP_EFLAGS.
  * The rest then compare sub_in with 1, leaving a SUB state with cc_dst,
  * cc_src and the first operand live. That shows when an instruction that
  * should leave the flags alone does not. The values give a borrow (CF and
  * SF), a signed overflow (OF) and equality (ZF). adc instead adds 1 to
- * sub_in with ADC (see RCG_ADC_CASE()), which only rcg-faults does.
+ * sub_in with ADC (see RCG_ADC_CASE()), which only rcg-faults does. fp
+ * says that only the cases with floating-point values start from it.
  */
 struct rcg_start {
     uint64_t flags;
     bool sub;
     uint64_t sub_in;
     bool adc;
+    uint32_t mxcsr;
+    bool fp;
 };
 
+/*
+ * For the cases with floating-point values, each start also loads MXCSR:
+ * the default; with PE set, as it nearly always is once a program runs;
+ * then with PE and each of FZ, rounding down, DAZ and rounding up; and
+ * with all six exception flags set, from which the gadgets also take the
+ * fast path, and which they must leave set.
+ */
 static const struct rcg_start rcg_starts[] = {
-    { 0x2, false, 0 },
-    { 0x2 | RCG_FLAGS, false, 0 },
-    { 0x2, true, 0 },
-    { 0x2, true, 0x8000000000000000ull },
-    { 0x2, true, 1 },
+    { 0x2, false, 0, false, 0x1f80 },
+    { 0x2 | RCG_FLAGS, false, 0, false, 0x1fa0 },
+    { 0x2, true, 0, false, 0x9fa0 },
+    { 0x2, true, 0x8000000000000000ull, false, 0x3fa0 },
+    { 0x2, true, 1, false, 0x1fe0 },
+    { 0x2, true, 0x8000000000000000ull, false, 0x5fa0, true },
+    { 0x2, true, 1, false, 0x1fbf, true },
 };
 #define RCG_NB_STARTS (sizeof(rcg_starts) / sizeof(rcg_starts[0]))
 
@@ -352,6 +491,19 @@ static inline void rcg_fill(uint64_t addr, int n, uint8_t seed)
 }
 
 /*
+ * Stores the floating-point values for y at addr, for case c's memory
+ * operand: 16 bytes, of which a scalar case reads the first 4 or 8.
+ */
+static inline void rcg_store_fp(const struct rcg_case *c, uint64_t addr,
+                                uint64_t y)
+{
+    int j = rcg_value_index(y);
+
+    rcg_store64(addr, rcg_fp_bits(c, j));
+    rcg_store64(addr + 8, rcg_fp_bits(c, j + 9));
+}
+
+/*
  * Sets rcg_in up for case c with the values x (for a) and y (for b, the
  * memory operand or the top of the stack) and the start s, the memory
  * around the operand and the stack included. Every other register gets a
@@ -368,12 +520,29 @@ static inline void rcg_setup(const struct rcg_case *c, uint64_t x, uint64_t y,
         rcg_in.x[i][0] = x ^ 0x0101010101010101ull * (i + 1);
         rcg_in.x[i][1] = y ^ 0x1010101010101010ull * (i + 1);
     }
+    rcg_in.mxcsr = 0x1f80;
+    if (c->xmm >= RCG_XMM_F64) {
+        /*
+         * XMM1's low lane takes x's value, and XMM2's and the memory
+         * operand's take y's, XMM2's three entries later in the table, so
+         * that the cases take every pair.
+         */
+        int i = rcg_value_index(x), j = rcg_value_index(y);
+
+        for (int n = 0; n < 4; n++) {
+            rcg_in.x[n][0] = rcg_fp_bits(c, (n & 1 ? i : j) + n / 2 * 3);
+            rcg_in.x[n][1] = rcg_fp_bits(c, (n & 1 ? j : i) + 5);
+        }
+        rcg_in.mxcsr = s->mxcsr;
+    }
     rcg_in.flags = s->flags;
     rcg_sub_in = s->sub_in;
     rcg_fill(RCG_MEM, RCG_MEM_SIZE, 0x5a);
     rcg_fill(RCG_STACK - RCG_STACK_SIZE, 2 * RCG_STACK_SIZE, 0xa5);
 
-    if (c->mem) {
+    if (c->mem && c->xmm >= RCG_XMM_F64) {
+        rcg_store_fp(c, c->operand, y);
+    } else if (c->mem) {
         rcg_store64(c->operand, y);
     }
     if (c->stack) {
