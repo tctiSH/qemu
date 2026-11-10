@@ -149,27 +149,54 @@ VMOV_OPS = (VMov("movdqa", 128, aligned=True), VMov("movdqu", 128),
 
 
 class VFp:
-    """ An SSE floating-point op, dest = dest op src, with the helper
-    gen_fp_sse() picks by prefix: on every lane (ps and pd, lanes of 32 and
-    64 bits) or on the low lane, keeping the rest of the destination (ss and
-    sd). a64 is the AArch64 instruction. """
+    """ An SSE floating-point op, dest = dest op src, or for SQRT (unary)
+    dest = op src, with the helper gen_fp_sse() or gen_unary_fp_sse() picks
+    by prefix: on every lane (ps and pd, lanes of 32 and 64 bits) or on the
+    low lane, keeping the rest of the destination (ss and sd). a64 is the
+    AArch64 instruction. """
 
-    def __init__(self, base, a64, suffix):
+    def __init__(self, base, a64, suffix, unary=False):
         self.name = base + suffix
         self.a64 = a64
+        self.unary = unary
         self.lane = 32 if suffix[1] == "s" else 64
         self.packed = suffix[0] == "p"
         self.width = 128 if self.packed else self.lane
         self.helper = f"helper_{self.name}" + ("_xmm" if self.packed else "")
 
+    @property
+    def reads_d(self):
+        """ Whether the destination is an input too: all but SQRT's packed
+        forms, which write every lane from the source alone. """
+        return not (self.unary and self.packed)
+
 
 # Each op's four forms, in the order rcg_select() relies on when it adds
 # the prefix's index to the ps op.
 VFP_SUFFIXES = ("ps", "pd", "ss", "sd")
-VFP_OPS = tuple(VFp(base, a64, suffix)
+VFP_OPS = tuple(VFp(base, a64, suffix, unary=base == "sqrt")
                 for base, a64 in (("add", "fadd"), ("sub", "fsub"),
-                                  ("mul", "fmul"), ("div", "fdiv"))
+                                  ("mul", "fmul"), ("div", "fdiv"),
+                                  ("sqrt", "fsqrt"))
                 for suffix in VFP_SUFFIXES)
+
+
+class VLane:
+    """ UNPCKLPS, UNPCKLPD, UNPCKHPS and UNPCKHPD: the low or high halves of
+    the destination and the source, interleaved by lanes of 32 or 64 bits.
+    TCG calls the punpckl and punpckh helpers for them, which give the same
+    lanes. """
+
+    def __init__(self, high, lane):
+        self.name = f"unpck{'h' if high else 'l'}p{'s' if lane == 32 else 'd'}"
+        self.high = high
+        self.lane = lane
+        self.width = 128
+
+
+# In the order rcg_select() adds the prefix's index to: ps, then pd.
+VLANE_OPS = tuple(VLane(high, lane) for high in (False, True)
+                  for lane in (32, 64))
 
 
 class Alu:
@@ -507,13 +534,13 @@ class Spec:
 
     kind is "alu", "zero" (XOR of a register with itself), "mov", "lea",
     "push", "pop", "extend", "unary", "shift", "mul", "imul3", "bt", "cbw",
-    "cwd", "xchg", "leave", "call", "jmp", "ret", "vmov" or "vfp". form is
-    the destination's kind then the source's (r, m or i, or x for an XMM
-    register), then for IMUL3 an i if it takes an immediate too; for MUL and
-    IMUL with one operand it is the source's, for CBW the destination's, for
-    CALL and JMP the target's (i for CALL rel32), for RET i and for LEAVE r.
-    shape and seg are the memory operand's, if any. ordered is for the twin
-    that keeps the guest's memory order (tcg_ldst_ordered()).
+    "cwd", "xchg", "leave", "call", "jmp", "ret", "vmov", "vfp" or "vlane".
+    form is the destination's kind then the source's (r, m or i, or x for an
+    XMM register), then for IMUL3 an i if it takes an immediate too; for MUL
+    and IMUL with one operand it is the source's, for CBW the destination's,
+    for CALL and JMP the target's (i for CALL rel32), for RET i and for
+    LEAVE r. shape and seg are the memory operand's, if any. ordered is for
+    the twin that keeps the guest's memory order (tcg_ldst_ordered()).
     """
 
     def __init__(self, kind, op, form, width, shape=None, seg=False,
@@ -547,8 +574,10 @@ class Spec:
         it. """
         if self.kind == "imul3":
             return self.form in ("rr", "rm")
+        if self.kind == "vfp":
+            return self.op.reads_d
         return self.kind in ("alu", "unary", "shift", "bt", "cbw", "xchg",
-                             "vfp")
+                             "vlane")
 
     @property
     def accesses_memory(self):
@@ -738,6 +767,9 @@ def specs():
     for op in VFP_OPS:
         for form in ("xx", "xm"):
             yield from with_memory(Spec("vfp", op, form, op.width))
+    for op in VLANE_OPS:
+        for form in ("xx", "xm"):
+            yield from with_memory(Spec("vlane", op, form, op.width))
 
 
 def with_memory(spec):
@@ -1357,11 +1389,18 @@ VFP_MIN_NORMAL2 = {32: 0x01000000, 64: 0x0020000000000000}
 VFP_SPAN = {32: 0xfe000000, 64: 0xffc0000000000000}
 VFP_EXP = {32: 0x7f800000, 64: 0x7ff0000000000000}
 
+# By lane width, for SQRT: the smallest normal, and infinity's bits less
+# those. A positive normal less the first is below the second, unsigned, and
+# nothing else is.
+VFP_MIN_NORMAL = {32: 0x00800000, 64: 0x0010000000000000}
+VFP_SQRT_SPAN = {32: 0x7f000000, 64: 0x7fe0000000000000}
+
 
 def vfp_body(g, spec):
-    # gen_fp_sse()'s helper, on the host's FPU when the host's result is
-    # sure to be the helper's and to leave the exception flags as they are,
-    # which needs everything ops_sse_host.h checks, and more:
+    # gen_fp_sse()'s or gen_unary_fp_sse()'s helper, on the host's FPU when
+    # the host's result is sure to be the helper's and to leave the
+    # exception flags as they are, which needs everything ops_sse_host.h
+    # checks, and more:
     #  - MXCSR rounds to nearest and flushes nothing (sse_host_mode_ok()).
     #  - PE is set already, so whether the op was exact cannot show.
     #  - No input lane is denormal, which would raise DE.
@@ -1372,6 +1411,8 @@ def vfp_body(g, spec):
     #    have been rounded up from a tiny one, which x86 counts as an
     #    underflow), and with them every case where the host's result could
     #    differ.
+    # For SQRT, the last two give way to a positive normal input lane, whose
+    # root is normal and raises nothing but PE.
     # Anything else goes to the helper, and so to ops_sse_host.h or
     # softfloat. The load comes first, as it may fault.
     op, env = spec.op, g.env
@@ -1399,23 +1440,26 @@ def vfp_body(g, spec):
     # first: TCG's gen_load_sse() loads it there for the helper too.
     save, restore = g._save(())
     store = []
+    # The helper takes (env, d, d, s), or for packed SQRT, which has no
+    # second input, (env, d, s): the source goes in x3, or x2.
+    arg = "x2" if op.unary and op.packed else "x3"
     if not spec.has_mem:
-        source = f"add x3, {env}, {g.word('s')}"
+        source = f"add {arg}, {env}, {g.word('s')}"
     else:
-        source = f"add x3, {env}, %[xmm_t0]"
+        source = f"add {arg}, {env}, %[xmm_t0]"
         if op.packed:
             store = [f"add {T}, {env}, %[xmm_t0]", f"stp {A}, {B}, [{T}]"]
         else:
             lane_reg = w(B) if lane == 32 else B
             store = [f"str {lane_reg}, [{env}, %[xmm_t0]]"]
+    args = [source] if arg == "x2" else ["mov x2, x1", source]
     g.cold += [
         f"{slow}:",
         *store,
         *save,
         f"mov x0, {env}",
         f"add x1, {env}, {g.word('d')}",
-        "mov x2, x1",
-        source,
+        *args,
         f"bl _{op.helper}",
         *restore,
         f"b {join}b",
@@ -1425,14 +1469,27 @@ def vfp_body(g, spec):
 def scalar_vfp_lines(g, spec, slow):
     """ The low lane of the destination, in A, op that of the source, in B
     (loaded already for a memory source), to R, checked as vfp_body()
-    says, and stored. """
+    says, and stored; or for SQRT, the root of the source's low lane, from
+    B, in s0 or d0, checked as vfp_body() says, and stored. """
     op, env, lane = spec.op, g.env, spec.op.lane
     r = w if lane == 32 else (lambda x: x)
     f = "s" if lane == 32 else "d"
-    g.emit(f"ldr {r(A)}, [{env}, {g.word('d')}]")
-    g.reads.add("d")
     if not spec.has_mem:
         g.emit(f"ldr {r(B)}, [{env}, {g.word('s')}]")
+    if op.unary:
+        # The destination counts as read: its other lanes stay.
+        g.reads.add("d")
+        g.emit(f"mov {r('x13')}, #{VFP_MIN_NORMAL[lane]:#x}",
+               f"sub {r(T)}, {r(B)}, {r('x13')}",
+               f"mov {r('x24')}, #{VFP_SQRT_SPAN[lane]:#x}",
+               f"cmp {r(T)}, {r('x24')}",
+               f"b.hs {slow}f",
+               f"fmov {f}1, {r(B)}",
+               f"{op.a64} {f}0, {f}1",
+               f"str {f}0, [{env}, {g.word('d')}]")
+        return
+    g.emit(f"ldr {r(A)}, [{env}, {g.word('d')}]")
+    g.reads.add("d")
     g.emit(f"fmov {f}0, {r(A)}",
            f"fmov {f}1, {r(B)}",
            f"{op.a64} {f}0, {f}0, {f}1",
@@ -1457,18 +1514,32 @@ def scalar_vfp_lines(g, spec, slow):
 
 
 def packed_vfp_lines(g, spec, slow):
-    """ The same on every lane: the destination in v0, the source in v1
-    (from A and B for a memory source), the result in v2. """
+    """ The same on every lane: the destination in v0 (for SQRT, which
+    has no second input, not loaded), the source in v1 (from A and B for a
+    memory source), the result in v2. """
     op, env, lane = spec.op, g.env, spec.op.lane
     t = "4s" if lane == 32 else "2d"
     r = w if lane == 32 else (lambda x: x)
-    g.emit(f"ldr q0, [{env}, {g.word('d')}]")
-    g.reads.add("d")
     if spec.has_mem:
         g.emit(f"fmov d1, {A}",
                f"mov v1.d[1], {B}")
     else:
         g.emit(f"ldr q1, [{env}, {g.word('s')}]")
+    if op.unary:
+        g.emit(f"mov {r('x13')}, #{VFP_MIN_NORMAL[lane]:#x}",
+               f"dup v4.{t}, {r('x13')}",
+               f"sub v3.{t}, v1.{t}, v4.{t}",
+               f"mov {r('x24')}, #{VFP_SQRT_SPAN[lane]:#x}",
+               f"dup v5.{t}, {r('x24')}",
+               f"cmhs v6.{t}, v3.{t}, v5.{t}",
+               "umaxv s6, v6.4s",
+               f"fmov {w(T)}, s6",
+               f"cbnz {w(T)}, {slow}f",
+               f"{op.a64} v2.{t}, v1.{t}",
+               f"str q2, [{env}, {g.word('d')}]")
+        return
+    g.emit(f"ldr q0, [{env}, {g.word('d')}]")
+    g.reads.add("d")
     g.emit(f"{op.a64} v2.{t}, v0.{t}, v1.{t}",
            # As in scalar_vfp_lines(), on each lane: v6 collects the bad
            # ones.
@@ -1491,6 +1562,25 @@ def packed_vfp_lines(g, spec, slow):
     g.emit("umaxv s6, v6.4s",
            f"fmov {w(T)}, s6",
            f"cbnz {w(T)}, {slow}f",
+           f"str q2, [{env}, {g.word('d')}]")
+
+
+def vlane_body(g, spec):
+    # The punpckl and punpckh helpers' lanes: low halves for UNPCKL, high
+    # ones for UNPCKH, the destination's lane first. A memory source is all
+    # 16 bytes, aligned, which gen_load_sse() loads too.
+    op, env = spec.op, g.env
+    if spec.has_mem:
+        g.ea(ADDR)
+        g.load128(A, B, ADDR, aligned=True)
+        g.emit(f"fmov d1, {A}",
+               f"mov v1.d[1], {B}")
+    else:
+        g.emit(f"ldr q1, [{env}, {g.word('s')}]")
+    g.emit(f"ldr q0, [{env}, {g.word('d')}]")
+    g.reads.add("d")
+    t = "4s" if op.lane == 32 else "2d"
+    g.emit(f"zip{2 if op.high else 1} v2.{t}, v0.{t}, v1.{t}",
            f"str q2, [{env}, {g.word('d')}]")
 
 
@@ -1900,6 +1990,7 @@ BODIES = {
     "jccgoto": jccgoto_body,
     "vmov": vmov_body,
     "vfp": vfp_body,
+    "vlane": vlane_body,
     "fjcc": fused_body,
     "fjccgoto": fused_body,
     "setcc": setcc_body,
@@ -2110,12 +2201,13 @@ OP_NAMES = ("add", "sub", "and", "or", "xor", "cmp", "test", "adc", "sbb",
             "movsxw", "movsxd", "not", "neg", "inc", "dec", "shl", "shr",
             "sar", "ror", "mul", "imul", "imul3", "bt", "bts", "btr", "btc",
             "cbw", "cwd", "xchg", "leave", "call", "jmp", "ret", "movdqa",
-            "movdqu", "movsd", "movss", *(op.name for op in VFP_OPS))
+            "movdqu", "movsd", "movss", *(op.name for op in VFP_OPS),
+            *(op.name for op in VLANE_OPS))
 FORM_NAMES = ("rr", "rm", "mr", "ri", "mi", "r", "i", "m", "rri", "rmi",
               "xx", "xm", "mx")
 KIND_NAMES = ("alu", "zero", "mov", "lea", "push", "pop", "extend", "unary",
               "shift", "mul", "imul3", "bt", "cbw", "cwd", "xchg", "leave",
-              "call", "jmp", "ret", "vmov", "vfp")
+              "call", "jmp", "ret", "vmov", "vfp", "vlane")
 WORD_NAMES = ("d", "s", "s1", "base", "index", "disp", "seg", "imm", "oi",
               "tlb", "ccop")
 MAX_WORDS = len(WORD_REGS)
@@ -2142,7 +2234,7 @@ def gadget_file(spec):
         return spec.kind
     if spec.kind == "vmov":
         return "sse"
-    if spec.kind == "vfp":
+    if spec.kind in ("vfp", "vlane"):
         return "vfp"
     if spec.kind == "imul3":
         return "mul"
@@ -3195,11 +3287,12 @@ def fault_cases():
         m = f"{PTR[width]} ptr [rbx]"
         yield mem(f"{insn} xmm1, {m}", width, xmm=True)
         yield mem(f"{insn} {m}, xmm2", width, writes=True, xmm=True)
-    # The SSE floating-point ops' loads, the 16-byte ones aligned.
-    for op in VFP_OPS:
+    # The SSE floating-point ops' and the unpacks' loads, the 16-byte ones
+    # aligned.
+    for op in VFP_OPS + VLANE_OPS:
         yield mem(f"{op.name} xmm1, {PTR[op.width]} ptr [rbx]", op.width,
                   xmm=XMM_F64 if op.lane == 64 else XMM_F32,
-                  aligned=op.packed)
+                  aligned=op.width == 128)
     yield mem("push qword ptr [rbx]", 64, stack=True)
     yield mem("call qword ptr [rbx]", 64, stack=True, target=RCG_TARGET_MEM)
     yield mem("jmp qword ptr [rbx]", 64, target=RCG_TARGET_MEM)
@@ -3509,16 +3602,17 @@ def scalar_vmov_cases():
 
 
 def vfp_cases():
-    """ The SSE floating-point ops, between XMM registers and with memory at
-    every operand shape and segment override and RIP-relative, over the
-    floating-point values, and with XMM9, XMM10 and XMM12, which need REX,
-    copied from and to the registers the test loads. XMM2 then takes XMM3's
-    value, so that reading XMM2 for XMM10 would show. b, which nothing
-    reads, makes the cases without memory take every pair of values. The
-    packed ops also run with normal values only, whose lanes can all take
-    the host's FPU. The test's CPU has no AVX, so there are no VEX
-    encodings, which RCG leaves to TCG. """
-    for op in VFP_OPS:
+    """ The SSE floating-point ops and the unpacks, between XMM registers and
+    with memory at every operand shape and segment override and
+    RIP-relative, over the floating-point values, and with XMM9, XMM10 and
+    XMM12, which need REX, copied from and to the registers the test loads.
+    XMM2 then takes XMM3's value, so that reading XMM2 for XMM10 would show.
+    b, which nothing reads, makes the cases without memory take every pair
+    of values. The packed floating-point ops also run with normal values
+    only, whose lanes can take the host's FPU (for SQRT, the positive ones).
+    The test's CPU has no AVX, so there are no VEX encodings, which RCG
+    leaves to TCG. """
+    for op in VFP_OPS + VLANE_OPS:
         xmm = XMM_F64 if op.lane == 64 else XMM_F32
         width = op.width
         yield Case(f"{op.name} xmm1, xmm2", width, a=0, b=1, xmm=xmm)
@@ -3538,7 +3632,7 @@ def vfp_cases():
                            index_value=iv, xmm=xmm)
         yield Case(f"{op.name} xmm0, {rip_relative(width)}", width, a=0,
                    mem=True, xmm=xmm)
-        if op.packed:
+        if isinstance(op, VFp) and op.packed:
             n = XMM_F64N if op.lane == 64 else XMM_F32N
             text, base, index, bv, iv = memory_operand(width, "b", None)
             yield Case(f"{op.name} xmm1, xmm2", width, a=0, b=1, xmm=n)

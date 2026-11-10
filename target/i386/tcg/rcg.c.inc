@@ -104,19 +104,26 @@ static const struct {
     /*
      * The SSE floating-point ops, by their ps op: rcg_select() picks pd, ss
      * or sd by the prefix. op[1] is the destination again, as rcg_kind()
-     * refuses VEX encodings.
+     * refuses VEX encodings, but for packed SQRT, which has none.
      */
     { gen_VADD,   RCG_OP_ADDPS, 0, 2, -1 },
     { gen_VSUB,   RCG_OP_SUBPS, 0, 2, -1 },
     { gen_VMUL,   RCG_OP_MULPS, 0, 2, -1 },
     { gen_VDIV,   RCG_OP_DIVPS, 0, 2, -1 },
+    { gen_VSQRT,  RCG_OP_SQRTPS, 0, 2, -1 },
+    /* UNPCKLPS and UNPCKHPS; rcg_select() picks pd by the prefix. */
+    { gen_VUNPCKLPx, RCG_OP_UNPCKLPS, 0, 2, -1 },
+    { gen_VUNPCKHPx, RCG_OP_UNPCKHPS, 0, 2, -1 },
 };
 
 /* Each op's ps, pd, ss and sd, in this order: see rcg_select(). */
 QEMU_BUILD_BUG_ON(RCG_OP_ADDSD != RCG_OP_ADDPS + 3 ||
                   RCG_OP_SUBPS != RCG_OP_ADDPS + 4 ||
                   RCG_OP_MULPS != RCG_OP_ADDPS + 8 ||
-                  RCG_OP_DIVSD != RCG_OP_ADDPS + 15);
+                  RCG_OP_DIVSD != RCG_OP_ADDPS + 15 ||
+                  RCG_OP_SQRTSD != RCG_OP_ADDPS + 19 ||
+                  RCG_OP_UNPCKLPD != RCG_OP_UNPCKLPS + 1 ||
+                  RCG_OP_UNPCKHPD != RCG_OP_UNPCKHPS + 1);
 
 static bool sse_needs_alignment(DisasContext *s, X86DecodedInsn *decode,
                                 MemOp ot);
@@ -515,6 +522,9 @@ static bool rcg_select(DisasContext *s, X86DecodedInsn *decode, RCGOp *op,
         /* ps, pd, ss or sd, by the prefix: gen_fp_sse()'s choice. */
         *op += s->prefix & PREFIX_REPZ ? 2 : s->prefix & PREFIX_REPNZ ? 3 :
                s->prefix & PREFIX_DATA ? 1 : 0;
+    } else if (rcg_facts[*op].kind == RCG_KIND_VLANE) {
+        /* ps or pd; decode-new allows no other prefix. */
+        *op += s->prefix & PREFIX_DATA ? 1 : 0;
     } else if (*op == RCG_OP_SUB && !writes) {
         *op = RCG_OP_CMP;
     } else if (*op == RCG_OP_AND && !writes) {
@@ -622,20 +632,24 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
         }
         return rcg_form(a, b);
     }
-    case RCG_KIND_VFP: {
+    case RCG_KIND_VFP:
+    case RCG_KIND_VLANE: {
         /*
          * ss and sd take the low lane of the source, and ps and pd all 16
          * bytes, which in memory must be aligned and, as for MOVDQA, need
-         * LSE2. The gadgets read float_status's flags directly.
+         * LSE2. The floating-point gadgets read float_status's flags
+         * directly; the unpacks raise nothing.
          */
         char a = rcg_kind(s, first), b = rcg_kind(s, second);
-        int type = (op - RCG_OP_ADDPS) % 4;
+        bool fp = rcg_facts[op].kind == RCG_KIND_VFP;
+        int type = fp ? (op - RCG_OP_ADDPS) % 4 : 0;
 
         *ot = type == 2 ? MO_32 : type == 3 ? MO_64 : MO_128;
-        if (a != 'x' || !b || !rcg_sse_flags_ok() ||
+        if (a != 'x' || !b ||
             (b == 'm' && *ot == MO_128 &&
              (!(cpuinfo & CPUINFO_LSE2) ||
-              !sse_needs_alignment(s, decode, MO_128)))) {
+              !sse_needs_alignment(s, decode, MO_128))) ||
+            (fp && !rcg_sse_flags_ok())) {
             return -1;
         }
         return rcg_form(a, b);
@@ -883,12 +897,12 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
         bar |= slot->access & RCG_STORE ? TCG_MO_LD_ST | TCG_MO_ST_ST : 0;
         ordered = tcg_gen_rich_mo(bar);
         memop = (facts->src_ot >= 0 ? facts->src_ot : ot) | MO_LE;
-        if ((facts->kind == RCG_KIND_VMOV || facts->kind == RCG_KIND_VFP) &&
-            ot == MO_128) {
+        if ((facts->kind == RCG_KIND_VMOV || facts->kind == RCG_KIND_VFP ||
+             facts->kind == RCG_KIND_VLANE) && ot == MO_128) {
             /* As gen_ldo_env_A0() and gen_sto_env_A0() make it. */
             memop |= (s->cpuid_ext_features & CPUID_EXT_AVX
                       ? MO_ATOM_IFALIGN : MO_ATOM_IFALIGN_PAIR) |
-                     (op == RCG_OP_MOVDQA || facts->kind == RCG_KIND_VFP
+                     (op == RCG_OP_MOVDQA || facts->kind != RCG_KIND_VMOV
                       ? MO_ALIGN_16 : 0);
         }
     }

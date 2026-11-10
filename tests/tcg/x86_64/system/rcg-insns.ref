@@ -11266,6 +11266,290 @@ divsd xmm1, qword ptr [0x1800010]: 47664fec6b9875f5
 divsd xmm1, qword ptr fs:[0x17ff010]: 47664fec6b9875f5
 divsd xmm1, qword ptr gs:[0x17fe010]: 47664fec6b9875f5
 divsd xmm0, qword ptr [rip+rcg_mem+16]: e46831cb21e1d0fd
+sqrtps xmm1, xmm2: d86800a6b8294271
+sqrtps xmm3, xmm3: 15b30704041c2aa4
+movaps xmm9, xmm1; movaps xmm10, xmm2; movaps xmm2, xmm3; sqrtps xmm9, xmm10; movaps xmm1, xmm9: 28e24b983ad27ff5
+movaps xmm12, xmm1; sqrtps xmm12, xmmword ptr [rbx+rcx*2+8]; movaps xmm1, xmm12: 35e125f822120551
+sqrtps xmm1, xmmword ptr [rbx+8]: 8f9fa14d2be30f1
+sqrtps xmm1, xmmword ptr fs:[rbx+8]: 73c634db75040909
+sqrtps xmm1, xmmword ptr gs:[rbx+8]: 4335797e7b9a8d89
+sqrtps xmm1, xmmword ptr [rbx+rcx*1+8]: 1fd1269b9829bf19
+sqrtps xmm1, xmmword ptr fs:[rbx+rcx*1+8]: 4d260379e327f1f1
+sqrtps xmm1, xmmword ptr gs:[rbx+rcx*1+8]: bf20c12519dd1371
+sqrtps xmm1, xmmword ptr [rbx+rcx*2+8]: 35e125f822120551
+sqrtps xmm1, xmmword ptr fs:[rbx+rcx*2+8]: 6fbc81419a115e49
+sqrtps xmm1, xmmword ptr gs:[rbx+rcx*2+8]: 25e93f06739289
+sqrtps xmm1, xmmword ptr [rbx+rcx*4+8]: f2c2bea27c872369
+sqrtps xmm1, xmmword ptr fs:[rbx+rcx*4+8]: a4e6c3d299084831
+sqrtps xmm1, xmmword ptr gs:[rbx+rcx*4+8]: 88d9f09eeb0e7b31
+sqrtps xmm1, xmmword ptr [rbx+rcx*8+8]: 484710adbaf530c9
+sqrtps xmm1, xmmword ptr fs:[rbx+rcx*8+8]: 9f65503950833881
+sqrtps xmm1, xmmword ptr gs:[rbx+rcx*8+8]: 7a3a32cfb91fd721
+sqrtps xmm1, xmmword ptr [rcx*1+0x8]: 54563ecea2cb3cd1
+sqrtps xmm1, xmmword ptr fs:[rcx*1+0x8]: 67fc507248c24ec9
+sqrtps xmm1, xmmword ptr gs:[rcx*1+0x8]: 7a1615674ddede89
+sqrtps xmm1, xmmword ptr [rcx*2+0x8]: b140642c2c0fdef1
+sqrtps xmm1, xmmword ptr fs:[rcx*2+0x8]: 8c8c7c801c658421
+sqrtps xmm1, xmmword ptr gs:[rcx*2+0x8]: b73028861bf5ffe1
+sqrtps xmm1, xmmword ptr [rcx*4+0x8]: dfc971d505126dd9
+sqrtps xmm1, xmmword ptr fs:[rcx*4+0x8]: 2db4a95795193e71
+sqrtps xmm1, xmmword ptr gs:[rcx*4+0x8]: 26c7b3fae6687a79
+sqrtps xmm1, xmmword ptr [rcx*8+0x8]: c46e089765ca661
+sqrtps xmm1, xmmword ptr fs:[rcx*8+0x8]: 6c379712c89e6609
+sqrtps xmm1, xmmword ptr gs:[rcx*8+0x8]: 44dfe02f0f630339
+sqrtps xmm1, xmmword ptr [0x1800010]: 23ac5aa82e4d2f69
+sqrtps xmm1, xmmword ptr fs:[0x17ff010]: 23ac5aa82e4d2f69
+sqrtps xmm1, xmmword ptr gs:[0x17fe010]: 23ac5aa82e4d2f69
+sqrtps xmm0, xmmword ptr [rip+rcg_mem+16]: 236fe7cf10e4a349
+sqrtps xmm1, xmm2: 8357f8315cc5f075
+sqrtps xmm1, xmmword ptr [rbx+8]: 3de261f8f5fbabf5
+sqrtpd xmm1, xmm2: 79784bb812ff71e2
+sqrtpd xmm3, xmm3: fbb0f3377bcbadf0
+movaps xmm9, xmm1; movaps xmm10, xmm2; movaps xmm2, xmm3; sqrtpd xmm9, xmm10; movaps xmm1, xmm9: 30cd8ccbca05557a
+movaps xmm12, xmm1; sqrtpd xmm12, xmmword ptr [rbx+rcx*2+8]; movaps xmm1, xmm12: b5ee6546fe2b35b9
+sqrtpd xmm1, xmmword ptr [rbx+8]: 16cb257d6afbc9a9
+sqrtpd xmm1, xmmword ptr fs:[rbx+8]: a99cc4b0c117501
+sqrtpd xmm1, xmmword ptr gs:[rbx+8]: 4107f8fc9be1bc61
+sqrtpd xmm1, xmmword ptr [rbx+rcx*1+8]: 99928c6e1d4763c9
+sqrtpd xmm1, xmmword ptr fs:[rbx+rcx*1+8]: a1311ae60703b51
+sqrtpd xmm1, xmmword ptr gs:[rbx+rcx*1+8]: d45e251058c67611
+sqrtpd xmm1, xmmword ptr [rbx+rcx*2+8]: b5ee6546fe2b35b9
+sqrtpd xmm1, xmmword ptr fs:[rbx+rcx*2+8]: 5e6a7680f9728a81
+sqrtpd xmm1, xmmword ptr gs:[rbx+rcx*2+8]: ad5498ca827dfb41
+sqrtpd xmm1, xmmword ptr [rbx+rcx*4+8]: 6b28480af31c1f99
+sqrtpd xmm1, xmmword ptr fs:[rbx+rcx*4+8]: 900003786fb56fd1
+sqrtpd xmm1, xmmword ptr gs:[rbx+rcx*4+8]: 19aa41fdafb0acd1
+sqrtpd xmm1, xmmword ptr [rbx+rcx*8+8]: eba87903a2579139
+sqrtpd xmm1, xmmword ptr fs:[rbx+rcx*8+8]: 8edf8e18f728d21
+sqrtpd xmm1, xmmword ptr gs:[rbx+rcx*8+8]: b5c6eea73ce6ce01
+sqrtpd xmm1, xmmword ptr [rcx*1+0x8]: 598b4bd25d18b6e9
+sqrtpd xmm1, xmmword ptr fs:[rcx*1+0x8]: 8a6b11a955d37361
+sqrtpd xmm1, xmmword ptr gs:[rcx*1+0x8]: 4818b5e046de2b21
+sqrtpd xmm1, xmmword ptr [rcx*2+0x8]: b02954f1716eb851
+sqrtpd xmm1, xmmword ptr fs:[rcx*2+0x8]: 94f03d1975925db1
+sqrtpd xmm1, xmmword ptr gs:[rcx*2+0x8]: 417dc643491f31f1
+sqrtpd xmm1, xmmword ptr [rcx*4+0x8]: 7a3a8db73e5c7f1
+sqrtpd xmm1, xmmword ptr fs:[rcx*4+0x8]: a4b65c3ac08d6eb9
+sqrtpd xmm1, xmmword ptr gs:[rcx*4+0x8]: fae143d04a051b91
+sqrtpd xmm1, xmmword ptr [rcx*8+0x8]: beca9302a540e479
+sqrtpd xmm1, xmmword ptr fs:[rcx*8+0x8]: 900794f6866860b1
+sqrtpd xmm1, xmmword ptr gs:[rcx*8+0x8]: d48abac8d684d351
+sqrtpd xmm1, xmmword ptr [0x1800010]: f30f9efefeb38159
+sqrtpd xmm1, xmmword ptr fs:[0x17ff010]: f30f9efefeb38159
+sqrtpd xmm1, xmmword ptr gs:[0x17fe010]: f30f9efefeb38159
+sqrtpd xmm0, xmmword ptr [rip+rcg_mem+16]: 641a53a16bcb8435
+sqrtpd xmm1, xmm2: 52696f35a5f57e49
+sqrtpd xmm1, xmmword ptr [rbx+8]: 8b83080c984cb5a9
+sqrtss xmm1, xmm2: 4f3428f4ac65c7cd
+sqrtss xmm3, xmm3: f2a46268cb36aa26
+movaps xmm9, xmm1; movaps xmm10, xmm2; movaps xmm2, xmm3; sqrtss xmm9, xmm10; movaps xmm1, xmm9: 55311b2f437b795d
+movaps xmm12, xmm1; sqrtss xmm12, dword ptr [rbx+rcx*2+8]; movaps xmm1, xmm12: 85bc61f84506d4c1
+sqrtss xmm1, dword ptr [rbx+8]: 933659c2b14f16c1
+sqrtss xmm1, dword ptr fs:[rbx+8]: 3f56397a6456a7f1
+sqrtss xmm1, dword ptr gs:[rbx+8]: 492b3cba2934ae71
+sqrtss xmm1, dword ptr [rbx+rcx*1+8]: d9f4c4d3de27bf21
+sqrtss xmm1, dword ptr fs:[rbx+rcx*1+8]: a1adeb1a3ee7ac51
+sqrtss xmm1, dword ptr gs:[rbx+rcx*1+8]: 3155ea25e193f7d1
+sqrtss xmm1, dword ptr [rbx+rcx*2+8]: 85bc61f84506d4c1
+sqrtss xmm1, dword ptr fs:[rbx+rcx*2+8]: 62bbaad315f44bf1
+sqrtss xmm1, dword ptr gs:[rbx+rcx*2+8]: b76405524d0599b1
+sqrtss xmm1, dword ptr [rbx+rcx*4+8]: 48a0d2da2c755be1
+sqrtss xmm1, dword ptr fs:[rbx+rcx*4+8]: 40f3d5c5acc1e091
+sqrtss xmm1, dword ptr gs:[rbx+rcx*4+8]: c739fef1367774f1
+sqrtss xmm1, dword ptr [rbx+rcx*8+8]: a8f50843546287c1
+sqrtss xmm1, dword ptr fs:[rbx+rcx*8+8]: 5b51e072391bf361
+sqrtss xmm1, dword ptr gs:[rbx+rcx*8+8]: 3631fd795198e561
+sqrtss xmm1, dword ptr [rcx*1+0x8]: 1d21c45950625131
+sqrtss xmm1, dword ptr fs:[rcx*1+0x8]: 47590c1518d064a1
+sqrtss xmm1, dword ptr gs:[rcx*1+0x8]: 8415d7d2e7616521
+sqrtss xmm1, dword ptr [rcx*2+0x8]: 6cb1c5c0c76774b1
+sqrtss xmm1, dword ptr fs:[rcx*2+0x8]: c7262025e130bac1
+sqrtss xmm1, dword ptr gs:[rcx*2+0x8]: f7e91ac3e3bcbee1
+sqrtss xmm1, dword ptr [rcx*4+0x8]: 8bebc51e0a1fa191
+sqrtss xmm1, dword ptr fs:[rcx*4+0x8]: 4b87fb6caf6bc1a1
+sqrtss xmm1, dword ptr gs:[rcx*4+0x8]: 7d94458e122a4071
+sqrtss xmm1, dword ptr [rcx*8+0x8]: a9c900eec204c691
+sqrtss xmm1, dword ptr fs:[rcx*8+0x8]: ca85745af06919b1
+sqrtss xmm1, dword ptr gs:[rcx*8+0x8]: e578b1620a071771
+sqrtss xmm1, dword ptr [0x1800010]: f760c311258a4311
+sqrtss xmm1, dword ptr fs:[0x17ff010]: f760c311258a4311
+sqrtss xmm1, dword ptr gs:[0x17fe010]: f760c311258a4311
+sqrtss xmm0, dword ptr [rip+rcg_mem+16]: f44bfcbf19aac425
+sqrtsd xmm1, xmm2: 53a404bdddef43a5
+sqrtsd xmm3, xmm3: 63bf37b003f6330
+movaps xmm9, xmm1; movaps xmm10, xmm2; movaps xmm2, xmm3; sqrtsd xmm9, xmm10; movaps xmm1, xmm9: 167c6bf5f7c81e25
+movaps xmm12, xmm1; sqrtsd xmm12, qword ptr [rbx+rcx*2+8]; movaps xmm1, xmm12: 554ce345aa4a91f1
+sqrtsd xmm1, qword ptr [rbx+8]: 1548aecad91ca091
+sqrtsd xmm1, qword ptr fs:[rbx+8]: 2ef6c00742de3bf9
+sqrtsd xmm1, qword ptr gs:[rbx+8]: 10e199e0c396d5b9
+sqrtsd xmm1, qword ptr [rbx+rcx*1+8]: 21fb8cfee32474d9
+sqrtsd xmm1, qword ptr fs:[rbx+rcx*1+8]: 68cdd24f725e6521
+sqrtsd xmm1, qword ptr gs:[rbx+rcx*1+8]: f6db178c26ac8e01
+sqrtsd xmm1, qword ptr [rbx+rcx*2+8]: 554ce345aa4a91f1
+sqrtsd xmm1, qword ptr fs:[rbx+rcx*2+8]: 7d9983af7103649
+sqrtsd xmm1, qword ptr gs:[rbx+rcx*2+8]: 3f079d0d2149a569
+sqrtsd xmm1, qword ptr [rbx+rcx*4+8]: 424538cb5fed4899
+sqrtsd xmm1, qword ptr fs:[rbx+rcx*4+8]: baa58b676a8aaaa1
+sqrtsd xmm1, qword ptr gs:[rbx+rcx*4+8]: 2aeded497ccc82a1
+sqrtsd xmm1, qword ptr [rbx+rcx*8+8]: 4447820000a5fc09
+sqrtsd xmm1, qword ptr fs:[rbx+rcx*8+8]: dd5a30b810211c01
+sqrtsd xmm1, qword ptr gs:[rbx+rcx*8+8]: 2d2a90bc03f083a1
+sqrtsd xmm1, qword ptr [rcx*1+0x8]: fdb6b6d1df3b16f1
+sqrtsd xmm1, qword ptr fs:[rcx*1+0x8]: 17aa73c08d1c1259
+sqrtsd xmm1, qword ptr gs:[rcx*1+0x8]: f0ca5271f61bfc39
+sqrtsd xmm1, qword ptr [rcx*2+0x8]: 4e90e7f300002009
+sqrtsd xmm1, qword ptr fs:[rcx*2+0x8]: f8625cd4893c9771
+sqrtsd xmm1, qword ptr gs:[rcx*2+0x8]: 3aec7e2824234001
+sqrtsd xmm1, qword ptr [rcx*4+0x8]: 870232afb79a6c1
+sqrtsd xmm1, qword ptr fs:[rcx*4+0x8]: 4bcd8245c9843571
+sqrtsd xmm1, qword ptr gs:[rcx*4+0x8]: f6855c629842e79
+sqrtsd xmm1, qword ptr [rcx*8+0x8]: 9435002e35c81221
+sqrtsd xmm1, qword ptr fs:[rcx*8+0x8]: 3502938a6bd96da1
+sqrtsd xmm1, qword ptr gs:[rcx*8+0x8]: c5f79a5a5689f151
+sqrtsd xmm1, qword ptr [0x1800010]: 5aa85753ebaeefc9
+sqrtsd xmm1, qword ptr fs:[0x17ff010]: 5aa85753ebaeefc9
+sqrtsd xmm1, qword ptr gs:[0x17fe010]: 5aa85753ebaeefc9
+sqrtsd xmm0, qword ptr [rip+rcg_mem+16]: 74f16ebfdc49d599
+unpcklps xmm1, xmm2: 8c6d6facbb7c73dd
+unpcklps xmm3, xmm3: 9f7becfea659675c
+movaps xmm9, xmm1; movaps xmm10, xmm2; movaps xmm2, xmm3; unpcklps xmm9, xmm10; movaps xmm1, xmm9: 7147d9e2d34b576d
+movaps xmm12, xmm1; unpcklps xmm12, xmmword ptr [rbx+rcx*2+8]; movaps xmm1, xmm12: 898780796616db65
+unpcklps xmm1, xmmword ptr [rbx+8]: 45340d2656cf715d
+unpcklps xmm1, xmmword ptr fs:[rbx+8]: ecb23d94d430745d
+unpcklps xmm1, xmmword ptr gs:[rbx+8]: af8dc5a19635de1d
+unpcklps xmm1, xmmword ptr [rbx+rcx*1+8]: af1e3532bc6e8b35
+unpcklps xmm1, xmmword ptr fs:[rbx+rcx*1+8]: 977864efe6b078c5
+unpcklps xmm1, xmmword ptr gs:[rbx+rcx*1+8]: 55372549f3bacae5
+unpcklps xmm1, xmmword ptr [rbx+rcx*2+8]: 898780796616db65
+unpcklps xmm1, xmmword ptr fs:[rbx+rcx*2+8]: ac0d3baf0fdb85f5
+unpcklps xmm1, xmmword ptr gs:[rbx+rcx*2+8]: 7b0e14e64939615
+unpcklps xmm1, xmmword ptr [rbx+rcx*4+8]: 22544bfad957b8a5
+unpcklps xmm1, xmmword ptr fs:[rbx+rcx*4+8]: b81f2dd88d808255
+unpcklps xmm1, xmmword ptr gs:[rbx+rcx*4+8]: b6c71ca7760847f5
+unpcklps xmm1, xmmword ptr [rbx+rcx*8+8]: fafbce9c5a7b2aa5
+unpcklps xmm1, xmmword ptr fs:[rbx+rcx*8+8]: 92f4bcc85cb402d5
+unpcklps xmm1, xmmword ptr gs:[rbx+rcx*8+8]: df884ca561dec535
+unpcklps xmm1, xmmword ptr [rcx*1+0x8]: 5b16e3dbbe1bf9ed
+unpcklps xmm1, xmmword ptr fs:[rcx*1+0x8]: b6d6846b4e54db4d
+unpcklps xmm1, xmmword ptr gs:[rcx*1+0x8]: 7f937ce45802558d
+unpcklps xmm1, xmmword ptr [rcx*2+0x8]: 8f5f3584033af59d
+unpcklps xmm1, xmmword ptr fs:[rcx*2+0x8]: cab68ca1769792ad
+unpcklps xmm1, xmmword ptr gs:[rcx*2+0x8]: f0c4ffbaeed5430d
+unpcklps xmm1, xmmword ptr [rcx*4+0x8]: 7a11058b69774f5d
+unpcklps xmm1, xmmword ptr fs:[rcx*4+0x8]: d06af34a5362a34d
+unpcklps xmm1, xmmword ptr gs:[rcx*4+0x8]: de3fda4947032a6d
+unpcklps xmm1, xmmword ptr [rcx*8+0x8]: 39602a08bec392fd
+unpcklps xmm1, xmmword ptr fs:[rcx*8+0x8]: da5e7f3d1eafdc55
+unpcklps xmm1, xmmword ptr gs:[rcx*8+0x8]: 128cdcb0a44925ed
+unpcklps xmm1, xmmword ptr [0x1800010]: 999260257f83daa5
+unpcklps xmm1, xmmword ptr fs:[0x17ff010]: 999260257f83daa5
+unpcklps xmm1, xmmword ptr gs:[0x17fe010]: 999260257f83daa5
+unpcklps xmm0, xmmword ptr [rip+rcg_mem+16]: 530195364d6ff249
+unpcklpd xmm1, xmm2: 365c7d38260382e1
+unpcklpd xmm3, xmm3: 41689860dd14bb13
+movaps xmm9, xmm1; movaps xmm10, xmm2; movaps xmm2, xmm3; unpcklpd xmm9, xmm10; movaps xmm1, xmm9: 519dc3acd843681
+movaps xmm12, xmm1; unpcklpd xmm12, xmmword ptr [rbx+rcx*2+8]; movaps xmm1, xmm12: d3f6d5236963b211
+unpcklpd xmm1, xmmword ptr [rbx+8]: 7cca32c94f7aa4a1
+unpcklpd xmm1, xmmword ptr fs:[rbx+8]: de7147980d3c259
+unpcklpd xmm1, xmmword ptr gs:[rbx+8]: cbe508853d4aecf9
+unpcklpd xmm1, xmmword ptr [rbx+rcx*1+8]: 358224fe21d57f99
+unpcklpd xmm1, xmmword ptr fs:[rbx+rcx*1+8]: ac917e534af7e4c1
+unpcklpd xmm1, xmmword ptr gs:[rbx+rcx*1+8]: cf16c9129b08ae41
+unpcklpd xmm1, xmmword ptr [rbx+rcx*2+8]: d3f6d5236963b211
+unpcklpd xmm1, xmmword ptr fs:[rbx+rcx*2+8]: 9fbcd25b5bd30bb9
+unpcklpd xmm1, xmmword ptr gs:[rbx+rcx*2+8]: 45433327a06b7659
+unpcklpd xmm1, xmmword ptr [rbx+rcx*4+8]: c0c2e457d506ab79
+unpcklpd xmm1, xmmword ptr fs:[rbx+rcx*4+8]: 890612a1f76e2891
+unpcklpd xmm1, xmmword ptr gs:[rbx+rcx*4+8]: 9ff95db353a044d1
+unpcklpd xmm1, xmmword ptr [rbx+rcx*8+8]: 363f76fa5b096ae9
+unpcklpd xmm1, xmmword ptr fs:[rbx+rcx*8+8]: 3b364e361bb53861
+unpcklpd xmm1, xmmword ptr gs:[rbx+rcx*8+8]: da4abe1ad3ba1a61
+unpcklpd xmm1, xmmword ptr [rcx*1+0x8]: 56cd03c1ab199fb1
+unpcklpd xmm1, xmmword ptr fs:[rcx*1+0x8]: 9afd4c2f4d964989
+unpcklpd xmm1, xmmword ptr gs:[rcx*1+0x8]: 17a42d5cd4f65f29
+unpcklpd xmm1, xmmword ptr [rcx*2+0x8]: c16e2c2ace8aee41
+unpcklpd xmm1, xmmword ptr fs:[rcx*2+0x8]: 2570887f252f0101
+unpcklpd xmm1, xmmword ptr gs:[rcx*2+0x8]: a97a38b0d14a6791
+unpcklpd xmm1, xmmword ptr [rcx*4+0x8]: b742913251cc86c9
+unpcklpd xmm1, xmmword ptr fs:[rcx*4+0x8]: 84d2a32ea1594011
+unpcklpd xmm1, xmmword ptr gs:[rcx*4+0x8]: 72243c330bd38319
+unpcklpd xmm1, xmmword ptr [rcx*8+0x8]: 8d53649899422ad1
+unpcklpd xmm1, xmmword ptr fs:[rcx*8+0x8]: d2cc3a538bc09729
+unpcklpd xmm1, xmmword ptr gs:[rcx*8+0x8]: be91fc3bf54bd9
+unpcklpd xmm1, xmmword ptr [0x1800010]: ade40d035eb5c2f9
+unpcklpd xmm1, xmmword ptr fs:[0x17ff010]: ade40d035eb5c2f9
+unpcklpd xmm1, xmmword ptr gs:[0x17fe010]: ade40d035eb5c2f9
+unpcklpd xmm0, xmmword ptr [rip+rcg_mem+16]: 8eba1760d2fd6569
+unpckhps xmm1, xmm2: 5a2b2613b7563bdd
+unpckhps xmm3, xmm3: 52a0226d5ea982a4
+movaps xmm9, xmm1; movaps xmm10, xmm2; movaps xmm2, xmm3; unpckhps xmm9, xmm10; movaps xmm1, xmm9: f9ee40a08b8552dd
+movaps xmm12, xmm1; unpckhps xmm12, xmmword ptr [rbx+rcx*2+8]; movaps xmm1, xmm12: 3fae68a50a341269
+unpckhps xmm1, xmmword ptr [rbx+8]: c9e446aa3f291bf1
+unpckhps xmm1, xmmword ptr fs:[rbx+8]: 264d0eda64e5b279
+unpckhps xmm1, xmmword ptr gs:[rbx+8]: 98281ab7736f9e59
+unpckhps xmm1, xmmword ptr [rbx+rcx*1+8]: 39cf658adc6ee9d1
+unpckhps xmm1, xmmword ptr fs:[rbx+rcx*1+8]: 39644b57e3f479f9
+unpckhps xmm1, xmmword ptr gs:[rbx+rcx*1+8]: cafc129673b1bd59
+unpckhps xmm1, xmmword ptr [rbx+rcx*2+8]: 3fae68a50a341269
+unpckhps xmm1, xmmword ptr fs:[rbx+rcx*2+8]: 4a8bcbd833a19671
+unpckhps xmm1, xmmword ptr gs:[rbx+rcx*2+8]: 9e77db453c00c051
+unpckhps xmm1, xmmword ptr [rbx+rcx*4+8]: 7f7eb34d13d0b011
+unpckhps xmm1, xmmword ptr fs:[rbx+rcx*4+8]: 623f49e9128830c9
+unpckhps xmm1, xmmword ptr gs:[rbx+rcx*4+8]: 7540df1125011709
+unpckhps xmm1, xmmword ptr [rbx+rcx*8+8]: 4619c88b87cf4731
+unpckhps xmm1, xmmword ptr fs:[rbx+rcx*8+8]: 509b2c184df2b5c9
+unpckhps xmm1, xmmword ptr gs:[rbx+rcx*8+8]: e729e3ac6419dc49
+unpckhps xmm1, xmmword ptr [rcx*1+0x8]: 44e6fd3c114e5dd1
+unpckhps xmm1, xmmword ptr fs:[rcx*1+0x8]: 8ce5abe97684d4d9
+unpckhps xmm1, xmmword ptr gs:[rcx*1+0x8]: a93e7c6cd0845f59
+unpckhps xmm1, xmmword ptr [rcx*2+0x8]: 851a517d7e0f42b1
+unpckhps xmm1, xmmword ptr fs:[rcx*2+0x8]: 4e83c9fadfe9ed21
+unpckhps xmm1, xmmword ptr gs:[rcx*2+0x8]: 58c7dc8eecc5be41
+unpckhps xmm1, xmmword ptr [rcx*4+0x8]: b2e4fcd7b1570b59
+unpckhps xmm1, xmmword ptr fs:[rcx*4+0x8]: 1e98764460c80f09
+unpckhps xmm1, xmmword ptr gs:[rcx*4+0x8]: 159fb005ec68abe9
+unpckhps xmm1, xmmword ptr [rcx*8+0x8]: 429ff0816c9fa571
+unpckhps xmm1, xmmword ptr fs:[rcx*8+0x8]: 5b56b29814541fd9
+unpckhps xmm1, xmmword ptr gs:[rcx*8+0x8]: 4f0efd31aa76f51
+unpckhps xmm1, xmmword ptr [0x1800010]: a10f2d1dd5589a51
+unpckhps xmm1, xmmword ptr fs:[0x17ff010]: a10f2d1dd5589a51
+unpckhps xmm1, xmmword ptr gs:[0x17fe010]: a10f2d1dd5589a51
+unpckhps xmm0, xmmword ptr [rip+rcg_mem+16]: 4efd687ff7e3f71d
+unpckhpd xmm1, xmm2: d64fb27380df3101
+unpckhpd xmm3, xmm3: eef762af6bae3e5f
+movaps xmm9, xmm1; movaps xmm10, xmm2; movaps xmm2, xmm3; unpckhpd xmm9, xmm10; movaps xmm1, xmm9: 5931969b360119f9
+movaps xmm12, xmm1; unpckhpd xmm12, xmmword ptr [rbx+rcx*2+8]; movaps xmm1, xmm12: fde432fb3397c3b5
+unpckhpd xmm1, xmmword ptr [rbx+8]: 5a7388e52a30737d
+unpckhpd xmm1, xmmword ptr fs:[rbx+8]: 7a3c8c0b7026f29d
+unpckhpd xmm1, xmmword ptr gs:[rbx+8]: d2e1bab6b63fc4dd
+unpckhpd xmm1, xmmword ptr [rbx+rcx*1+8]: 210d6d6ff2095
+unpckhpd xmm1, xmmword ptr fs:[rbx+rcx*1+8]: 9663bfc9934ce625
+unpckhpd xmm1, xmmword ptr gs:[rbx+rcx*1+8]: eea14241db598145
+unpckhpd xmm1, xmmword ptr [rbx+rcx*2+8]: fde432fb3397c3b5
+unpckhpd xmm1, xmmword ptr fs:[rbx+rcx*2+8]: bc1452b81433c705
+unpckhpd xmm1, xmmword ptr gs:[rbx+rcx*2+8]: b4eda9408471e685
+unpckhpd xmm1, xmmword ptr [rbx+rcx*4+8]: 7ab8f804a347aecd
+unpckhpd xmm1, xmmword ptr fs:[rbx+rcx*4+8]: c44f771bc6b5411d
+unpckhpd xmm1, xmmword ptr gs:[rbx+rcx*4+8]: e81ede6084511e9d
+unpckhpd xmm1, xmmword ptr [rbx+rcx*8+8]: 56d1964ec9f601bd
+unpckhpd xmm1, xmmword ptr fs:[rbx+rcx*8+8]: 101bcf0291b9d12d
+unpckhpd xmm1, xmmword ptr gs:[rbx+rcx*8+8]: 5a08fed21bde72ad
+unpckhpd xmm1, xmmword ptr [rcx*1+0x8]: 44d77fe27e72200d
+unpckhpd xmm1, xmmword ptr fs:[rcx*1+0x8]: f0a4d6b41d147f8d
+unpckhpd xmm1, xmmword ptr gs:[rcx*1+0x8]: f180bad17ca5b0d
+unpckhpd xmm1, xmmword ptr [rcx*2+0x8]: 336089327fbd2f75
+unpckhpd xmm1, xmmword ptr fs:[rcx*2+0x8]: 1e1fd8aad09584e5
+unpckhpd xmm1, xmmword ptr gs:[rcx*2+0x8]: bb399b0f56a67205
+unpckhpd xmm1, xmmword ptr [rcx*4+0x8]: ce36ad136592a2e5
+unpckhpd xmm1, xmmword ptr fs:[rcx*4+0x8]: 159bb91a67c8cbad
+unpckhpd xmm1, xmmword ptr gs:[rcx*4+0x8]: 1f22d0244a901825
+unpckhpd xmm1, xmmword ptr [rcx*8+0x8]: 22873004f52209fd
+unpckhpd xmm1, xmmword ptr fs:[rcx*8+0x8]: d10616e308e2ef1d
+unpckhpd xmm1, xmmword ptr gs:[rcx*8+0x8]: cae76abba2efe185
+unpckhpd xmm1, xmmword ptr [0x1800010]: 7719dfe0922c7f7d
+unpckhpd xmm1, xmmword ptr fs:[0x17ff010]: 7719dfe0922c7f7d
+unpckhpd xmm1, xmmword ptr gs:[0x17fe010]: 7719dfe0922c7f7d
+unpckhpd xmm0, xmmword ptr [rip+rcg_mem+16]: c050805694563101
 cmp al, bl; jo 1f; mov ecx, 1; 1:: 8bf6fb4cf2bcad6e
 cmp al, bl; seto cl: 1d143dd354a95689
 cmp al, bl; cmovo cx, dx: fef8a12223b69bf6
