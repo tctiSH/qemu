@@ -113,7 +113,9 @@ uint64_t rcg_sub_in;
  * register, RCG_TARGET_MEM (the memory operand) or RCG_TARGET_STACK (the
  * top of the stack). -1 is no register. xmm says that the case uses XMM0
  * to XMM3 (see RCG_XMM_F64), which rcg-insns then compares too. aligned
- * says that its access must be on a 16-byte boundary, for rcg-faults.
+ * says that its access must be on a 16-byte boundary, for rcg-faults, and
+ * store_offset is the byte of XMM2 where a store starts, also for
+ * rcg-faults.
  */
 struct rcg_case {
     const char *name;
@@ -136,6 +138,7 @@ struct rcg_case {
     int target;
     uint8_t xmm;
     bool aligned;
+    uint8_t store_offset;
 };
 
 asm(
@@ -744,8 +747,9 @@ static inline void rcg_init_hi(void)
  * Points the first 32 vectors at the stubs, on IST1, maps RCG_HI, sets FS's
  * and GS's bases, and turns SSE and AVX on. Stops the test if the binary
  * reaches the cases' data, if the CPU lacks XSAVE or AVX (for the VEX
- * encodings), SSSE3 (for PALIGNR) or AVX2 (for the broadcasts), or if it
- * lacks XSAVEOPT, without which QEMU will not set CR4.OSXSAVE.
+ * encodings), SSSE3 (for PALIGNR), SSE4.1 (for INSERTPS and the blends) or
+ * AVX2 (for the broadcasts and VPBLENDD), or if it lacks XSAVEOPT, without
+ * which QEMU will not set CR4.OSXSAVE.
  */
 static inline void rcg_init(void)
 {
@@ -783,16 +787,16 @@ static inline void rcg_init(void)
     asm volatile("mov %0, %%cr4" : : "r"(cr | 0x600));
 
     /*
-     * Checks for XSAVE, AVX, SSSE3 and AVX2, then sets CR4.OSXSAVE and
-     * enables x87, SSE and AVX in XCR0.
+     * Checks for XSAVE, AVX, SSSE3, SSE4.1 and AVX2, then sets CR4.OSXSAVE
+     * and enables x87, SSE and AVX in XCR0.
      */
     asm volatile("cpuid" : "+a"(eax), "+c"(ecx) : : "ebx", "edx");
     if (!(ecx & (1 << 26)) || !(ecx & (1 << 28))) {
         ml_printf("FAIL: the CPU has no XSAVE or AVX\n");
         asm volatile("outw %w0, $0xf4" : : "a"(1));
     }
-    if (!(ecx & (1 << 9))) {
-        ml_printf("FAIL: the CPU has no SSSE3\n");
+    if (!(ecx & (1 << 9)) || !(ecx & (1 << 19))) {
+        ml_printf("FAIL: the CPU has no SSSE3 or SSE4.1\n");
         asm volatile("outw %w0, $0xf4" : : "a"(1));
     }
     eax = 7;

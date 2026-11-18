@@ -164,6 +164,31 @@ static const struct {
     { gen_PUNPCKHBW,    RCG_OP_TBL2, 0, 2, -1 },
     { gen_PUNPCKHWD,    RCG_OP_TBL2, 0, 2, -1 },
     { gen_PALIGNR,      RCG_OP_TBL2, 0, 2, -1 },
+    /*
+     * The same for the floating-point shuffles. MOVDDUP, MOVSLDUP and
+     * MOVSHDUP take their source as op[2], like the broadcasts, and
+     * VPERMILPS and VPERMILPD by an immediate as op[1], like PSHUFD. MOVHPS
+     * and MOVHPD load memory into the register's high lane, and MOVLPS and
+     * MOVLPD into its low lane. All four store as MOVSD does, MOVHPS and
+     * MOVHPD from byte 8 of the register (see rcg_emit()). SHUFPS and
+     * SHUFPD share gen_VSHUF, and BLENDPS and VPBLENDD share gen_VBLENDPS.
+     */
+    { gen_VMOVDDUP,     RCG_OP_TBL1, 0, 2, -1 },
+    { gen_VMOVSLDUP,    RCG_OP_TBL1, 0, 2, -1 },
+    { gen_VMOVSHDUP,    RCG_OP_TBL1, 0, 2, -1 },
+    { gen_VPERMILPS_i,  RCG_OP_TBL1, 0, 1, -1 },
+    { gen_VPERMILPD_i,  RCG_OP_TBL1, 0, 1, -1 },
+    { gen_VSHUF,        RCG_OP_TBL2, 0, 2, -1 },
+    { gen_VMOVLHPS,     RCG_OP_TBL2, 0, 2, -1 },
+    { gen_VMOVHLPS,     RCG_OP_TBL2, 0, 2, -1 },
+    { gen_VMOVHPx_ld,   RCG_OP_TBL2, 0, 2, -1 },
+    { gen_VMOVLPx_ld,   RCG_OP_TBL2, 0, 2, -1 },
+    { gen_VINSERTPS_r,  RCG_OP_TBL2, 0, 2, -1 },
+    { gen_VINSERTPS_m,  RCG_OP_TBL2, 0, 2, -1 },
+    { gen_VBLENDPS,     RCG_OP_TBL2, 0, 2, -1 },
+    { gen_VBLENDPD,     RCG_OP_TBL2, 0, 2, -1 },
+    { gen_VPBLENDW,     RCG_OP_TBL2, 0, 2, -1 },
+    { gen_VMOVHPx_st,   RCG_OP_MOVSD, 0, 2, -1 },
 };
 
 /* Each op's ps, pd, ss and sd, in this order: see rcg_select(). */
@@ -732,10 +757,10 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
          * the logic ops and the table shuffles take all 16 bytes, which in
          * memory need LSE2, as for MOVDQA, and must be aligned in the legacy
          * encodings, whose gadgets require it, and may be misaligned in the
-         * VEX ones, whose gadgets allow it. A broadcast's source in memory
-         * is only the element it takes, which has no alignment to keep. The
-         * floating-point gadgets read float_status's flags directly; the
-         * others raise nothing.
+         * VEX ones, whose gadgets allow it. A table shuffle's source in
+         * memory may instead be 1 to 8 bytes (see rcg_tbl_table()), which
+         * have no alignment to keep. The floating-point gadgets read
+         * float_status's flags directly; the others raise nothing.
          */
         char a = rcg_kind(s, first), b = rcg_kind(s, second);
         bool fp = rcg_facts[op].kind == RCG_KIND_VFP;
@@ -925,20 +950,37 @@ QEMU_BUILD_BUG_ON(RCG_TABLE_WORDS * 8 != 16);
  * second. Byte i of the result is byte t[i] of the inputs: with two inputs,
  * bytes 0 to 15 are the first input's and 16 to 31 the source's; with one,
  * bytes 0 to 15 are the source's. Where t[i] is RCG_TBL_ZERO, the result's
- * byte is 0. A broadcast takes its element from byte 0 of the source,
- * whether a register or memory. The tables give the same results as TCG's
- * helpers and gvec ops.
+ * byte is 0. A source in memory narrower than 16 bytes is at byte 0. For a
+ * broadcast and MOVDDUP, byte 0 is also where a register source's element
+ * is. For MOVHPS, MOVHPD, MOVLPS and MOVLPD it is the loaded lane. For
+ * INSERTPS it is the element, which replaces the one that bits 6 and 7 pick
+ * from a register source. The tables give the same results as TCG's helpers
+ * and gvec ops.
  */
-static void rcg_tbl_table(X86DecodedInsn *decode, X86DecodedOp *second,
-                          uint8_t *t)
+static void rcg_tbl_table(DisasContext *s, X86DecodedInsn *decode,
+                          X86DecodedOp *second, uint8_t *t)
 {
     X86GenFunc gen = decode->e.gen;
     unsigned imm = decode->immediate & 0xff;
     int i, k;
 
-    if (gen == gen_PSHUFD) {
+    if (gen == gen_PSHUFD || gen == gen_VPERMILPS_i ||
+        gen == gen_VPERMILPD_i || gen == gen_VSHUF) {
+        /*
+         * Element n, of 4 or 8 bytes, is the source's element that field n
+         * of the immediate picks; for SHUFPS and SHUFPD (gen_VSHUF picks
+         * SHUFPD by the data size prefix), the low half picks from the
+         * first input instead.
+         */
+        bool pd = gen == gen_VPERMILPD_i ||
+                  (gen == gen_VSHUF && (s->prefix & PREFIX_DATA));
+        int size = pd ? 8 : 4, bits = pd ? 1 : 2;
+
         for (i = 0; i < 16; i++) {
-            t[i] = ((imm >> (i / 4 * 2)) & 3) * 4 + i % 4;
+            int pick = (imm >> (i / size * bits)) & ((1 << bits) - 1);
+
+            t[i] = (gen == gen_VSHUF && i >= 8 ? 16 : 0) + pick * size +
+                   i % size;
         }
     } else if (gen == gen_PSHUFLW || gen == gen_PSHUFHW) {
         /* One half's words shuffled; the other half unchanged. */
@@ -963,6 +1005,58 @@ static void rcg_tbl_table(X86DecodedInsn *decode, X86DecodedOp *second,
 
         for (i = 0; i < 16; i++) {
             t[i] = i % size;
+        }
+    } else if (gen == gen_VMOVDDUP || gen == gen_VMOVSLDUP ||
+               gen == gen_VMOVSHDUP) {
+        /*
+         * Element n is the source's element n rounded down to even, or for
+         * MOVSHDUP up to odd, with elements of 8 bytes for MOVDDUP and 4
+         * for the others.
+         */
+        int size = gen == gen_VMOVDDUP ? 8 : 4;
+        int odd = gen == gen_VMOVSHDUP;
+
+        for (i = 0; i < 16; i++) {
+            t[i] = ((i / size & ~1) | odd) * size + i % size;
+        }
+    } else if (gen == gen_VMOVLHPS || gen == gen_VMOVHPx_ld ||
+               gen == gen_VMOVHLPS || gen == gen_VMOVLPx_ld) {
+        /*
+         * The first input's low or high lane, kept in place, and a lane of
+         * the source in the other. MOVLHPS and the MOVHPS and MOVHPD loads
+         * keep the low lane and put the source's low lane above it. MOVHLPS
+         * keeps the high lane and puts the source's high lane below it, and
+         * the MOVLPS and MOVLPD loads put the source's low lane there.
+         */
+        int keep = gen == gen_VMOVLHPS || gen == gen_VMOVHPx_ld ? 0 : 1;
+        int take = gen == gen_VMOVHLPS ? 1 : 0;
+
+        for (i = 0; i < 16; i++) {
+            t[i] = i / 8 == keep ? i : 16 + take * 8 + i % 8;
+        }
+    } else if (gen == gen_VINSERTPS_r || gen == gen_VINSERTPS_m) {
+        /*
+         * The first input, with the element that bits 4 and 5 pick replaced
+         * by the source's element (bits 6 and 7 pick it from a register),
+         * then each element n whose bit n is set in bits 0 to 3 cleared, as
+         * in gen_vinsertps().
+         */
+        int from = gen == gen_VINSERTPS_r ? (imm >> 6) & 3 : 0;
+        int to = (imm >> 4) & 3;
+
+        for (i = 0; i < 16; i++) {
+            int element = i / 4;
+
+            t[i] = (imm >> element) & 1 ? RCG_TBL_ZERO :
+                   element == to ? 16 + from * 4 + i % 4 : i;
+        }
+    } else if (gen == gen_VBLENDPS || gen == gen_VBLENDPD ||
+               gen == gen_VPBLENDW) {
+        /* Element n from the source if bit n of the immediate is set. */
+        int size = gen == gen_VBLENDPD ? 8 : gen == gen_VBLENDPS ? 4 : 2;
+
+        for (i = 0; i < 16; i++) {
+            t[i] = ((imm >> (i / size)) & 1 ? 16 : 0) + i;
         }
     } else if (gen == gen_PALIGNR) {
         /*
@@ -1207,6 +1301,10 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
             break;
         case RCG_W_S:
             words[n] = rcg_reg_op(s, second, &reg);
+            if (gen == gen_VMOVHPx_st) {
+                /* MOVSD's gadget, storing the high lane. */
+                words[n] += offsetof(XMMReg, XMM_Q(1));
+            }
             rcg_note(ins, &nb_ins, reg);
             break;
         case RCG_W_V:
@@ -1275,7 +1373,7 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
         n = rcg_pack_words(g, words, n);
     }
     if (facts->kind == RCG_KIND_VTBL) {
-        rcg_tbl_table(decode, second, (uint8_t *)&words[n]);
+        rcg_tbl_table(s, decode, second, (uint8_t *)&words[n]);
         n += RCG_TABLE_WORDS;
     }
     tcg_gen_rich(g->gadget, words, n, slot->access ? TCG_RICH_MAY_FAULT : 0,

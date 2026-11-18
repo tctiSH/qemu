@@ -315,12 +315,16 @@ class VTbl:
     table is 16 bytes in the stream after the words (see Spec.has_table).
     The translator uses these gadgets for PSHUFD, PSHUFLW and PSHUFHW,
     PSRLDQ and PSLLDQ, the broadcasts, the byte and word unpacks and
-    PALIGNR.
+    PALIGNR; and for SHUFPS and SHUFPD, MOVLHPS and MOVHLPS, the loads of
+    MOVHPS, MOVHPD, MOVLPS and MOVLPD, INSERTPS, the blends by an
+    immediate, MOVDDUP, MOVSLDUP and MOVSHDUP, and VPERMILPS and VPERMILPD
+    by an immediate.
 
     mem_widths are those a memory source may have: 128 bits, aligned
-    except in a VEX encoding, or fewer, loaded at byte 0 with the rest 0,
-    as for the broadcasts' elements. vex is for the VEX.128 encodings, as
-    for VFp. """
+    except in a VEX encoding, or fewer, loaded at byte 0 with the rest 0:
+    the broadcasts' elements (VEX only), MOVDDUP's 64 bits, INSERTPS's 32,
+    and the 64 that MOVHPS, MOVHPD, MOVLPS and MOVLPD load. vex is for the
+    VEX.128 encodings, as for VFp. """
 
     def __init__(self, inputs, vex=False, mem_widths=(128,)):
         self.name = f"{'v' if vex else ''}tbl{inputs}"
@@ -342,9 +346,10 @@ class VTbl:
 
 # The legacy encodings' ops come first, then the VEX ones' in the same
 # order, which rcg_vex_op() relies on.
-VTBL_OPS = (VTbl(1), VTbl(2),
+VTBL_OPS = (VTbl(1, mem_widths=(64, 128)),
+            VTbl(2, mem_widths=(32, 64, 128)),
             VTbl(1, vex=True, mem_widths=(8, 16, 32, 64, 128)),
-            VTbl(2, vex=True))
+            VTbl(2, vex=True, mem_widths=(32, 64, 128)))
 
 
 class Alu:
@@ -2969,13 +2974,14 @@ class Case:
     with the integer values, XMM_F64 or XMM_F32 with floating-point ones,
     XMM_F64N or XMM_F32N with normal ones only.
     aligned says that its access must be on a 16-byte boundary, for
-    rcg-faults.
+    rcg-faults. store_offset is the byte of XMM2 where a store starts, for
+    rcg-faults to compare memory with: 8 for MOVHPS and MOVHPD.
     """
 
     def __init__(self, insn, width, a=-1, b=-1, mem=False, base=-1,
                  index=-1, base_value=0, index_value=0, stack=False,
                  writes=False, operand=OPERAND, rsp=STACK, moved=-1,
-                 target=-1, xmm=False, aligned=False):
+                 target=-1, xmm=False, aligned=False, store_offset=0):
         self.insn = insn
         self.width = width
         self.a = a
@@ -2993,6 +2999,7 @@ class Case:
         self.target = target
         self.xmm = xmm
         self.aligned = aligned
+        self.store_offset = store_offset
 
 
 # A case's xmm for floating-point values, doubles or floats: rcg-test.h's
@@ -3014,6 +3021,14 @@ ALIGN_BYTES = (0, 1, 4, 8, 15, 16, 17, 24, 31, 32, 33, 255)
 # The integer broadcasts, by the width of the element they take.
 BROADCASTS = ((8, "vpbroadcastb"), (16, "vpbroadcastw"),
               (32, "vpbroadcastd"), (64, "vpbroadcastq"))
+# Immediates for SHUFPD, VPERMILPD and BLENDPD, which use 2 bits (0xfc sets
+# only bits they ignore); for INSERTPS, covering every source element and
+# every destination, and clearing none, one, several or all; and for
+# BLENDPS, PBLENDW and VPBLENDD.
+PD_IMMS = (0, 1, 2, 3, 0xfc)
+INSERTPS_IMMS = (0x00, 0x10, 0x20, 0x30, 0x40, 0x80, 0xc0, 0xf0, 0x5a, 0x0f,
+                 0x1e, 0xd5, 0x3a, 0x6c, 0x24)
+BLEND_IMMS = (0x00, 0x01, 0x05, 0x0a, 0x0f, 0x55, 0xa3, 0xff)
 
 
 def memory_operand(width, shape, seg, base=3, index=1, target=None):
@@ -3100,6 +3115,7 @@ def insn_cases():
     yield from mmx_cases()
     yield from movd_cases()
     yield from tbl_cases()
+    yield from tbl_fp_cases()
     yield from cond_cases()
     yield from branch_cases()
     yield from chain_cases()
@@ -3642,6 +3658,9 @@ def fault_cases():
         m = f"{PTR[width]} ptr [rbx]"
         yield mem(f"{insn} xmm1, {m}", width, xmm=True)
         yield mem(f"{insn} {m}, xmm2", width, writes=True, xmm=True)
+    # MOVHPS's store, by way of MOVSD's gadget from byte 8 of XMM2.
+    yield mem("movhps qword ptr [rbx], xmm2", 64, writes=True, xmm=True,
+              store_offset=8)
     # The SSE floating-point ops', the unpacks' and the logic ops' loads,
     # the 16-byte ones aligned but for the VEX encodings, with XMM1 the
     # first input of each, which VALUE_FP in rcg-faults.c is chosen for.
@@ -3671,6 +3690,14 @@ def fault_cases():
         yield mem(insn, 128, xmm=XMM_F64)
     for width, insn in BROADCASTS:
         yield mem(f"{insn} xmm1, {PTR[width]} ptr [rbx]", width, xmm=XMM_F64)
+    for insn in ("movddup xmm1, qword ptr [rbx]",
+                 "movhps xmm1, qword ptr [rbx]",
+                 "vmovlpd xmm1, xmm1, qword ptr [rbx]"):
+        yield mem(insn, 64, xmm=XMM_F64)
+    for insn in ("insertps xmm1, dword ptr [rbx], 0x20",
+                 "vinsertps xmm1, xmm1, dword ptr [rbx], 0x30"):
+        yield mem(insn, 32, xmm=XMM_F64)
+    yield mem(f"shufps xmm1, {m}, 0x4e", 128, xmm=XMM_F64, aligned=True)
     # The VEX moves' loads.
     yield mem("vmovdqu xmm1, xmmword ptr [rbx]", 128, xmm=True)
     yield mem("vmovaps xmm1, xmmword ptr [rbx]", 128, xmm=True, aligned=True)
@@ -4045,13 +4072,23 @@ def upper(dest, insn):
             f"vextractf128 xmm3, {y}, 1")
 
 
+def binary(v, dest, first, source, insn, imm=None):
+    """ insn, in the encoding v ("" or "v" for VEX), writing dest from first
+    and source, with imm after them if given, by way of upper(). A legacy
+    encoding has no first operand: first must be dest. """
+    assert v or first == dest, insn
+    ops = f"{dest}, {first}, {source}" if v else f"{dest}, {source}"
+    return upper(dest, f"{v}{insn} {ops}" +
+                 (f", {imm}" if imm is not None else ""))
+
+
 def vex_vmov_cases():
     """ The VEX.128 encodings of the moves vmov_cases() and
     scalar_vmov_cases() test, with a check of the destination's bits 128 to
     255 by way of upper() for each but the stores and the cases by way of
     XMM9. To memory, they take the legacy encodings' gadgets, so only a few
-    cases store. VMOVNTDQA needs SSE4.1, which the test's CPU does not
-    have. """
+    cases store. MOVNTDQA and VMOVNTDQA take the MOVDQA and VMOVDQA
+    gadgets. """
     insns = ("vmovdqa", "vmovdqu", "vmovaps", "vmovups", "vmovapd", "vmovupd")
     for insn in insns:
         yield Case(upper("xmm1", f"{insn} xmm1, xmm2"), 128, a=0, xmm=True)
@@ -4081,6 +4118,8 @@ def vex_vmov_cases():
     yield Case(f"vmovdqu xmm9, {text}; vmovdqa xmm1, xmm9", 128, a=0, **mem)
     # The same gadgets by other decodings.
     yield Case(upper("xmm1", f"vlddqu xmm1, {text}"), 128, a=0, **mem)
+    yield Case(f"movntdqa xmm1, {text}", 128, a=0, **mem)
+    yield Case(upper("xmm1", f"vmovntdqa xmm1, {text}"), 128, a=0, **mem)
     for insn in ("vmovntdq", "vmovntps", "vmovntpd"):
         yield Case(f"{insn} {text}, xmm2", 128, a=0, writes=True, **mem)
     # VMOVLPD between registers, VEX.vvvv XMM1, which QEMU decodes as moving
@@ -4269,13 +4308,15 @@ def movd_cases():
         yield Case(insn, 64, a=0, writes=True, **mem)
 
 
-def sweep(insn, width, dest):
-    """ Cases of insn, which writes XMM register dest and is given as a
-    function of the memory operand's text: one at each operand shape and
-    segment override, and one RIP-relative. Each checks dest's bits 128 to
-    255 by way of upper(). """
+def sweep(insn, width, dest=None):
+    """ Cases of insn, a function of the memory operand's text, which writes
+    XMM register dest, or memory if dest is None: one at each operand shape
+    and segment override, and one RIP-relative. With dest, each case checks
+    its bits 128 to 255 by way of upper(). """
     def case(text, **mem):
-        return Case(upper(dest, insn(text)), width, a=0, mem=True, xmm=True,
+        i = insn(text)
+        return Case(upper(dest, i) if dest else i, width, a=0, mem=True,
+                    xmm=True, writes=not dest,
                     **mem)
 
     for shape in EA_SHAPES:
@@ -4287,11 +4328,12 @@ def sweep(insn, width, dest):
 
 
 def tbl_cases():
-    """ The shuffles that take the vtbl gadgets: PSHUFD, PSHUFLW and PSHUFHW
-    by each of SHUF_IMMS, PSRLDQ and PSLLDQ by each of SHIFT_BYTES, the byte
-    and word unpacks, PALIGNR by each of ALIGN_BYTES and the broadcasts,
-    in both encodings (the broadcasts in VEX only), between registers, each
-    input as the destination, and with memory; then, for each gadget with
+    """ The integer shuffles that take the vtbl gadgets: PSHUFD, PSHUFLW
+    and PSHUFHW by each of SHUF_IMMS, PSRLDQ and PSLLDQ by each of
+    SHIFT_BYTES, the byte and word unpacks, PALIGNR by each of ALIGN_BYTES
+    and the broadcasts, in both encodings (the broadcasts in VEX only),
+    between registers, each input as the destination, and with memory;
+    then, for each gadget with
     memory, one instruction at every operand shape and segment override,
     RIP-relative and, for VEX encodings, misaligned. XMM9, XMM10 and XMM12,
     which need REX, are copied from and to the registers the test loads.
@@ -4323,29 +4365,25 @@ def tbl_cases():
                 yield Case(upper("xmm1", f"v{insn} xmm1, xmm1, 3"), 128, a=0,
                            b=1, xmm=True)
 
-        def binary(dest, first, source, insn, imm=None):
-            ops = f"{dest}, {first}, {source}" if v else f"{dest}, {source}"
-            return upper(dest, f"{v}{insn} {ops}" +
-                         (f", {imm}" if imm is not None else ""))
-
         for insn in ("punpcklbw", "punpcklwd", "punpckhbw", "punpckhwd"):
-            yield Case(binary("xmm1", "xmm1", "xmm2", insn), 128, a=0, b=1,
-                       xmm=True)
-            yield Case(binary("xmm2", "xmm2", "xmm2", insn), 128, a=0, b=1,
-                       xmm=True)
-            yield Case(binary("xmm1", "xmm1", text, insn), 128, a=0, **mem)
+            yield Case(binary(v, "xmm1", "xmm1", "xmm2", insn), 128, a=0,
+                       b=1, xmm=True)
+            yield Case(binary(v, "xmm2", "xmm2", "xmm2", insn), 128, a=0,
+                       b=1, xmm=True)
+            yield Case(binary(v, "xmm1", "xmm1", text, insn), 128, a=0,
+                       **mem)
             if v:
-                yield Case(binary("xmm0", "xmm1", "xmm2", insn), 128, a=0,
+                yield Case(binary(v, "xmm0", "xmm1", "xmm2", insn), 128, a=0,
                            b=1, xmm=True)
-                yield Case(binary("xmm2", "xmm1", "xmm2", insn), 128, a=0,
+                yield Case(binary(v, "xmm2", "xmm1", "xmm2", insn), 128, a=0,
                            b=1, xmm=True)
         for n in ALIGN_BYTES:
-            yield Case(binary("xmm1", "xmm1", "xmm2", "palignr", n), 128,
+            yield Case(binary(v, "xmm1", "xmm1", "xmm2", "palignr", n), 128,
                        a=0, b=1, xmm=True)
             if v:
-                yield Case(binary("xmm0", "xmm1", "xmm2", "palignr", n), 128,
-                           a=0, b=1, xmm=True)
-        yield Case(binary("xmm1", "xmm1", text, "palignr", 5), 128, a=0,
+                yield Case(binary(v, "xmm0", "xmm1", "xmm2", "palignr", n),
+                           128, a=0, b=1, xmm=True)
+        yield Case(binary(v, "xmm1", "xmm1", text, "palignr", 5), 128, a=0,
                    **mem)
     for width, insn in (*BROADCASTS, (32, "vbroadcastss")):
         yield Case(upper("xmm1", f"{insn} xmm1, xmm2"), 128, a=0, b=1,
@@ -4393,6 +4431,138 @@ def tbl_cases():
     for insn in ("vpshufd ymm0, ymm1, 0x1b", "vpsrldq ymm0, ymm1, 3",
                  "vpunpcklbw ymm0, ymm1, ymm2", "vpalignr ymm0, ymm1, ymm2, 5",
                  "vpbroadcastd ymm0, xmm2"):
+        yield Case("vinsertf128 ymm1, ymm1, xmm3, 1; "
+                   f"vinsertf128 ymm2, ymm2, xmm0, 1; {insn}; "
+                   "vextractf128 xmm3, ymm0, 1", 128, a=0, b=1, xmm=True)
+
+
+def tbl_fp_cases():
+    """ The floating-point shuffles that take the vtbl gadgets, like
+    tbl_cases() for the integer ones: MOVDDUP, MOVSLDUP and MOVSHDUP,
+    VPERMILPS and VPERMILPD by an immediate and VPBLENDD (in VEX only),
+    SHUFPS and SHUFPD, MOVLHPS and MOVHLPS, the loads of MOVHPS, MOVHPD,
+    MOVLPS and MOVLPD, INSERTPS, BLENDPS, BLENDPD and PBLENDW, and the
+    stores of MOVHPS and MOVHPD, which take MOVSD's gadgets; then a few by
+    way of the registers that need REX; then each gadget with memory that
+    tbl_cases() does not sweep, at every operand shape and segment
+    override, and misaligned; then VEX.256 encodings, left to TCG, as in
+    tbl_cases(). INSERTPS from memory ignores bits 6 and 7, so some of its
+    cases set them. """
+    text, base, index, bv, iv = memory_operand(128, "bi1", None)
+    mem = dict(mem=True, base=base, index=index, base_value=bv,
+               index_value=iv, xmm=True)
+    t64, base, index, bv, iv = memory_operand(64, "bi1", None)
+    mem64 = dict(mem=True, base=base, index=index, base_value=bv,
+                 index_value=iv, xmm=True)
+    t32, base, index, bv, iv = memory_operand(32, "bi1", None)
+    mem32 = dict(mem=True, base=base, index=index, base_value=bv,
+                 index_value=iv, xmm=True)
+    # Each op by an immediate: its register cases' immediates, the one with
+    # all three operands the same register, and its memory cases' operand,
+    # width and immediates.
+    by_imm = (("shufps", SHUF_IMMS, 0xd8, text, 128, (0x27,)),
+              ("shufpd", PD_IMMS, 0x1, text, 128, (0x3,)),
+              ("insertps", INSERTPS_IMMS, 0x6c, t32, 32, (0x30, 0xd5)),
+              ("blendps", BLEND_IMMS, 0x55, text, 128, (0xa3,)),
+              ("blendpd", PD_IMMS, 0x1, text, 128, (0x2,)),
+              ("pblendw", BLEND_IMMS, 0xa3, text, 128, (0x5a,)))
+    for v in ("", "v"):
+        for insn in ("movddup", "movsldup", "movshdup"):
+            yield Case(upper("xmm1", f"{v}{insn} xmm1, xmm2"), 128, a=0, b=1,
+                       xmm=True)
+            yield Case(upper("xmm2", f"{v}{insn} xmm2, xmm2"), 128, a=0, b=1,
+                       xmm=True)
+        yield Case(upper("xmm1", f"{v}movddup xmm1, {t64}"), 64, a=0, **mem64)
+        for insn in ("movsldup", "movshdup"):
+            yield Case(upper("xmm1", f"{v}{insn} xmm1, {text}"), 128, a=0,
+                       **mem)
+        for insn, imms, same, m, width, mem_imms in by_imm:
+            for imm in imms:
+                yield Case(binary(v, "xmm1", "xmm1", "xmm2", insn, hex(imm)),
+                           128, a=0, b=1, xmm=True)
+                if v:
+                    yield Case(binary(v, "xmm0", "xmm1", "xmm2", insn,
+                                      hex(imm)), 128, a=0, b=1, xmm=True)
+            yield Case(binary(v, "xmm2", "xmm2", "xmm2", insn, hex(same)),
+                       128, a=0, b=1, xmm=True)
+            if v and insn in ("shufps", "insertps"):
+                yield Case(binary(v, "xmm2", "xmm1", "xmm2", insn, hex(same)),
+                           128, a=0, b=1, xmm=True)
+            for imm in mem_imms:
+                yield Case(binary(v, "xmm1", "xmm1", m, insn, hex(imm)),
+                           width, a=0, **(mem32 if width == 32 else mem))
+        for insn in ("movlhps", "movhlps"):
+            yield Case(binary(v, "xmm1", "xmm1", "xmm2", insn), 128, a=0,
+                       b=1, xmm=True)
+            yield Case(binary(v, "xmm2", "xmm2", "xmm2", insn), 128, a=0,
+                       b=1, xmm=True)
+            if v:
+                yield Case(binary(v, "xmm0", "xmm1", "xmm2", insn), 128, a=0,
+                           b=1, xmm=True)
+        if v:
+            yield Case(binary(v, "xmm2", "xmm1", "xmm2", "movhlps"), 128,
+                       a=0, b=1, xmm=True)
+        for insn in ("movhps", "movhpd", "movlps", "movlpd"):
+            yield Case(binary(v, "xmm1", "xmm1", t64, insn), 64, a=0, **mem64)
+            if v:
+                yield Case(binary(v, "xmm0", "xmm1", t64, insn), 64, a=0,
+                           **mem64)
+        for insn in ("movhps", "movhpd"):
+            yield Case(f"{v}{insn} {t64}, xmm2", 64, a=0, writes=True,
+                       **mem64)
+    for insn, imms, same, mem_imm in (("vpermilps", SHUF_IMMS, 0xd8, 0x55),
+                                      ("vpermilpd", PD_IMMS, 0x1, 0x2)):
+        for imm in imms:
+            yield Case(upper("xmm1", f"{insn} xmm1, xmm2, {imm:#x}"), 128,
+                       a=0, b=1, xmm=True)
+        yield Case(upper("xmm2", f"{insn} xmm2, xmm2, {same:#x}"), 128,
+                   a=0, b=1, xmm=True)
+        yield Case(upper("xmm1", f"{insn} xmm1, {text}, {mem_imm:#x}"), 128,
+                   a=0, **mem)
+    for imm in BLEND_IMMS:
+        yield Case(upper("xmm0", f"vpblendd xmm0, xmm1, xmm2, {imm:#x}"), 128,
+                   a=0, b=1, xmm=True)
+    yield Case(upper("xmm0", f"vpblendd xmm0, xmm1, {text}, 0x5"), 128, a=0,
+               **mem)
+
+    # By way of the registers that need REX.
+    yield Case("movaps xmm9, xmm1; movaps xmm10, xmm2; movaps xmm2, xmm3; "
+               "shufps xmm9, xmm10, 0x4e; movaps xmm1, xmm9", 128, a=0, b=1,
+               xmm=True)
+    yield Case("movaps xmm10, xmm1; movaps xmm12, xmm2; "
+               "vinsertps xmm9, xmm10, xmm12, 0x9c; movaps xmm0, xmm9", 128,
+               a=0, b=1, xmm=True)
+    yield Case(f"movaps xmm9, xmm1; movhps xmm9, {t64}; movaps xmm1, xmm9",
+               64, a=0, **mem64)
+    yield Case(f"movaps xmm10, xmm2; movhps {t64}, xmm10", 64, a=0,
+               writes=True, **mem64)
+
+    # Each gadget with memory that tbl_cases() does not sweep, at every
+    # operand shape and segment override, and misaligned.
+    yield from sweep(lambda m: f"movddup xmm1, {m}", 64, "xmm1")
+    yield from sweep(lambda m: f"insertps xmm1, {m}, 0xa0", 32, "xmm1")
+    yield from sweep(lambda m: f"movhps xmm1, {m}", 64, "xmm1")
+    yield from sweep(lambda m: f"vinsertps xmm0, xmm1, {m}, 0x50", 32,
+                     "xmm0")
+    yield from sweep(lambda m: f"vmovlpd xmm0, xmm1, {m}", 64, "xmm0")
+    yield from sweep(lambda m: f"movhpd {m}, xmm2", 64)
+    for target in MISALIGNED:
+        for width, insn in ((128, "vpermilps xmm0, {}, 0x1b"),
+                            (64, "vmovhps xmm0, xmm1, {}"),
+                            (32, "vinsertps xmm0, xmm1, {}, 0x30")):
+            t, base, _, bv, _ = memory_operand(width, "b", None,
+                                               target=target)
+            yield Case(upper("xmm0", insn.format(t)), width, a=0, mem=True,
+                       base=base, base_value=bv, operand=target, xmm=True)
+        t, base, _, bv, _ = memory_operand(64, "b", None, target=target)
+        yield Case(f"movhps {t}, xmm2", 64, a=0, mem=True, base=base,
+                   base_value=bv, operand=target, writes=True, xmm=True)
+
+    # VEX.256, left to TCG.
+    for insn in ("vshufps ymm0, ymm1, ymm2, 0x4e",
+                 "vpermilps ymm0, ymm1, 0x1b",
+                 "vblendps ymm0, ymm1, ymm2, 0x5a", "vmovsldup ymm0, ymm1",
+                 "vmovddup ymm0, ymm1"):
         yield Case("vinsertf128 ymm1, ymm1, xmm3, 1; "
                    f"vinsertf128 ymm2, ymm2, xmm0, 1; {insn}; "
                    "vextractf128 xmm3, ymm0, 1", 128, a=0, b=1, xmm=True)
@@ -4465,7 +4635,8 @@ def write_cases(cases, out, prefix, adc=False):
               f'{c.width}, {c.a}, {c.b}, {int(c.mem)}, {c.base}, '
               f'{c.index}, {c.base_value:#x}, {c.index_value}, '
               f'{int(c.stack)}, {int(c.writes)}, {c.operand:#x}, {c.rsp:#x}, '
-              f'{c.moved}, {c.target}, {int(c.xmm)}, {int(c.aligned)} }},',
+              f'{c.moved}, {c.target}, {int(c.xmm)}, {int(c.aligned)}, '
+              f'{c.store_offset} }},',
               file=out)
     print("};", file=out)
 

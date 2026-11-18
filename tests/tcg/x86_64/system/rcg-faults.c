@@ -340,11 +340,11 @@ static bool same_fp(const struct result *r)
 }
 
 /*
- * A case with XMM registers loads XMM1 or stores XMM2, at addr. A run across
- * the boundary goes through the helper, which rcg-insns' cases need not
- * reach, so compare the result with memory, rather than with TCG's. A
- * narrower load clears the rest of XMM1, and a narrower store leaves the
- * memory after it alone.
+ * A case with XMM registers loads XMM1 at addr, or stores XMM2 there from
+ * byte store_offset of the register. A run across the boundary goes
+ * through the helper, which rcg-insns' cases need not reach, so compare
+ * the result with memory, rather than with TCG's. A narrower load clears
+ * the rest of XMM1, and a narrower store leaves the memory after it alone.
  */
 static void check_xmm_access(const struct rcg_case *c,
                              const struct rcg_start *s, int below,
@@ -352,8 +352,9 @@ static void check_xmm_access(const struct rcg_case *c,
 {
     int off = addr - WINDOW_START;
     const uint8_t *mem = (c->writes ? r->window : start_window) + off;
-    const uint8_t *reg = c->writes ? (const uint8_t *)rcg_in.x[2]
-                                   : (const uint8_t *)r->out.x[1];
+    const uint8_t *reg = c->writes
+                         ? (const uint8_t *)rcg_in.x[2] + c->store_offset
+                         : (const uint8_t *)r->out.x[1];
     bool same = true;
 
     for (int i = 0; i < c->width / 8; i++) {
