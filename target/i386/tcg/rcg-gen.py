@@ -302,7 +302,49 @@ VMOVD_OPS = (VMovd(), VMovd(vex=True))
 
 # The kinds of the SSE ops, which have VEX.128 encodings (op.vex) whose
 # gadgets may read VEX.vvvv's register (op.reads_v()).
-VEX_KINDS = ("vmov", "vfp", "vlane", "vlogic", "vmovd")
+VEX_KINDS = ("vmov", "vfp", "vlane", "vlogic", "vmovd", "vtbl")
+
+
+class VTbl:
+    """ A shuffle of bytes by a table the translator works out from the
+    instruction, its immediate included: the result's byte i is byte
+    table[i] of the inputs, or 0 where table[i] is past them. With one
+    input (tbl1), bytes 0 to 15 are the source's; with two (tbl2), bytes 0
+    to 15 are the first input's and 16 to 31 the source's. The first input
+    is the destination, or for a VEX encoding VEX.vvvv's register. The
+    table is 16 bytes in the stream after the words (see Spec.has_table).
+    The translator uses these gadgets for PSHUFD, PSHUFLW and PSHUFHW,
+    PSRLDQ and PSLLDQ, the broadcasts, the byte and word unpacks and
+    PALIGNR.
+
+    mem_widths are those a memory source may have: 128 bits, aligned
+    except in a VEX encoding, or fewer, loaded at byte 0 with the rest 0,
+    as for the broadcasts' elements. vex is for the VEX.128 encodings, as
+    for VFp. """
+
+    def __init__(self, inputs, vex=False, mem_widths=(128,)):
+        self.name = f"{'v' if vex else ''}tbl{inputs}"
+        self.inputs = inputs
+        self.vex = vex
+        self.mem_widths = mem_widths
+
+    def widths(self, form):
+        """ The source's widths in form. """
+        return self.mem_widths if form == "xm" else (128,)
+
+    @property
+    def reads_d(self):
+        return self.inputs == 2 and not self.vex
+
+    def reads_v(self, form=None):
+        return self.inputs == 2 and self.vex
+
+
+# The legacy encodings' ops come first, then the VEX ones' in the same
+# order, which rcg_vex_op() relies on.
+VTBL_OPS = (VTbl(1), VTbl(2),
+            VTbl(1, vex=True, mem_widths=(8, 16, 32, 64, 128)),
+            VTbl(2, vex=True))
 
 
 class Alu:
@@ -641,13 +683,15 @@ class Spec:
     kind is "alu", "zero" (XOR of a register with itself), "mov", "lea",
     "push", "pop", "extend", "unary", "shift", "mul", "imul3", "bt", "cbw",
     "cwd", "xchg", "leave", "call", "jmp", "ret", "vmov", "vfp", "vlane",
-    "vlogic" or "vmovd". form is the destination's kind then the source's
-    (r, m or i, or x for an XMM register), then for IMUL3 an i if it takes
-    an immediate too; for MUL and IMUL with one operand it is the source's,
-    for CBW the destination's, for CALL and JMP the target's (i for CALL
-    rel32), for RET i and for LEAVE r. shape and seg are the memory
-    operand's, if any. ordered is for the twin that keeps the guest's
-    memory order (tcg_ldst_ordered()).
+    "vlogic", "vmovd" or "vtbl".
+
+    form is the destination's kind then the source's (r, m or i, or x for
+    an XMM register), then for IMUL3 an i if it takes an immediate too; for
+    MUL and IMUL with one operand it is the source's, for CBW the
+    destination's, for CALL and JMP the target's (i for CALL rel32), for
+    RET i and for LEAVE r. shape and seg are the memory operand's, if any.
+    ordered is for the twin that keeps the guest's memory order
+    (tcg_ldst_ordered()).
     """
 
     def __init__(self, kind, op, form, width, shape=None, seg=False,
@@ -681,7 +725,7 @@ class Spec:
         it. """
         if self.kind == "imul3":
             return self.form in ("rr", "rm")
-        if self.kind == "vfp":
+        if self.kind in ("vfp", "vtbl"):
             return self.op.reads_d
         if self.kind in ("vlane", "vlogic"):
             return not self.op.vex
@@ -777,6 +821,14 @@ class Spec:
         if self.accesses_memory:
             words += ["oi", "tlb"]
         return words
+
+    @property
+    def has_table(self):
+        """ Whether the stream holds a vtbl table after the words:
+        TABLE_WORDS words holding its 16 bytes in order. The body loads it
+        with load_table() after any access to guest memory, as the access's
+        slow path need not preserve vector registers. """
+        return self.kind == "vtbl"
 
     @property
     def cf(self):
@@ -889,6 +941,10 @@ def specs():
         for form in op.forms:
             for width in op.widths(form):
                 yield Spec("vmovd", op, form, width)
+    for op in VTBL_OPS:
+        for form in ("xx", "xm"):
+            for width in op.widths(form):
+                yield from with_memory(Spec("vtbl", op, form, width))
 
 
 def with_memory(spec):
@@ -978,6 +1034,11 @@ class Harness:
         """ The lines that end the gadget, going on to what follows it. """
         raise NotImplementedError
 
+    def load_table(self, qreg):
+        """ The lines that load a spec's table (Spec.has_table), after its
+        words in the stream, into qreg. """
+        raise NotImplementedError
+
     def branch(self, arm, labels):
         """ The lines that make the gadget go on at its target instead, if
         the host's condition arm holds. labels are numeric labels reserved
@@ -992,9 +1053,10 @@ class Harness:
         branch(). """
         raise NotImplementedError
 
-    def assemble(self, stream, hot, cold):
+    def assemble(self, stream, hot, cold, table):
         """ The whole gadget, from the stream words' registers, the body's
-        lines on the way through and its slow paths. """
+        lines on the way through and its slow paths. table is the slice of
+        hot that loads the spec's table, or None if it has none. """
         return [*self.enter(stream), *hot, *self.leave(), *cold]
 
 
@@ -1014,9 +1076,17 @@ class Body:
         self.label = 0
         self.used = set()
         self.reads = set()
+        self.table = None
 
     def word(self, name):
         return self.word_regs[name]
+
+    def load_table(self, qreg):
+        """ qreg = the spec's table (Spec.has_table), after any access to
+        guest memory. """
+        lines = self.h.load_table(qreg)
+        self.table = slice(len(self.hot), len(self.hot) + len(lines))
+        self.emit(*lines)
 
     def emit(self, *lines):
         self.hot.extend(lines)
@@ -1032,7 +1102,7 @@ class Body:
         assert sorted(sum(layout, ())) == sorted(self.spec.words), \
             self.spec.name
         stream = [tuple(map(self.word, words)) for words in layout]
-        return self.h.assemble(stream, self.hot, self.cold)
+        return self.h.assemble(stream, self.hot, self.cold, self.table)
 
     def _labels(self):
         self.label += 2
@@ -1789,6 +1859,38 @@ def vmovd_body(g, spec):
     clear_upper(g, spec, T)
 
 
+def vtbl_body(g, spec):
+    # TBL: the source in V1 and, with two inputs, the first input in V0; TBL
+    # indexes V0 as bytes 0 to 15 and V1 as 16 to 31. The table goes in V3
+    # after the access, as the slow path's helper call need not preserve V3.
+    op, env, width = spec.op, g.env, spec.width
+    if spec.has_mem:
+        g.ea(ADDR)
+        if width == 128:
+            g.load128(A, B, ADDR, aligned=not op.vex)
+            g.emit(f"fmov d1, {A}",
+                   f"mov v1.d[1], {B}")
+        else:
+            # The rest of V1 is 0, which no table entry reads.
+            g.load(A, ADDR, width)
+            g.emit(f"fmov d1, {A}")
+    else:
+        g.emit(f"ldr q1, [{env}, {g.word('s')}]")
+    if op.inputs == 2:
+        if op.vex:
+            g.emit(f"ldr q0, [{env}, {g.word('v')}]")
+        else:
+            g.emit(f"ldr q0, [{env}, {g.word('d')}]")
+            g.reads.add("d")
+        table = "{v0.16b, v1.16b}"
+    else:
+        table = "{v1.16b}"
+    g.load_table("q3")
+    g.emit(f"tbl v2.16b, {table}, v3.16b",
+           f"str q2, [{env}, {g.word('d')}]")
+    clear_upper(g, spec)
+
+
 def zero_body(g, spec):
     # TCG's gen_XOR for a register with itself: 0, and flags of just ZF
     # and PF, as CC_OP_EFLAGS.
@@ -2198,6 +2300,7 @@ BODIES = {
     "vlane": vlane_body,
     "vlogic": vlogic_body,
     "vmovd": vmovd_body,
+    "vtbl": vtbl_body,
     "fjcc": fused_body,
     "fjccgoto": fused_body,
     "setcc": setcc_body,
@@ -2288,6 +2391,9 @@ class CheckHarness(Harness):
     def leave(self):
         return ["// leave"]
 
+    def load_table(self, qreg):
+        return [f"// table: {qreg}"]
+
     def branch(self, arm, labels):
         return [f"// branch if {arm}"]
 
@@ -2314,6 +2420,7 @@ def check():
         if isinstance(spec, Spec):
             assert ("d" in g.reads) == (spec.reads_d and "d" in spec.words), \
                 spec.name
+            assert (g.table is not None) == spec.has_table, spec.name
         labels = {line[:-1] for line in lines if re.fullmatch(r"\d+:", line)}
         for line in lines:
             if line.startswith("//"):
@@ -2358,6 +2465,12 @@ class TctiHarness(Harness):
     def leave(self):
         return ["ldr x27, [x28], #8", "br x27"]
 
+    def load_table(self, qreg):
+        # Once the words are loaded, x28 points at the table, and this load
+        # moves it past. A slow path taken before the load sees x28 still
+        # inside this instruction's stream, as in any other gadget.
+        return [f"ldr {qreg}, [x28], #{TABLE_WORDS * 8}"]
+
     def branch(self, arm, labels):
         # tcg_out_rich_br() writes the target after the words. Branching,
         # rather than a CSEL into x28, lets the gadgets that follow run
@@ -2395,13 +2508,18 @@ class TctiHarness(Harness):
                 "mov x28, x27",
                 f"{label}:"]
 
-    def assemble(self, stream, hot, cold):
-        # A body with no slow path that leaves x27 and x28 alone loads the
-        # next gadget's address before its body, as tcti-gadget-gen.py's
-        # simple() does, so the dispatch target is known sooner.
-        if cold or any(re.search(r"\b[xw]2[78]\b", line) for line in hot):
-            return super().assemble(stream, hot, cold)
-        return [*self.enter(stream), "ldr x27, [x28], #8", *hot, "br x27"]
+    def assemble(self, stream, hot, cold, table):
+        # A body with no slow path that leaves x27 and x28 alone, a table
+        # load aside, loads the next gadget's address before its body, as
+        # tcti-gadget-gen.py's simple() does, so the dispatch target is
+        # known sooner. The table load goes first, as the table comes before
+        # that address in the stream.
+        load = hot[table] if table else []
+        rest = hot[:table.start] + hot[table.stop:] if table else hot
+        if cold or any(re.search(r"\b[xw]2[78]\b", line) for line in rest):
+            return super().assemble(stream, hot, cold, table)
+        return [*self.enter(stream), *load, "ldr x27, [x28], #8", *rest,
+                "br x27"]
 
 
 # The ops and forms as the translator names them, in the table's order.
@@ -2412,15 +2530,18 @@ OP_NAMES = ("add", "sub", "and", "or", "xor", "cmp", "test", "adc", "sbb",
             "cbw", "cwd", "xchg", "leave", "call", "jmp", "ret",
             *(op.name for op in VMOV_OPS), *(op.name for op in VFP_OPS),
             *(op.name for op in VLANE_OPS), *(op.name for op in VLOGIC_OPS),
-            *(op.name for op in VMOVD_OPS))
+            *(op.name for op in VMOVD_OPS), *(op.name for op in VTBL_OPS))
 FORM_NAMES = ("rr", "rm", "mr", "ri", "mi", "r", "i", "m", "rri", "rmi",
               "xx", "xm", "mx", "xr", "rx")
 KIND_NAMES = ("alu", "zero", "mov", "lea", "push", "pop", "extend", "unary",
               "shift", "mul", "imul3", "bt", "cbw", "cwd", "xchg", "leave",
-              "call", "jmp", "ret", "vmov", "vfp", "vlane", "vlogic", "vmovd")
+              "call", "jmp", "ret", "vmov", "vfp", "vlane", "vlogic", "vmovd",
+              "vtbl")
 WORD_NAMES = ("d", "s", "s1", "base", "index", "disp", "seg", "imm", "oi",
               "tlb", "ccop", "v")
 MAX_WORDS = len(WORD_REGS)
+# The stream words of a vtbl gadget's table: its 16 bytes.
+TABLE_WORDS = 2
 
 # The gadget source files, split by op or kind so they compile in parallel;
 # "other" takes the ops with no file.
@@ -2444,7 +2565,7 @@ def gadget_file(spec):
         return spec.kind
     if spec.kind in VEX_KINDS and spec.op.vex:
         return "vex"
-    if spec.kind in ("vmov", "vlogic", "vmovd"):
+    if spec.kind in ("vmov", "vlogic", "vmovd", "vtbl"):
         return "sse"
     if spec.kind in ("vfp", "vlane"):
         return "vfp"
@@ -2592,7 +2713,8 @@ def write_table(all_specs, out):
     for w in WORD_NAMES:
         p(f"    RCG_W_{w.upper()},")
     p("};")
-    p(f"#define RCG_MAX_WORDS {MAX_WORDS}\n")
+    p(f"#define RCG_MAX_WORDS {MAX_WORDS}")
+    p(f"#define RCG_TABLE_WORDS {TABLE_WORDS}\n")
     p("/* Whether a word always fits in 32 bits, signed: rcg_pack_words(). */")
     p("static inline bool rcg_word_narrow(uint8_t w)\n{\n    switch (w) {")
     for w in NARROW_WORDS:
@@ -2882,6 +3004,18 @@ XMM_F64N = 4
 XMM_F32N = 5
 
 
+# Immediates for PSHUFD, PSHUFLW and PSHUFHW that between them move every
+# source element to every destination position, and counts for PSRLDQ,
+# PSLLDQ and PALIGNR at and past each edge.
+SHUF_IMMS = (0x00, 0x55, 0xaa, 0xff, 0x1b, 0xe4, 0x4e, 0xb1, 0x39, 0x93,
+             0x27, 0xd8)
+SHIFT_BYTES = (0, 1, 4, 7, 8, 15, 16, 17, 255)
+ALIGN_BYTES = (0, 1, 4, 8, 15, 16, 17, 24, 31, 32, 33, 255)
+# The integer broadcasts, by the width of the element they take.
+BROADCASTS = ((8, "vpbroadcastb"), (16, "vpbroadcastw"),
+              (32, "vpbroadcastd"), (64, "vpbroadcastq"))
+
+
 def memory_operand(width, shape, seg, base=3, index=1, target=None):
     """ The x86 operand of shape at target (by default OPERAND, or
     OPERAND_LO for shape "d", whose 32-bit displacement cannot reach above
@@ -2965,6 +3099,7 @@ def insn_cases():
     yield from vec_alias_cases()
     yield from mmx_cases()
     yield from movd_cases()
+    yield from tbl_cases()
     yield from cond_cases()
     yield from branch_cases()
     yield from chain_cases()
@@ -3526,6 +3661,16 @@ def fault_cases():
         m = f"{PTR[width]} ptr [rbx]"
         yield mem(f"{insn} xmm1, {m}", width, xmm=True)
         yield mem(f"{insn} {m}, xmm2", width, writes=True, xmm=True)
+    # The vtbl gadgets' loads, which rcg-faults compares with the run on the
+    # lower page, as for the floating-point ops.
+    m = "xmmword ptr [rbx]"
+    for insn in (f"pshufd xmm1, {m}, 0x1b", f"punpcklbw xmm1, {m}",
+                 f"palignr xmm1, {m}, 5"):
+        yield mem(insn, 128, xmm=XMM_F64, aligned=True)
+    for insn in (f"vpshufd xmm1, {m}, 0x1b", f"vpunpckhwd xmm1, xmm1, {m}"):
+        yield mem(insn, 128, xmm=XMM_F64)
+    for width, insn in BROADCASTS:
+        yield mem(f"{insn} xmm1, {PTR[width]} ptr [rbx]", width, xmm=XMM_F64)
     # The VEX moves' loads.
     yield mem("vmovdqu xmm1, xmmword ptr [rbx]", 128, xmm=True)
     yield mem("vmovaps xmm1, xmmword ptr [rbx]", 128, xmm=True, aligned=True)
@@ -4060,14 +4205,17 @@ def vec_alias_cases():
 
 
 def mmx_cases():
-    """ The MMX forms of the logic ops, the unpacks of 32 bits, and MOVD
-    and MOVQ, between registers and with memory, which stay with TCG:
+    """ The MMX forms of the logic ops, the unpacks, PALIGNR, and MOVD and
+    MOVQ, between registers and with memory, which stay with TCG:
     rcg_kind() refuses MMX registers. They end in general registers, which
     the test compares. """
     yield Case("movq mm0, rax; movq mm1, rcx; pand mm0, mm1; por mm0, mm1; "
                "pandn mm1, mm0; pxor mm0, mm1; punpckldq mm0, mm1; "
                "punpckhdq mm1, mm0; movd eax, mm0; movq rcx, mm1; emms", 64,
                a=0, b=1)
+    yield Case("movq mm0, rax; movq mm1, rcx; punpcklbw mm0, mm1; "
+               "punpckhwd mm1, mm0; palignr mm0, mm1, 3; movq rax, mm0; "
+               "movq rcx, mm1; emms", 64, a=0, b=1)
     text, base, _, bv, _ = memory_operand(32, "b", None)
     mem = dict(mem=True, base=base, base_value=bv)
     yield Case(f"movd mm0, {text}; movq rax, mm0; emms", 32, a=0, **mem)
@@ -4119,6 +4267,135 @@ def movd_cases():
     for insn in (".byte 0x66, 0x48, 0x0f, 0x7e, 0x53, 0x08",
                  ".byte 0xc4, 0xe1, 0xf9, 0x7e, 0x53, 0x08"):
         yield Case(insn, 64, a=0, writes=True, **mem)
+
+
+def sweep(insn, width, dest):
+    """ Cases of insn, which writes XMM register dest and is given as a
+    function of the memory operand's text: one at each operand shape and
+    segment override, and one RIP-relative. Each checks dest's bits 128 to
+    255 by way of upper(). """
+    def case(text, **mem):
+        return Case(upper(dest, insn(text)), width, a=0, mem=True, xmm=True,
+                    **mem)
+
+    for shape in EA_SHAPES:
+        for seg in SEGS:
+            text, base, index, bv, iv = memory_operand(width, shape, seg)
+            yield case(text, base=base, index=index, base_value=bv,
+                       index_value=iv)
+    yield case(rip_relative(width))
+
+
+def tbl_cases():
+    """ The shuffles that take the vtbl gadgets: PSHUFD, PSHUFLW and PSHUFHW
+    by each of SHUF_IMMS, PSRLDQ and PSLLDQ by each of SHIFT_BYTES, the byte
+    and word unpacks, PALIGNR by each of ALIGN_BYTES and the broadcasts,
+    in both encodings (the broadcasts in VEX only), between registers, each
+    input as the destination, and with memory; then, for each gadget with
+    memory, one instruction at every operand shape and segment override,
+    RIP-relative and, for VEX encodings, misaligned. XMM9, XMM10 and XMM12,
+    which need REX, are copied from and to the registers the test loads.
+    The other cases of one encoding check their destination's bits 128 to
+    255 by way of upper(): a VEX.128 encoding clears them, and a legacy one
+    keeps them. VEX.256 encodings are left to TCG, with their upper lanes
+    checked as in vec_alias_cases(). """
+    text, base, index, bv, iv = memory_operand(128, "bi1", None)
+    mem = dict(mem=True, base=base, index=index, base_value=bv,
+               index_value=iv, xmm=True)
+    for v in ("", "v"):
+        for insn in ("pshufd", "pshuflw", "pshufhw"):
+            for imm in SHUF_IMMS:
+                yield Case(upper("xmm1", f"{v}{insn} xmm1, xmm2, {imm:#x}"),
+                           128, a=0, b=1, xmm=True)
+            yield Case(upper("xmm2", f"{v}{insn} xmm2, xmm2, 0x1b"), 128, a=0,
+                       b=1, xmm=True)
+            yield Case(upper("xmm1", f"{v}{insn} xmm1, {text}, 0x39"), 128,
+                       a=0, **mem)
+        for insn in ("psrldq", "pslldq"):
+            for n in SHIFT_BYTES:
+                if v:
+                    yield Case(upper("xmm0", f"v{insn} xmm0, xmm1, {n}"), 128,
+                               a=0, b=1, xmm=True)
+                else:
+                    yield Case(upper("xmm1", f"{insn} xmm1, {n}"), 128, a=0,
+                               b=1, xmm=True)
+            if v:
+                yield Case(upper("xmm1", f"v{insn} xmm1, xmm1, 3"), 128, a=0,
+                           b=1, xmm=True)
+
+        def binary(dest, first, source, insn, imm=None):
+            ops = f"{dest}, {first}, {source}" if v else f"{dest}, {source}"
+            return upper(dest, f"{v}{insn} {ops}" +
+                         (f", {imm}" if imm is not None else ""))
+
+        for insn in ("punpcklbw", "punpcklwd", "punpckhbw", "punpckhwd"):
+            yield Case(binary("xmm1", "xmm1", "xmm2", insn), 128, a=0, b=1,
+                       xmm=True)
+            yield Case(binary("xmm2", "xmm2", "xmm2", insn), 128, a=0, b=1,
+                       xmm=True)
+            yield Case(binary("xmm1", "xmm1", text, insn), 128, a=0, **mem)
+            if v:
+                yield Case(binary("xmm0", "xmm1", "xmm2", insn), 128, a=0,
+                           b=1, xmm=True)
+                yield Case(binary("xmm2", "xmm1", "xmm2", insn), 128, a=0,
+                           b=1, xmm=True)
+        for n in ALIGN_BYTES:
+            yield Case(binary("xmm1", "xmm1", "xmm2", "palignr", n), 128,
+                       a=0, b=1, xmm=True)
+            if v:
+                yield Case(binary("xmm0", "xmm1", "xmm2", "palignr", n), 128,
+                           a=0, b=1, xmm=True)
+        yield Case(binary("xmm1", "xmm1", text, "palignr", 5), 128, a=0,
+                   **mem)
+    for width, insn in (*BROADCASTS, (32, "vbroadcastss")):
+        yield Case(upper("xmm1", f"{insn} xmm1, xmm2"), 128, a=0, b=1,
+                   xmm=True)
+        yield Case(upper("xmm2", f"{insn} xmm2, xmm2"), 128, a=0, b=1,
+                   xmm=True)
+        t, base, index, bv, iv = memory_operand(width, "bi1", None)
+        yield Case(upper("xmm1", f"{insn} xmm1, {t}"), width, a=0, mem=True,
+                   base=base, index=index, base_value=bv, index_value=iv,
+                   xmm=True)
+
+    # By way of the registers that need REX.
+    yield Case("movaps xmm9, xmm1; movaps xmm10, xmm2; movaps xmm2, xmm3; "
+               "pshufd xmm9, xmm10, 0x1b; movaps xmm1, xmm9", 128, a=0, b=1,
+               xmm=True)
+    yield Case("movaps xmm9, xmm1; movaps xmm10, xmm2; movaps xmm2, xmm3; "
+               "punpcklbw xmm9, xmm10; movaps xmm1, xmm9", 128, a=0, b=1,
+               xmm=True)
+    yield Case("movaps xmm10, xmm1; movaps xmm12, xmm2; "
+               "vpunpckhwd xmm9, xmm10, xmm12; movaps xmm0, xmm9", 128, a=0,
+               b=1, xmm=True)
+    yield Case("movaps xmm10, xmm1; vpsrldq xmm9, xmm10, 3; "
+               "movaps xmm0, xmm9", 128, a=0, b=1, xmm=True)
+    yield Case("movaps xmm12, xmm2; vpbroadcastw xmm9, xmm12; "
+               "movaps xmm0, xmm9", 128, a=0, b=1, xmm=True)
+
+    # Each gadget with memory, at every operand shape and segment override.
+    yield from sweep(lambda m: f"pshufd xmm1, {m}, 0x4e", 128, "xmm1")
+    yield from sweep(lambda m: f"punpckhbw xmm1, {m}", 128, "xmm1")
+    yield from sweep(lambda m: f"vpshufhw xmm1, {m}, 0x93", 128, "xmm1")
+    yield from sweep(lambda m: f"vpalignr xmm0, xmm1, {m}, 9", 128, "xmm0")
+    for width, insn in BROADCASTS:
+        yield from sweep(lambda m: f"{insn} xmm1, {m}", width, "xmm1")
+    for target in MISALIGNED:
+        for width, insn in ((128, "vpshufd xmm0, {}, 0x1b"),
+                            (128, "vpunpcklwd xmm0, xmm1, {}"),
+                            (32, "vpbroadcastd xmm0, {}"),
+                            (64, "vpbroadcastq xmm0, {}")):
+            t, base, _, bv, _ = memory_operand(width, "b", None,
+                                               target=target)
+            yield Case(upper("xmm0", insn.format(t)), width, a=0, mem=True,
+                       base=base, base_value=bv, operand=target, xmm=True)
+
+    # VEX.256, left to TCG.
+    for insn in ("vpshufd ymm0, ymm1, 0x1b", "vpsrldq ymm0, ymm1, 3",
+                 "vpunpcklbw ymm0, ymm1, ymm2", "vpalignr ymm0, ymm1, ymm2, 5",
+                 "vpbroadcastd ymm0, xmm2"):
+        yield Case("vinsertf128 ymm1, ymm1, xmm3, 1; "
+                   f"vinsertf128 ymm2, ymm2, xmm0, 1; {insn}; "
+                   "vextractf128 xmm3, ymm0, 1", 128, a=0, b=1, xmm=True)
 
 
 def addr32_cases():

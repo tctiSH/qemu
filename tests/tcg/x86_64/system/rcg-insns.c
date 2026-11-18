@@ -17,8 +17,8 @@
  *
  * rcg-insns.ref holds TCG's hashes. To regenerate it after rcg-gen.py
  * changes the cases, run the test under TCG (in a build with TCTI, with
- * -accel tcg,rcg=off and -cpu qemu64,+xsave,+xsaveopt,+avx) and copy the
- * output over it.
+ * -accel tcg,rcg=off and -cpu $(RCG_CPU) from
+ * tests/tcg/x86_64/Makefile.softmmu-target) and copy the output over it.
  */
 
 #include "rcg-test.h"

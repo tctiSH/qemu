@@ -141,6 +141,29 @@ static const struct {
     { gen_MOVD_to,   RCG_OP_MOVD, 0, 2, -1 },
     { gen_MOVD_from, RCG_OP_MOVD, 0, 2, -1 },
     { gen_MOVQ,      RCG_OP_MOVD, 0, 2, -1 },
+    /*
+     * Table shuffles, by a table that rcg_tbl_table() works out: of the
+     * source alone (RCG_OP_TBL1), which is op[1] for PSHUFD, PSHUFLW,
+     * PSHUFHW, PSRLDQ and PSLLDQ and op[2] for the broadcasts, or of the
+     * first input, op[1], and the source, op[2] (RCG_OP_TBL2). op[1] is the
+     * destination again in the legacy encodings, and VEX.vvvv's register in
+     * the VEX ones. The MMX forms of the unpacks and of PALIGNR have no
+     * gadget: rcg_kind() refuses MMX registers.
+     */
+    { gen_PSHUFD,       RCG_OP_TBL1, 0, 1, -1 },
+    { gen_PSHUFLW,      RCG_OP_TBL1, 0, 1, -1 },
+    { gen_PSHUFHW,      RCG_OP_TBL1, 0, 1, -1 },
+    { gen_PSRLDQ_i,     RCG_OP_TBL1, 0, 1, -1 },
+    { gen_PSLLDQ_i,     RCG_OP_TBL1, 0, 1, -1 },
+    { gen_VPBROADCASTB, RCG_OP_TBL1, 0, 2, -1 },
+    { gen_VPBROADCASTW, RCG_OP_TBL1, 0, 2, -1 },
+    { gen_VPBROADCASTD, RCG_OP_TBL1, 0, 2, -1 },
+    { gen_VPBROADCASTQ, RCG_OP_TBL1, 0, 2, -1 },
+    { gen_PUNPCKLBW,    RCG_OP_TBL2, 0, 2, -1 },
+    { gen_PUNPCKLWD,    RCG_OP_TBL2, 0, 2, -1 },
+    { gen_PUNPCKHBW,    RCG_OP_TBL2, 0, 2, -1 },
+    { gen_PUNPCKHWD,    RCG_OP_TBL2, 0, 2, -1 },
+    { gen_PALIGNR,      RCG_OP_TBL2, 0, 2, -1 },
 };
 
 /* Each op's ps, pd, ss and sd, in this order: see rcg_select(). */
@@ -159,7 +182,8 @@ QEMU_BUILD_BUG_ON(RCG_OP_VMOVSS - RCG_OP_VMOVDQA !=
                   RCG_OP_SQRTSD - RCG_OP_ADDPS ||
                   RCG_OP_VUNPCKHPD - RCG_OP_VUNPCKLPS !=
                   RCG_OP_UNPCKHPD - RCG_OP_UNPCKLPS ||
-                  RCG_OP_VPXOR - RCG_OP_VPAND != RCG_OP_PXOR - RCG_OP_PAND);
+                  RCG_OP_VPXOR - RCG_OP_VPAND != RCG_OP_PXOR - RCG_OP_PAND ||
+                  RCG_OP_VTBL2 - RCG_OP_VTBL1 != RCG_OP_TBL2 - RCG_OP_TBL1);
 
 static bool sse_needs_alignment(DisasContext *s, X86DecodedInsn *decode,
                                 MemOp ot);
@@ -182,10 +206,11 @@ static char rcg_kind(DisasContext *s, X86DecodedOp *op)
         return 'i';
     case X86_OP_SSE:
         /*
-         * rcg_operands() takes the width from the RCG op, or for MOVD and
-         * MOVQ from the general register (64 bits between XMM registers). A
-         * VEX.256 encoding works on the whole YMM register, which no gadget
-         * does; a VEX.128 one takes the op rcg_vex_op() picks.
+         * rcg_operands() takes the width from the RCG op, for MOVD and MOVQ
+         * from the general register (64 bits between XMM registers), and for
+         * a table shuffle from memory from the memory operand. A VEX.256
+         * encoding works on the whole YMM register, which no gadget does; a
+         * VEX.128 one takes the op rcg_vex_op() picks.
          */
         return (s->prefix & PREFIX_VEX) && s->vex_l ? 0 : 'x';
     default:
@@ -700,21 +725,28 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
     }
     case RCG_KIND_VFP:
     case RCG_KIND_VLANE:
-    case RCG_KIND_VLOGIC: {
+    case RCG_KIND_VLOGIC:
+    case RCG_KIND_VTBL: {
         /*
-         * ss and sd take the low lane of the source; ps and pd, the unpacks
-         * and the logic ops take all 16 bytes, which in memory need LSE2, as
-         * for MOVDQA, and must be aligned in the legacy encodings, whose
-         * gadgets require it, and may be misaligned in the VEX ones, whose
-         * gadgets allow it. The floating-point gadgets read float_status's
-         * flags directly; the others raise nothing.
+         * ss and sd take the low lane of the source; ps and pd, the unpacks,
+         * the logic ops and the table shuffles take all 16 bytes, which in
+         * memory need LSE2, as for MOVDQA, and must be aligned in the legacy
+         * encodings, whose gadgets require it, and may be misaligned in the
+         * VEX ones, whose gadgets allow it. A broadcast's source in memory
+         * is only the element it takes, which has no alignment to keep. The
+         * floating-point gadgets read float_status's flags directly; the
+         * others raise nothing.
          */
         char a = rcg_kind(s, first), b = rcg_kind(s, second);
         bool fp = rcg_facts[op].kind == RCG_KIND_VFP;
         bool vex = s->prefix & PREFIX_VEX;
         int type = fp ? (op - RCG_OP_ADDPS) % 4 : 0;
 
-        *ot = type == 2 ? MO_32 : type == 3 ? MO_64 : MO_128;
+        if (rcg_facts[op].kind == RCG_KIND_VTBL) {
+            *ot = b == 'm' ? second->ot : MO_128;
+        } else {
+            *ot = type == 2 ? MO_32 : type == 3 ? MO_64 : MO_128;
+        }
         if (a != 'x' || !b ||
             (b == 'm' && *ot == MO_128 &&
              (!(cpuinfo & CPUINFO_LSE2) ||
@@ -876,8 +908,89 @@ static int rcg_vex_op(RCGOp op, int form)
         return op - RCG_OP_PAND + RCG_OP_VPAND;
     case RCG_KIND_VMOVD:
         return form == RCG_FORM_RX ? op : RCG_OP_VMOVD;
+    case RCG_KIND_VTBL:
+        return op - RCG_OP_TBL1 + RCG_OP_VTBL1;
     default:
         return -1;
+    }
+}
+
+/* A table shuffle's table entry for a byte past the inputs, which gives 0. */
+#define RCG_TBL_ZERO 0xff
+
+QEMU_BUILD_BUG_ON(RCG_TABLE_WORDS * 8 != 16);
+
+/*
+ * The table of a table shuffle for decode's instruction, whose source is
+ * second. Byte i of the result is byte t[i] of the inputs: with two inputs,
+ * bytes 0 to 15 are the first input's and 16 to 31 the source's; with one,
+ * bytes 0 to 15 are the source's. Where t[i] is RCG_TBL_ZERO, the result's
+ * byte is 0. A broadcast takes its element from byte 0 of the source,
+ * whether a register or memory. The tables give the same results as TCG's
+ * helpers and gvec ops.
+ */
+static void rcg_tbl_table(X86DecodedInsn *decode, X86DecodedOp *second,
+                          uint8_t *t)
+{
+    X86GenFunc gen = decode->e.gen;
+    unsigned imm = decode->immediate & 0xff;
+    int i, k;
+
+    if (gen == gen_PSHUFD) {
+        for (i = 0; i < 16; i++) {
+            t[i] = ((imm >> (i / 4 * 2)) & 3) * 4 + i % 4;
+        }
+    } else if (gen == gen_PSHUFLW || gen == gen_PSHUFHW) {
+        /* One half's words shuffled; the other half unchanged. */
+        int half = gen == gen_PSHUFHW ? 8 : 0;
+
+        for (i = 0; i < 16; i++) {
+            t[i] = i;
+        }
+        for (i = 0; i < 8; i++) {
+            t[half + i] = half + ((imm >> (i / 2 * 2)) & 3) * 2 + i % 2;
+        }
+    } else if (gen == gen_PSRLDQ_i || gen == gen_PSLLDQ_i) {
+        int shift = imm;
+
+        for (i = 0; i < 16; i++) {
+            k = gen == gen_PSRLDQ_i ? i + shift : i - shift;
+            t[i] = k >= 0 && k < 16 ? k : RCG_TBL_ZERO;
+        }
+    } else if (gen == gen_VPBROADCASTB || gen == gen_VPBROADCASTW ||
+               gen == gen_VPBROADCASTD || gen == gen_VPBROADCASTQ) {
+        int size = 1 << second->ot;
+
+        for (i = 0; i < 16; i++) {
+            t[i] = i % size;
+        }
+    } else if (gen == gen_PALIGNR) {
+        /*
+         * The two inputs as one of 32 bytes, the source in the low half,
+         * shifted right by imm bytes: 0 from imm 32 on.
+         */
+        for (i = 0; i < 16; i++) {
+            k = i + imm;
+            t[i] = k < 16 ? 16 + k : k < 32 ? k - 16 : RCG_TBL_ZERO;
+        }
+    } else if (gen == gen_PUNPCKLBW || gen == gen_PUNPCKLWD ||
+               gen == gen_PUNPCKHBW || gen == gen_PUNPCKHWD) {
+        /*
+         * The low or high halves of the first input and the source,
+         * interleaved by elements of 1 or 2 bytes, the first input's first.
+         */
+        int size = gen == gen_PUNPCKLWD || gen == gen_PUNPCKHWD ? 2 : 1;
+        int half = gen == gen_PUNPCKHBW || gen == gen_PUNPCKHWD ? 8 : 0;
+
+        for (i = 0; i < 16; i++) {
+            int element = i / (2 * size);
+            int from_source = i / size % 2;
+
+            t[i] = from_source * 16 + half + element * size + i % size;
+        }
+    } else {
+        /* The gadget is already emitted, so it is too late to refuse. */
+        g_assert_not_reached();
     }
 }
 
@@ -897,7 +1010,7 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     bool ordered = false, rotate_left = false, by_cl;
     const RCGSlot *slot;
     const RCGGadget *g;
-    uint64_t words[RCG_MAX_WORDS];
+    uint64_t words[RCG_MAX_WORDS + RCG_TABLE_WORDS];
     TCGTemp *outs[RCG_MAX_WORDS], *ins[RCG_MAX_WORDS];
     TCGv cf = NULL;
     unsigned n, nb_outs = 0, nb_ins = 0;
@@ -1007,7 +1120,8 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
              * MO_ALIGN_16 where sse_needs_alignment() holds: for MOVDQA,
              * MOVAPS and MOVAPD in either encoding, as rcg_select() picks
              * them, and for the legacy encodings of the floating-point,
-             * unpack and logic ops, which rcg_operands() requires.
+             * unpack, logic and table shuffle ops, which rcg_operands()
+             * requires.
              */
             memop |= (s->cpuid_ext_features & CPUID_EXT_AVX
                       ? MO_ATOM_IFALIGN : MO_ATOM_IFALIGN_PAIR) |
@@ -1159,6 +1273,10 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     }
     if (slot->access) {
         n = rcg_pack_words(g, words, n);
+    }
+    if (facts->kind == RCG_KIND_VTBL) {
+        rcg_tbl_table(decode, second, (uint8_t *)&words[n]);
+        n += RCG_TABLE_WORDS;
     }
     tcg_gen_rich(g->gadget, words, n, slot->access ? TCG_RICH_MAY_FAULT : 0,
                  outs, nb_outs, ins, nb_ins);

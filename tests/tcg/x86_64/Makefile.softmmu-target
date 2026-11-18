@@ -39,9 +39,11 @@ run-tlb-next-page: QEMU_OPTS := -m 256M $(QEMU_OPTS)
 
 # rcg_init() turns AVX on for the RCG tests' VEX encodings, and AVX needs
 # XSAVE. QEMU also wants XSAVEOPT, or another CPUID 0xD.1 feature, before
-# it lets the guest set CR4.OSXSAVE.
+# it lets the guest set CR4.OSXSAVE. PALIGNR needs SSSE3, and the integer
+# broadcasts and VBROADCASTSS from a register need AVX2.
+RCG_CPU := qemu64,+xsave,+xsaveopt,+avx,+ssse3,+avx2
 run-rcg-insns run-rcg-jcc run-rcg-faults run-rcg-faults-jcc: \
-	QEMU_OPTS := -cpu qemu64,+xsave,+xsaveopt,+avx $(QEMU_OPTS)
+	QEMU_OPTS := -cpu $(RCG_CPU) $(QEMU_OPTS)
 
 # The RCG tests' cases come from the tables RCG's gadgets are made from,
 # with the data addresses rcg-test.h defines. Making rcg-insns.h also checks
