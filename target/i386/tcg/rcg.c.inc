@@ -116,6 +116,31 @@ static const struct {
     /* UNPCKLPS and UNPCKHPS; rcg_select() picks pd by the prefix. */
     { gen_VUNPCKLPx, RCG_OP_UNPCKLPS, 0, 2, -1 },
     { gen_VUNPCKHPx, RCG_OP_UNPCKHPS, 0, 2, -1 },
+    /*
+     * The integer unpacks of 32 and 64 bits, which call the same helpers as
+     * UNPCKLPS to UNPCKHPD. Their MMX forms have no gadget: rcg_kind()
+     * refuses MMX registers.
+     */
+    { gen_PUNPCKLDQ,  RCG_OP_UNPCKLPS, 0, 2, -1 },
+    { gen_PUNPCKHDQ,  RCG_OP_UNPCKHPS, 0, 2, -1 },
+    { gen_PUNPCKLQDQ, RCG_OP_UNPCKLPD, 0, 2, -1 },
+    { gen_PUNPCKHQDQ, RCG_OP_UNPCKHPD, 0, 2, -1 },
+    /*
+     * PAND to PXOR, which ANDPS to XORPS and their pd forms also decode to.
+     * op[1] is as for the floating-point ops.
+     */
+    { gen_PAND,   RCG_OP_PAND,  0, 2, -1 },
+    { gen_PANDN,  RCG_OP_PANDN, 0, 2, -1 },
+    { gen_POR,    RCG_OP_POR,   0, 2, -1 },
+    { gen_PXOR,   RCG_OP_PXOR,  0, 2, -1 },
+    /*
+     * MOVD and MOVQ to and from general registers, and MOVQ between XMM
+     * registers; with memory, rcg_select() picks MOVSS or MOVSD. Their MMX
+     * forms have no gadget, as for the unpacks.
+     */
+    { gen_MOVD_to,   RCG_OP_MOVD, 0, 2, -1 },
+    { gen_MOVD_from, RCG_OP_MOVD, 0, 2, -1 },
+    { gen_MOVQ,      RCG_OP_MOVD, 0, 2, -1 },
 };
 
 /* Each op's ps, pd, ss and sd, in this order: see rcg_select(). */
@@ -133,7 +158,8 @@ QEMU_BUILD_BUG_ON(RCG_OP_VMOVSS - RCG_OP_VMOVDQA !=
                   RCG_OP_VSQRTSD - RCG_OP_VADDPS !=
                   RCG_OP_SQRTSD - RCG_OP_ADDPS ||
                   RCG_OP_VUNPCKHPD - RCG_OP_VUNPCKLPS !=
-                  RCG_OP_UNPCKHPD - RCG_OP_UNPCKLPS);
+                  RCG_OP_UNPCKHPD - RCG_OP_UNPCKLPS ||
+                  RCG_OP_VPXOR - RCG_OP_VPAND != RCG_OP_PXOR - RCG_OP_PAND);
 
 static bool sse_needs_alignment(DisasContext *s, X86DecodedInsn *decode,
                                 MemOp ot);
@@ -156,9 +182,10 @@ static char rcg_kind(DisasContext *s, X86DecodedOp *op)
         return 'i';
     case X86_OP_SSE:
         /*
-         * rcg_operands() takes the width from the RCG op. A VEX.256
-         * encoding works on the whole YMM register, which no gadget does;
-         * a VEX.128 one takes the op rcg_vex_op() picks.
+         * rcg_operands() takes the width from the RCG op, or for MOVD and
+         * MOVQ from the general register (64 bits between XMM registers). A
+         * VEX.256 encoding works on the whole YMM register, which no gadget
+         * does; a VEX.128 one takes the op rcg_vex_op() picks.
          */
         return (s->prefix & PREFIX_VEX) && s->vex_l ? 0 : 'x';
     default:
@@ -173,7 +200,7 @@ static int rcg_form(char a, char b)
         [RCG_FORM_RI] = "ri", [RCG_FORM_MI] = "mi", [RCG_FORM_R] = "r",
         [RCG_FORM_I] = "i", [RCG_FORM_M] = "m", [RCG_FORM_RRI] = "rri",
         [RCG_FORM_RMI] = "rmi", [RCG_FORM_XX] = "xx", [RCG_FORM_XM] = "xm",
-        [RCG_FORM_MX] = "mx",
+        [RCG_FORM_MX] = "mx", [RCG_FORM_XR] = "xr", [RCG_FORM_RX] = "rx",
     };
     const char want[] = { a, b, 0 };
 
@@ -533,9 +560,23 @@ static bool rcg_select(DisasContext *s, X86DecodedInsn *decode, RCGOp *op,
         /* ps, pd, ss or sd, by the prefix: gen_fp_sse()'s choice. */
         *op += s->prefix & PREFIX_REPZ ? 2 : s->prefix & PREFIX_REPNZ ? 3 :
                s->prefix & PREFIX_DATA ? 1 : 0;
-    } else if (rcg_facts[*op].kind == RCG_KIND_VLANE) {
-        /* ps or pd; decode-new allows no other prefix. */
+    } else if (gen == gen_VUNPCKLPx || gen == gen_VUNPCKHPx) {
+        /*
+         * ps or pd; decode-new allows no other prefix. The integer unpacks
+         * name their op in rcg_insns[] already.
+         */
         *op += s->prefix & PREFIX_DATA ? 1 : 0;
+    } else if (*op == RCG_OP_MOVD && ((*first)->has_ea || (*second)->has_ea)) {
+        /*
+         * With memory, MOVD and MOVQ load as MOVSS and MOVSD do, clearing
+         * the rest of the register, and store only the low lane. The memory
+         * operand is E,y, of 32 or 64 bits, but for gen_MOVQ, whose store
+         * decode-new gives a W,dq destination though it writes 64 bits.
+         */
+        X86DecodedOp *e = (*first)->has_ea ? *first : *second;
+        MemOp ot = gen == gen_MOVQ ? MO_64 : e->ot;
+
+        *op = ot == MO_64 ? RCG_OP_MOVSD : RCG_OP_MOVSS;
     } else if (*op == RCG_OP_SUB && !writes) {
         *op = RCG_OP_CMP;
     } else if (*op == RCG_OP_AND && !writes) {
@@ -643,15 +684,30 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
         }
         return rcg_form(a, b);
     }
-    case RCG_KIND_VFP:
-    case RCG_KIND_VLANE: {
+    case RCG_KIND_VMOVD: {
         /*
-         * ss and sd take the low lane of the source, and ps and pd all 16
-         * bytes, which in memory need LSE2, as for MOVDQA, and must be
-         * aligned in the legacy encodings, whose gadgets require it, and
-         * may be misaligned in the VEX ones, whose gadgets allow it. The
-         * floating-point gadgets read float_status's flags directly; the
-         * unpacks raise nothing.
+         * MOVD and MOVQ with a general register take its width; MOVQ
+         * between XMM registers is 64 bits. rcg_select() has already sent
+         * the memory forms to MOVSS and MOVSD.
+         */
+        char a = rcg_kind(s, first), b = rcg_kind(s, second);
+
+        *ot = a == 'r' ? first->ot : b == 'r' ? second->ot : MO_64;
+        if (!a || !b || (*ot != MO_32 && *ot != MO_64)) {
+            return -1;
+        }
+        return rcg_form(a, b);
+    }
+    case RCG_KIND_VFP:
+    case RCG_KIND_VLANE:
+    case RCG_KIND_VLOGIC: {
+        /*
+         * ss and sd take the low lane of the source; ps and pd, the unpacks
+         * and the logic ops take all 16 bytes, which in memory need LSE2, as
+         * for MOVDQA, and must be aligned in the legacy encodings, whose
+         * gadgets require it, and may be misaligned in the VEX ones, whose
+         * gadgets allow it. The floating-point gadgets read float_status's
+         * flags directly; the others raise nothing.
          */
         char a = rcg_kind(s, first), b = rcg_kind(s, second);
         bool fp = rcg_facts[op].kind == RCG_KIND_VFP;
@@ -804,8 +860,8 @@ static unsigned rcg_pack_words(const RCGGadget *g, uint64_t *words,
  * The op of a VEX.128 encoding of op, in form, or -1 if it has none. Its
  * gadgets take VEX.vvvv's register as their first input where the
  * instruction has one, and clear bits 128 to 255 of the destination
- * register. A move to memory is the same as the legacy encoding and uses
- * its gadgets.
+ * register. A move to memory or to a general register is the same as the
+ * legacy encoding and uses its gadgets.
  */
 static int rcg_vex_op(RCGOp op, int form)
 {
@@ -816,6 +872,10 @@ static int rcg_vex_op(RCGOp op, int form)
         return op - RCG_OP_ADDPS + RCG_OP_VADDPS;
     case RCG_KIND_VLANE:
         return op - RCG_OP_UNPCKLPS + RCG_OP_VUNPCKLPS;
+    case RCG_KIND_VLOGIC:
+        return op - RCG_OP_PAND + RCG_OP_VPAND;
+    case RCG_KIND_VMOVD:
+        return form == RCG_FORM_RX ? op : RCG_OP_VMOVD;
     default:
         return -1;
     }
@@ -941,14 +1001,13 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
         bar |= slot->access & RCG_STORE ? TCG_MO_LD_ST | TCG_MO_ST_ST : 0;
         ordered = tcg_gen_rich_mo(bar);
         memop = (facts->src_ot >= 0 ? facts->src_ot : ot) | MO_LE;
-        if ((facts->kind == RCG_KIND_VMOV || facts->kind == RCG_KIND_VFP ||
-             facts->kind == RCG_KIND_VLANE) && ot == MO_128) {
+        if (ot == MO_128) {
             /*
              * The atomicity of gen_ldo_env_A0() and gen_sto_env_A0(), with
              * MO_ALIGN_16 where sse_needs_alignment() holds: for MOVDQA,
              * MOVAPS and MOVAPD in either encoding, as rcg_select() picks
-             * them, and for the legacy encodings of the floating-point ops
-             * and unpacks, which rcg_operands() requires.
+             * them, and for the legacy encodings of the floating-point,
+             * unpack and logic ops, which rcg_operands() requires.
              */
             memop |= (s->cpuid_ext_features & CPUID_EXT_AVX
                       ? MO_ATOM_IFALIGN : MO_ATOM_IFALIGN_PAIR) |

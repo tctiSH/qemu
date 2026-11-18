@@ -36,9 +36,13 @@
 
 #define PAGE 4096
 
-/* 2 MiB mapped with 4K pages, and the boundary in it between two pages. */
+/*
+ * 2 MiB mapped with 4K pages, and the boundary in it between two pages,
+ * above the 2 MiB page from RCG_MEM that rcg_init() maps.
+ */
 #define REGION 0x2000000ul
 #define BOUNDARY (REGION + 2 * PAGE)
+_Static_assert(RCG_MEM + 0x200000 <= REGION, "RCG_MEM's page reaches REGION");
 
 /* Page table entry bits: present, writable, accessed, dirty. */
 #define PTE_P 0x1

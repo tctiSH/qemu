@@ -239,6 +239,72 @@ VLANE_OPS = tuple(VLane(high, lane, vex) for vex in (False, True)
                   for high in (False, True) for lane in (32, 64))
 
 
+class VLogic:
+    """ PAND, PANDN, POR and PXOR: dest = dest op src, on all 16 bytes,
+    like the gvec ops that gen_PAND, gen_PANDN, gen_POR and gen_PXOR emit.
+    ANDPS, ANDNPS, ORPS and XORPS, and their pd forms, decode to the same
+    gen functions. PANDN computes (NOT dest) AND src. a64 is the AArch64
+    instruction, and swap says that it takes the source first: PANDN's,
+    BIC, clears the bits of its first operand that are set in its second.
+    vex is for the VEX.128 encodings, as for VFp. """
+
+    def __init__(self, name, a64, swap=False, vex=False):
+        self.name = ("v" if vex else "") + name
+        self.a64 = a64
+        self.swap = swap
+        self.width = 128
+        self.vex = vex
+
+    def reads_v(self, form=None):
+        return self.vex
+
+
+# The legacy encodings' ops come first, then the VEX ones' in the same
+# order, which rcg_vex_op() relies on.
+VLOGIC_OPS = tuple(VLogic(name, a64, swap, vex) for vex in (False, True)
+                   for name, a64, swap in (("pand", "and", False),
+                                           ("pandn", "bic", True),
+                                           ("por", "orr", False),
+                                           ("pxor", "eor", False)))
+
+
+class VMovd:
+    """ MOVD and MOVQ between a general register and the low lane of an XMM
+    register, and MOVQ between XMM registers. The op is movd for all of
+    them; the width tells MOVD from MOVQ, and xx is 64 bits only. Writing
+    an XMM register (xr, xx) clears the rest of that register, as
+    gen_MOVD_to and gen_MOVQ do; writing a general register (rx)
+    zero-extends 32 bits, as gen_MOVD_from's writeback does. The memory
+    forms use MOVSS's and MOVSD's gadgets, which rcg_select() picks.
+
+    vex is for the VEX.128 encodings, which only have gadgets for an XMM
+    destination: they also clear its bits 128 to 255. To a general
+    register, they are the same as the legacy encoding and use its
+    gadget. """
+
+    def __init__(self, vex=False):
+        self.name = "vmovd" if vex else "movd"
+        self.vex = vex
+
+    @property
+    def forms(self):
+        return ("xr", "xx") if self.vex else ("xr", "rx", "xx")
+
+    @staticmethod
+    def widths(form):
+        return (64,) if form == "xx" else (32, 64)
+
+    def reads_v(self, form=None):
+        return False
+
+
+VMOVD_OPS = (VMovd(), VMovd(vex=True))
+
+# The kinds of the SSE ops, which have VEX.128 encodings (op.vex) whose
+# gadgets may read VEX.vvvv's register (op.reads_v()).
+VEX_KINDS = ("vmov", "vfp", "vlane", "vlogic", "vmovd")
+
+
 class Alu:
     """ A two-operand ALU instruction: dest = dest op src. The result is
     written back unless writes is false (CMP and TEST). cc is the lazy-flags
@@ -574,13 +640,14 @@ class Spec:
 
     kind is "alu", "zero" (XOR of a register with itself), "mov", "lea",
     "push", "pop", "extend", "unary", "shift", "mul", "imul3", "bt", "cbw",
-    "cwd", "xchg", "leave", "call", "jmp", "ret", "vmov", "vfp" or "vlane".
-    form is the destination's kind then the source's (r, m or i, or x for an
-    XMM register), then for IMUL3 an i if it takes an immediate too; for MUL
-    and IMUL with one operand it is the source's, for CBW the destination's,
-    for CALL and JMP the target's (i for CALL rel32), for RET i and for
-    LEAVE r. shape and seg are the memory operand's, if any. ordered is for
-    the twin that keeps the guest's memory order (tcg_ldst_ordered()).
+    "cwd", "xchg", "leave", "call", "jmp", "ret", "vmov", "vfp", "vlane",
+    "vlogic" or "vmovd". form is the destination's kind then the source's
+    (r, m or i, or x for an XMM register), then for IMUL3 an i if it takes
+    an immediate too; for MUL and IMUL with one operand it is the source's,
+    for CBW the destination's, for CALL and JMP the target's (i for CALL
+    rel32), for RET i and for LEAVE r. shape and seg are the memory
+    operand's, if any. ordered is for the twin that keeps the guest's
+    memory order (tcg_ldst_ordered()).
     """
 
     def __init__(self, kind, op, form, width, shape=None, seg=False,
@@ -616,7 +683,7 @@ class Spec:
             return self.form in ("rr", "rm")
         if self.kind == "vfp":
             return self.op.reads_d
-        if self.kind == "vlane":
+        if self.kind in ("vlane", "vlogic"):
             return not self.op.vex
         return self.kind in ("alu", "unary", "shift", "bt", "cbw", "xchg")
 
@@ -695,8 +762,7 @@ class Spec:
             if (self.kind in ("alu", "bt") and not self.op.writes and
                     operands[0] == "d"):
                 operands[0] = "s1"
-            if (self.kind in ("vmov", "vfp", "vlane") and
-                    self.op.reads_v(self.form)):
+            if self.kind in VEX_KINDS and self.op.reads_v(self.form):
                 operands.insert(1, "v")
         words = []
         for operand in operands:
@@ -816,6 +882,13 @@ def specs():
     for op in VLANE_OPS:
         for form in ("xx", "xm"):
             yield from with_memory(Spec("vlane", op, form, op.width))
+    for op in VLOGIC_OPS:
+        for form in ("xx", "xm"):
+            yield from with_memory(Spec("vlogic", op, form, op.width))
+    for op in VMOVD_OPS:
+        for form in op.forms:
+            for width in op.widths(form):
+                yield Spec("vmovd", op, form, width)
 
 
 def with_memory(spec):
@@ -1661,12 +1734,12 @@ def packed_vfp_lines(g, spec, slow):
            f"str q2, [{env}, {g.word('d')}]")
 
 
-def vlane_body(g, spec):
-    # The punpckl and punpckh helpers' lanes: low halves for UNPCKL, high
-    # ones for UNPCKH, the first input's lane first (the destination, or
-    # for a VEX encoding VEX.vvvv's register). A memory source is all 16
-    # bytes, which gen_load_sse() loads too, and must be aligned but for a
-    # VEX encoding.
+def binary128_body(g, spec, insn):
+    # A 16-byte op with two inputs: insn computes V2, the result, from V0,
+    # the first input (the destination, or for a VEX encoding VEX.vvvv's
+    # register), and V1, the source. A memory source is all 16 bytes,
+    # which gen_load_sse() loads too, and must be aligned but for a VEX
+    # encoding.
     op, env = spec.op, g.env
     if spec.has_mem:
         g.ea(ADDR)
@@ -1680,10 +1753,40 @@ def vlane_body(g, spec):
     else:
         g.emit(f"ldr q0, [{env}, {g.word('d')}]")
         g.reads.add("d")
-    t = "4s" if op.lane == 32 else "2d"
-    g.emit(f"zip{2 if op.high else 1} v2.{t}, v0.{t}, v1.{t}",
+    g.emit(insn,
            f"str q2, [{env}, {g.word('d')}]")
     clear_upper(g, spec)
+
+
+def vlane_body(g, spec):
+    # The punpckl and punpckh helpers' lanes: low halves for UNPCKL, high
+    # ones for UNPCKH, the first input's lane first.
+    op = spec.op
+    t = "4s" if op.lane == 32 else "2d"
+    binary128_body(g, spec,
+                   f"zip{2 if op.high else 1} v2.{t}, v0.{t}, v1.{t}")
+
+
+def vlogic_body(g, spec):
+    op = spec.op
+    a, b = ("v1", "v0") if op.swap else ("v0", "v1")
+    binary128_body(g, spec, f"{op.a64} v2.16b, {a}.16b, {b}.16b")
+
+
+def vmovd_body(g, spec):
+    # gen_MOVD_to and gen_MOVQ clear the XMM register, then store the low
+    # lane; gen_MOVD_from copies the low lane to the general register,
+    # zero-extending 32 bits, which the 32-bit LDR already does. The load
+    # comes first, so the source may be the destination.
+    env, width = g.env, spec.width
+    lane = w(A) if width == 32 else A
+    g.emit(f"ldr {lane}, [{env}, {g.word('s')}]")
+    if spec.form[0] == "r":
+        g.write_reg(A, "d", 64)
+        return
+    g.emit(f"add {T}, {env}, {g.word('d')}",
+           f"stp {A}, xzr, [{T}]")
+    clear_upper(g, spec, T)
 
 
 def zero_body(g, spec):
@@ -2093,6 +2196,8 @@ BODIES = {
     "vmov": vmov_body,
     "vfp": vfp_body,
     "vlane": vlane_body,
+    "vlogic": vlogic_body,
+    "vmovd": vmovd_body,
     "fjcc": fused_body,
     "fjccgoto": fused_body,
     "setcc": setcc_body,
@@ -2306,12 +2411,13 @@ OP_NAMES = ("add", "sub", "and", "or", "xor", "cmp", "test", "adc", "sbb",
             "sar", "ror", "mul", "imul", "imul3", "bt", "bts", "btr", "btc",
             "cbw", "cwd", "xchg", "leave", "call", "jmp", "ret",
             *(op.name for op in VMOV_OPS), *(op.name for op in VFP_OPS),
-            *(op.name for op in VLANE_OPS))
+            *(op.name for op in VLANE_OPS), *(op.name for op in VLOGIC_OPS),
+            *(op.name for op in VMOVD_OPS))
 FORM_NAMES = ("rr", "rm", "mr", "ri", "mi", "r", "i", "m", "rri", "rmi",
-              "xx", "xm", "mx")
+              "xx", "xm", "mx", "xr", "rx")
 KIND_NAMES = ("alu", "zero", "mov", "lea", "push", "pop", "extend", "unary",
               "shift", "mul", "imul3", "bt", "cbw", "cwd", "xchg", "leave",
-              "call", "jmp", "ret", "vmov", "vfp", "vlane")
+              "call", "jmp", "ret", "vmov", "vfp", "vlane", "vlogic", "vmovd")
 WORD_NAMES = ("d", "s", "s1", "base", "index", "disp", "seg", "imm", "oi",
               "tlb", "ccop", "v")
 MAX_WORDS = len(WORD_REGS)
@@ -2336,9 +2442,9 @@ def gadget_file(spec):
     name = op_name(spec)
     if spec.kind in ("shift", "mul", "bt"):
         return spec.kind
-    if spec.kind in ("vmov", "vfp", "vlane") and spec.op.vex:
+    if spec.kind in VEX_KINDS and spec.op.vex:
         return "vex"
-    if spec.kind == "vmov":
+    if spec.kind in ("vmov", "vlogic", "vmovd"):
         return "sse"
     if spec.kind in ("vfp", "vlane"):
         return "vfp"
@@ -2856,6 +2962,9 @@ def insn_cases():
     yield from vex_vmov_cases()
     yield from vfp_cases()
     yield from vex_vfp_cases()
+    yield from vec_alias_cases()
+    yield from mmx_cases()
+    yield from movd_cases()
     yield from cond_cases()
     yield from branch_cases()
     yield from chain_cases()
@@ -3398,16 +3507,26 @@ def fault_cases():
         m = f"{PTR[width]} ptr [rbx]"
         yield mem(f"{insn} xmm1, {m}", width, xmm=True)
         yield mem(f"{insn} {m}, xmm2", width, writes=True, xmm=True)
-    # The SSE floating-point ops' and the unpacks' loads, the 16-byte ones
-    # aligned but for the VEX encodings, with XMM1 the first input of each,
-    # which VALUE_FP in rcg-faults.c is chosen for; and the VEX moves' loads.
-    for op in VFP_OPS + VLANE_OPS:
+    # The SSE floating-point ops', the unpacks' and the logic ops' loads,
+    # the 16-byte ones aligned but for the VEX encodings, with XMM1 the
+    # first input of each, which VALUE_FP in rcg-faults.c is chosen for.
+    # The logic ops take floating-point values here too: rcg-faults checks
+    # an integer XMM case by comparing XMM1 with memory, which suits only
+    # a load, and these combine XMM1 with memory.
+    for op in VFP_OPS + VLANE_OPS + VLOGIC_OPS:
         m = f"{PTR[op.width]} ptr [rbx]"
         unary = isinstance(op, VFp) and op.unary and op.packed
         text = (f"{op.name} xmm1, {m}" if not op.vex or unary
                 else f"{op.name} xmm1, xmm1, {m}")
-        yield mem(text, op.width, xmm=XMM_F64 if op.lane == 64 else XMM_F32,
+        xmm = XMM_F64 if isinstance(op, VLogic) else vec_xmm(op)
+        yield mem(text, op.width, xmm=xmm,
                   aligned=op.width == 128 and not op.vex)
+    # MOVD and MOVQ, which take MOVSS's and MOVSD's gadgets with memory.
+    for width, insn in ((32, "movd"), (64, "movq")):
+        m = f"{PTR[width]} ptr [rbx]"
+        yield mem(f"{insn} xmm1, {m}", width, xmm=True)
+        yield mem(f"{insn} {m}, xmm2", width, writes=True, xmm=True)
+    # The VEX moves' loads.
     yield mem("vmovdqu xmm1, xmmword ptr [rbx]", 128, xmm=True)
     yield mem("vmovaps xmm1, xmmword ptr [rbx]", 128, xmm=True, aligned=True)
     for width, insn in ((64, "vmovsd"), (32, "vmovss")):
@@ -3720,20 +3839,30 @@ def scalar_vmov_cases():
     yield Case(".byte 0x66, 0x0f, 0x12, 0xca", 64, a=0, xmm=True)
 
 
+def vec_xmm(op):
+    """ The xmm of op's cases: floating-point values for the floating-point
+    ops and the unpacks, by their lanes, and integer values for the logic
+    ops (but in memory_cases()). """
+    if isinstance(op, VLogic):
+        return True
+    return XMM_F64 if op.lane == 64 else XMM_F32
+
+
 def vfp_cases():
-    """ The SSE floating-point ops and the unpacks, between XMM registers and
-    with memory at every operand shape and segment override and
-    RIP-relative, over the floating-point values, and with XMM9, XMM10 and
-    XMM12, which need REX, copied from and to the registers the test loads.
-    XMM2 then takes XMM3's value, so that reading XMM2 for XMM10 would show.
-    b, which nothing reads, makes the cases without memory take every pair
-    of values. The packed floating-point ops also run with normal values
-    only, whose lanes can take the host's FPU (for SQRT, the positive ones).
+    """ The SSE floating-point ops, the unpacks and the logic ops, between
+    XMM registers and with memory at every operand shape and segment
+    override and RIP-relative, over the floating-point values (the integer
+    ones for the logic ops), and with XMM9, XMM10 and XMM12, which need
+    REX, copied from and to the registers the test loads. XMM2 then takes
+    XMM3's value, so that reading XMM2 for XMM10 would show. b, which
+    nothing reads, makes the cases without memory take every pair of
+    values. The packed floating-point ops also run with normal values only,
+    whose lanes can take the host's FPU (for SQRT, the positive ones).
     vex_vfp_cases() tests the VEX encodings. """
-    for op in VFP_OPS + VLANE_OPS:
+    for op in VFP_OPS + VLANE_OPS + VLOGIC_OPS:
         if op.vex:
             continue
-        xmm = XMM_F64 if op.lane == 64 else XMM_F32
+        xmm = vec_xmm(op)
         width = op.width
         yield Case(f"{op.name} xmm1, xmm2", width, a=0, b=1, xmm=xmm)
         yield Case(f"{op.name} xmm3, xmm3", width, a=0, xmm=xmm)
@@ -3764,7 +3893,8 @@ def vfp_cases():
 def upper(dest, insn):
     """ insn, which writes XMM register dest, between moving XMM3 to bits
     128 to 255 of dest and moving those to XMM3, which the test compares:
-    a VEX.128 encoding must clear them. dest must not be XMM3. """
+    a VEX.128 encoding must clear them, and a legacy one keep them. dest
+    must not be XMM3. """
     y = "y" + dest[1:]
     return (f"vinsertf128 {y}, {y}, xmm3, 1; {insn}; "
             f"vextractf128 xmm3, {y}, 1")
@@ -3854,10 +3984,10 @@ def vex_vfp_cases():
     but those writing XMM3 or XMM9 checks bits 128 to 255 by way of
     upper(). The packed floating-point ops also run with normal values
     only. Packed SQRT has no VEX.vvvv input. """
-    for op in VFP_OPS + VLANE_OPS:
+    for op in VFP_OPS + VLANE_OPS + VLOGIC_OPS:
         if not op.vex:
             continue
-        xmm = XMM_F64 if op.lane == 64 else XMM_F32
+        xmm = vec_xmm(op)
         width = op.width
         unary = isinstance(op, VFp) and op.unary and op.packed
 
@@ -3899,6 +4029,96 @@ def vex_vfp_cases():
             yield Case(upper("xmm0", insn("xmm0", "xmm1", text)), width,
                        a=0, mem=True, base=base, index=index, base_value=bv,
                        index_value=iv, xmm=n)
+
+
+def vec_alias_cases():
+    """ The instructions that take the unpacks' and logic ops' gadgets by
+    other decodings: the integer unpacks of 32 and 64 bits, and ANDPS to
+    XORPS and their pd forms, in both encodings, between registers and
+    with memory, over the integer values. Each case between registers
+    checks the destination's bits 128 to 255 by way of upper(). A VEX.256
+    encoding works on the whole YMM register and is left to TCG. One case,
+    VXORPS, checks its result: the inputs' bits 128 to 255 are set from
+    XMM3 and XMM0, since the test's legacy loads do not set them, and the
+    result's go to XMM3, which the test compares. """
+    text, base, index, bv, iv = memory_operand(128, "bi1", None)
+    mem = dict(mem=True, base=base, index=index, base_value=bv,
+               index_value=iv, xmm=True)
+    for insn in ("punpckldq", "punpckhdq", "punpcklqdq", "punpckhqdq",
+                 "andps", "andnps", "orps", "xorps", "andpd", "andnpd",
+                 "orpd", "xorpd"):
+        yield Case(upper("xmm1", f"{insn} xmm1, xmm2"), 128, a=0, b=1,
+                   xmm=True)
+        yield Case(f"{insn} xmm1, {text}", 128, a=0, **mem)
+        yield Case(upper("xmm0", f"v{insn} xmm0, xmm1, xmm2"), 128, a=0,
+                   b=1, xmm=True)
+        yield Case(upper("xmm0", f"v{insn} xmm0, xmm1, {text}"), 128, a=0,
+                   **mem)
+    yield Case("vinsertf128 ymm1, ymm1, xmm3, 1; "
+               "vinsertf128 ymm2, ymm2, xmm0, 1; vxorps ymm0, ymm1, ymm2; "
+               "vextractf128 xmm3, ymm0, 1", 128, a=0, b=1, xmm=True)
+
+
+def mmx_cases():
+    """ The MMX forms of the logic ops, the unpacks of 32 bits, and MOVD
+    and MOVQ, between registers and with memory, which stay with TCG:
+    rcg_kind() refuses MMX registers. They end in general registers, which
+    the test compares. """
+    yield Case("movq mm0, rax; movq mm1, rcx; pand mm0, mm1; por mm0, mm1; "
+               "pandn mm1, mm0; pxor mm0, mm1; punpckldq mm0, mm1; "
+               "punpckhdq mm1, mm0; movd eax, mm0; movq rcx, mm1; emms", 64,
+               a=0, b=1)
+    text, base, _, bv, _ = memory_operand(32, "b", None)
+    mem = dict(mem=True, base=base, base_value=bv)
+    yield Case(f"movd mm0, {text}; movq rax, mm0; emms", 32, a=0, **mem)
+    yield Case(f"movq mm0, rax; movd {text}, mm0; emms", 32, a=0,
+               writes=True, **mem)
+
+
+def movd_cases():
+    """ MOVD and MOVQ between general and XMM registers, of each width and
+    in both encodings, with R9, XMM9 and XMM10, which need REX, by way of
+    the registers the test loads; MOVQ between XMM registers by both of
+    its opcodes; and to and from memory, which take MOVSS's and MOVSD's
+    gadgets, by each opcode. Each case writing XMM1 or XMM2 checks its
+    bits 128 to 255 by way of upper(): a VEX.128 encoding clears them, and
+    a legacy one keeps them. """
+    regs = (("eax", "r9d", 32, "movd"), ("rax", "r9", 64, "movq"))
+    for v in ("", "v"):
+        for r, r9, width, mov in regs:
+            yield Case(upper("xmm1", f"{v}{mov} xmm1, {r}"), width, a=0,
+                       xmm=True)
+            yield Case(f"{v}{mov} {r}, xmm2", width, a=0, xmm=True)
+            yield Case(f"mov r9, rax; {v}{mov} xmm9, {r9}; "
+                       f"{v}movaps xmm1, xmm9", width, a=0, xmm=True)
+            yield Case(f"{v}movaps xmm10, xmm2; {v}{mov} {r9}, xmm10; "
+                       f"mov rcx, r9", width, a=0, xmm=True)
+        yield Case(upper("xmm1", f"{v}movq xmm1, xmm2"), 64, a=0, xmm=True)
+        yield Case(upper("xmm1", f"{v}movq xmm1, xmm1"), 64, a=0, xmm=True)
+        yield Case(f"{v}movaps xmm10, xmm2; {v}movq xmm9, xmm10; "
+                   f"{v}movaps xmm1, xmm9", 64, a=0, xmm=True)
+        for _, _, width, mov in regs:
+            text, base, _, bv, _ = memory_operand(width, "b", None)
+            mem = dict(mem=True, base=base, base_value=bv, xmm=True)
+            yield Case(upper("xmm1", f"{v}{mov} xmm1, {text}"), width, a=0,
+                       **mem)
+            yield Case(f"{v}{mov} {text}, xmm2", width, a=0, writes=True,
+                       **mem)
+    # Encodings the assembler does not pick: MOVQ by 66 0F D6 between
+    # registers (XMM1 to XMM2), and MOVQ with memory by 66 REX.W 0F 6E and
+    # 7E (XMM1 from [RBX+8], XMM2 to it), each also in its VEX encoding.
+    text, base, _, bv, _ = memory_operand(64, "b", None)
+    assert text == "qword ptr [rbx+8]"
+    mem = dict(mem=True, base=base, base_value=bv, xmm=True)
+    for insn in (".byte 0x66, 0x0f, 0xd6, 0xca",
+                 ".byte 0xc5, 0xf9, 0xd6, 0xca"):
+        yield Case(upper("xmm2", insn), 64, a=0, xmm=True)
+    for insn in (".byte 0x66, 0x48, 0x0f, 0x6e, 0x4b, 0x08",
+                 ".byte 0xc4, 0xe1, 0xf9, 0x6e, 0x4b, 0x08"):
+        yield Case(upper("xmm1", insn), 64, a=0, **mem)
+    for insn in (".byte 0x66, 0x48, 0x0f, 0x7e, 0x53, 0x08",
+                 ".byte 0xc4, 0xe1, 0xf9, 0x7e, 0x53, 0x08"):
+        yield Case(insn, 64, a=0, writes=True, **mem)
 
 
 def addr32_cases():
