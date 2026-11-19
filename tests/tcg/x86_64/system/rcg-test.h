@@ -33,9 +33,9 @@
  * Makefile defines it when linking: defined here, it would be absolute, and
  * the assembler would make [rip+rcg_mem] RIP plus its address.
  */
-#define RCG_MEM 0x1c00000
+#define RCG_MEM 0x3000000
 #define RCG_MEM_SIZE 64
-#define RCG_STACK 0x1c01000
+#define RCG_STACK 0x3001000
 #define RCG_STACK_SIZE 64
 
 /*

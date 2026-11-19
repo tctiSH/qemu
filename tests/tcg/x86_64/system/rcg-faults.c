@@ -38,11 +38,14 @@
 
 /*
  * 2 MiB mapped with 4K pages, and the boundary in it between two pages,
- * above the 2 MiB page from RCG_MEM that rcg_init() maps.
+ * above the 2 MiB page from RCG_MEM that rcg_init() maps. map_region() puts
+ * its page table in place of one of boot.S's 2 MiB pages.
  */
-#define REGION 0x2000000ul
+#define REGION 0x3800000ul
 #define BOUNDARY (REGION + 2 * PAGE)
-_Static_assert(RCG_MEM + 0x200000 <= REGION, "RCG_MEM's page reaches REGION");
+_Static_assert((REGION & 0x1fffff) == 0, "REGION is not 2 MiB aligned");
+_Static_assert(REGION >= RCG_MEM + 0x200000,
+               "REGION is not above RCG_MEM's 2 MiB");
 
 /* Page table entry bits: present, writable, accessed, dirty. */
 #define PTE_P 0x1
