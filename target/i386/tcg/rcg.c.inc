@@ -54,11 +54,12 @@ static const struct {
     { gen_NEG,    RCG_OP_NEG,   0, -1, X86_SPECIAL_HasLock },
     { gen_INC,    RCG_OP_INC,   0, -1, X86_SPECIAL_HasLock },
     { gen_DEC,    RCG_OP_DEC,   0, -1, X86_SPECIAL_HasLock },
+    { gen_BSWAP,  RCG_OP_BSWAP, 0, -1, -1 },
     /* The second operand of a shift or rotate is its count. */
     { gen_SHL,    RCG_OP_SHL,   0,  2, -1 },
     { gen_SHR,    RCG_OP_SHR,   0,  2, -1 },
     { gen_SAR,    RCG_OP_SAR,   0,  2, -1 },
-    /* ROL runs as ROR by the width less the count; see rcg_emit(). */
+    /* ROL runs as ROR by the width less the count; see rcg_operands(). */
     { gen_ROL,    RCG_OP_ROR,   0,  2, -1 },
     { gen_ROR,    RCG_OP_ROR,   0,  2, -1 },
     /*
@@ -528,35 +529,28 @@ static const void *rcg_translate_cond(DisasContext *s,
 }
 
 /*
- * After the gadget has rotated register n (width ot) right by count, sets
- * CF and OF as gen_ROL and gen_ROR do and keeps the other flags. Those
- * leave CC_OP_ADCOX; this leaves CC_OP_EFLAGS, with every flag in cc_src.
- * These ops are removed as dead if the flags are set again before anything
- * reads them.
+ * After the gadget has rotated register reg (width ot) right by count
+ * (less than the width), sets CF and OF as gen_ROL and gen_ROR do and keeps
+ * the other flags. Those leave CC_OP_ADCOX; this leaves CC_OP_EFLAGS, with
+ * every flag in cc_src. These ops are removed as dead if the flags are set
+ * again before anything reads them.
  */
-static void rcg_rotate_flags(DisasContext *s, MemOp ot, int n, bool left,
+static void rcg_rotate_flags(DisasContext *s, MemOp ot, TCGv reg, bool left,
                              int count)
 {
-    TCGv res = tcg_temp_new(), old = tcg_temp_new();
     TCGv flags = tcg_temp_new(), bit = tcg_temp_new();
     int top = (8 << ot) - 1;
 
     gen_mov_eflags(s, flags);
-    if (ot == MO_32) {
-        TCGv_i32 t = tcg_temp_new_i32();
-
-        tcg_gen_trunc_tl_i32(t, cpu_regs[n]);
-        tcg_gen_extu_i32_tl(res, t);
-        tcg_gen_rotli_i32(t, t, count);
-        tcg_gen_extu_i32_tl(old, t);
-    } else {
-        tcg_gen_mov_tl(res, cpu_regs[n]);
-        tcg_gen_rotli_tl(old, res, count);
-    }
-    /* CF: the bit that went round. OF: whether the top bit changed. */
-    tcg_gen_extract_tl(bit, res, left ? 0 : top, 1);
+    /*
+     * CF: the bit that went round. OF: whether the top bit changed. The
+     * old top bit is the result's bit top - count, which the shift moves
+     * up to it; the register's bits above the width cannot reach it.
+     */
+    tcg_gen_extract_tl(bit, reg, left ? 0 : top, 1);
     tcg_gen_deposit_tl(flags, flags, bit, ctz32(CC_C), 1);
-    tcg_gen_xor_tl(bit, old, res);
+    tcg_gen_shli_tl(bit, reg, count);
+    tcg_gen_xor_tl(bit, bit, reg);
     tcg_gen_extract_tl(bit, bit, top, 1);
     tcg_gen_deposit_tl(flags, flags, bit, ctz32(CC_O), 1);
     tcg_gen_mov_tl(cpu_cc_src, flags);
@@ -866,17 +860,17 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
         }
         if (op == RCG_OP_ROR) {
             /*
-             * ROL and ROR of a 32- or 64-bit register. ROL by n is ROR by
-             * the width less n. At these widths, x86's count mask keeps the
-             * count below the width.
+             * ROL and ROR of a register, by the masked count modulo the
+             * width. Only at 8 and 16 bits can that be 0 when the masked
+             * count is not. ROL by n is ROR by the width less n.
              */
-            if (*ot < MO_32 || a != 'r') {
+            int bits = 8 << *ot;
+
+            if (a != 'r') {
                 return -1;
             }
             *rotate_left = decode->e.gen == gen_ROL;
-            if (*rotate_left) {
-                *imm = (8 << *ot) - *imm;
-            }
+            *imm = (*rotate_left ? -*imm : *imm) & (bits - 1);
         }
         return a ? rcg_form(a, 'i') : -1;
     }
@@ -1413,7 +1407,10 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     }
 
     if (op == RCG_OP_ROR) {
-        rcg_rotate_flags(s, ot, first->n, rotate_left, imm);
+        /* rcg_takes_xh() leaves out ROR, so AH to BH are TCG's. */
+        tcg_debug_assert(!rcg_is_xh(s, first));
+        rcg_reg_op(s, first, &reg);
+        rcg_rotate_flags(s, ot, reg, rotate_left, imm);
     }
 
     /*

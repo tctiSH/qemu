@@ -444,24 +444,31 @@ EXTEND_OPS = (
 
 
 class Unary:
-    """ NOT, NEG, INC and DEC: dest = op dest, a64 being the AArch64
-    instruction that computes {r} from {a}. NEG leaves CC_OP_SUB as gen_NEG
-    does, with cc_srcT 0; NOT leaves the flags alone. INC and DEC leave
-    CC_OP_INC and CC_OP_DEC with cc_dst the result, and keep CF, which
-    gen_INC and gen_DEC put in cc_src: see Spec.cf. """
+    """ NOT, NEG, INC, DEC and BSWAP: dest = op dest, a64 being the
+    AArch64 instruction that computes {r} from {a}. NEG leaves CC_OP_SUB as
+    gen_NEG does, with cc_srcT 0; NOT and BSWAP leave the flags alone. INC
+    and DEC leave CC_OP_INC and CC_OP_DEC with cc_dst the result, and keep
+    CF, which gen_INC and gen_DEC put in cc_src: see Spec.cf. w32 says that
+    the gadget uses w registers at 32 bits (see unary_body()). """
 
-    def __init__(self, name, a64, cc):
+    def __init__(self, name, a64, cc, w32=False):
         self.name = name
         self.a64 = a64
         self.cc = cc
+        self.w32 = w32
 
 
 UNARY_OPS = (
-    Unary("not", "mvn {r}, {a}",     None),
+    Unary("not", "mvn {r}, {a}",     None, w32=True),
     Unary("neg", "neg {r}, {a}",     "SUB"),
     Unary("inc", "add {r}, {a}, #1", "INC"),
     Unary("dec", "sub {r}, {a}, #1", "DEC"),
 )
+
+# BSWAP of a register, at 32 and 64 bits. With the data size prefix it is
+# the 32-bit one, as decode-new gives it size y.
+BSWAP_OP = Unary("bswap", "rev {r}, {a}", None, w32=True)
+BSWAP_WIDTHS = (32, 64)
 
 
 class Shift:
@@ -498,15 +505,16 @@ SHIFT_OPS = (
     Shift("sar", "asr", "SAR"),
 )
 
-# ROR of a register by an immediate count, at 32 and 64 bits, which also does
-# ROL as ROR by the width less the count. Its cc is None because the
-# gadget leaves the flags state alone, not because the instruction does: the
-# translator must have TCG compute the CF and OF the instruction leaves, by
-# ROL's rule for a ROL (CF the result's bit 0) and ROR's for a ROR (CF its
-# top bit), which TCG drops when nothing reads them. As for the shifts, a
-# count that masks to 0 must be left to TCG.
+# ROR of a register by an immediate count, which also does ROL as ROR by the
+# width less the count. The count is a word: the translator masks it as for
+# the shifts and, below 32 bits, takes it modulo the width. Its cc is
+# None because the gadget leaves the flags state alone, not because the
+# instruction does: the translator must have TCG compute the CF and OF the
+# instruction leaves, by ROL's rule for a ROL (CF the result's bit 0) and
+# ROR's for a ROR (CF its top bit), which TCG drops when nothing reads them.
+# As for the shifts, a count that masks to 0 must be left to TCG; one that
+# is 0 only modulo the width still sets CF and OF.
 ROTATE_OP = Shift("ror", "ror", None)
-ROTATE_WIDTHS = (32, 64)
 
 
 class Mul:
@@ -937,6 +945,8 @@ def specs():
         for form in ("r", "m"):
             for width in WIDTHS:
                 yield from with_memory(Spec("unary", op, form, width))
+    for width in BSWAP_WIDTHS:
+        yield Spec("unary", BSWAP_OP, "r", width)
     for op in SHIFT_OPS:
         for form in ("ri", "mi"):
             for width in WIDTHS:
@@ -945,7 +955,7 @@ def specs():
         for form in ("rr", "mr"):
             for width in WIDTHS:
                 yield from with_memory(Spec("shift", op, form, width))
-    for width in ROTATE_WIDTHS:
+    for width in WIDTHS:
         yield Spec("shift", ROTATE_OP, "ri", width)
     for op in MUL_OPS:
         for form in ("r", "m"):
@@ -2206,18 +2216,22 @@ def extend_body(g, spec):
 def unary_body(g, spec):
     # gen_NOT, gen_NEG, gen_INC and gen_DEC: on the whole register, written
     # at the operand size. INC's and DEC's cc_src is the translator's.
+    # gen_BSWAP reverses only the operand's bytes. At 32 bits, the ops with
+    # w32 (NOT and BSWAP) use w registers: their results zero-extend, as the
+    # register write does, so they are written whole.
     op, width = spec.op, spec.width
+    zext = width == 32 and op.w32
     if spec.form == "m":
         g.ea(ADDR)
         g.load(A, ADDR, width)
     else:
         g.read_reg(A, "d")
-    g.emit(op.a64.format(r=R, a=A))
+    g.emit(op.a64.format(r=w(R) if zext else R, a=w(A) if zext else A))
     g.define(R)
     if spec.form == "m":
         g.store(R, ADDR, width)
     else:
-        g.write_reg(R, "d", width)
+        g.write_reg(R, "d", 64 if zext else width)
     if spec.cf == "SRC":
         g.write_cc(dst=R)
     elif op.cc:
@@ -2229,13 +2243,19 @@ def shift_body(g, spec):
     # is the value shifted by count - 1, cc_dst and the result by count.
     op, width = spec.op, spec.width
     if not op.cc:
-        # ROR: a 32-bit ROR zero-extends, as the register write does.
-        reg = w if width == 32 else (lambda r: r)
+        # ROR: a 32-bit ROR zero-extends, as the register write does. Below
+        # 32 bits, the operand is repeated across 32 bits, as by TCG's
+        # gen_rot_replicate(), and a 32-bit ROR of that leaves the rotated
+        # operand in the low bits.
+        reg = w if width <= 32 else (lambda r: r)
         g.read_reg(A, "d")
+        for bits in (8, 16):
+            if width <= bits:
+                g.emit(f"bfi {w(A)}, {w(A)}, #{bits}, #{bits}")
         count = g.word("imm")
         g.emit(f"ror {reg(R)}, {reg(A)}, {reg(count)}")
         g.define(R)
-        g.write_reg(R, "d", 64)
+        g.write_reg(R, "d", 64 if width >= 32 else width)
         return
     if spec.form[0] == "m":
         g.ea(ADDR)
@@ -2719,9 +2739,9 @@ class TctiHarness(Harness):
 # The ops and forms as the translator names them, in the table's order.
 OP_NAMES = ("add", "sub", "and", "or", "xor", "cmp", "test", "adc", "sbb",
             "zero", "mov", "lea", "push", "pop", "movzxb", "movzxw", "movsxb",
-            "movsxw", "movsxd", "not", "neg", "inc", "dec", "shl", "shr",
-            "sar", "ror", "mul", "imul", "imul3", "bt", "bts", "btr", "btc",
-            "cbw", "cwd", "xchg", "leave", "call", "jmp", "ret",
+            "movsxw", "movsxd", "not", "neg", "inc", "dec", "bswap", "shl",
+            "shr", "sar", "ror", "mul", "imul", "imul3", "bt", "bts", "btr",
+            "btc", "cbw", "cwd", "xchg", "leave", "call", "jmp", "ret",
             *(op.name for op in VMOV_OPS), *(op.name for op in VFP_OPS),
             *(op.name for op in VLANE_OPS), *(op.name for op in VLOGIC_OPS),
             *(op.name for op in VMOVD_OPS), *(op.name for op in VTBL_OPS),
@@ -3284,6 +3304,7 @@ def insn_cases():
     for op in UNARY_OPS:
         for width in WIDTHS:
             yield from unary_cases(op, width)
+    yield from bswap_cases()
     for op in SHIFT_OPS:
         for width in WIDTHS:
             yield from shift_cases(op, width)
@@ -3318,6 +3339,14 @@ def insn_cases():
     yield from chain_cases()
 
 
+# An instruction that RCG leaves to TCG, for the cases that put a TCG op
+# before a gadget. It rewrites a 64-bit register from itself, reads CF, and
+# leaves CF and OF in CC_OP_ADCOX, so that the gadgets after it start from
+# that state.
+TCG_OP = "rcr {}, 1"
+assert TCG_OP.split()[0] not in OP_NAMES, "TCG_OP has a gadget"
+
+
 def chain_cases():
     """ Gadgets after a TCG op in the same TB: one that writes a register
     the gadget keeps part of, reads or overwrites, and one that sets the
@@ -3326,18 +3355,18 @@ def chain_cases():
     for use in ("mov al, bl", "add ax, bx", "movzx ax, bl", "lea ax, [rbx+1]",
                 "setz al", "cmovz rax, rbx", "cmovnz eax, ebx", "add rax, rbx",
                 "mov eax, ebx", "mov rax, rbx", "xor eax, eax", "pop rax"):
-        yield Case(f"bswap rax; {use}", 64, a=0, b=3,
+        yield Case(f"{TCG_OP.format('rax')}; {use}", 64, a=0, b=3,
                    stack=use.startswith("pop"))
     # A shift by CL reads RCX and the flags state.
-    for setup in ("bswap rcx", "bswap rax", "add rax, rbx"):
+    for setup in (TCG_OP.format("rcx"), TCG_OP.format("rax"), "add rax, rbx"):
         yield Case(f"{setup}; shl eax, cl", 64, a=0, b=3)
     # MUL reads RAX, keeps part of it at 8 bits and of RDX at 16, and
     # writes RDX above 8 bits.
     for reg in ("rax", "rdx"):
         for use in ("mul bl", "mul bx", "imul ebx", "mul rbx"):
-            yield Case(f"bswap {reg}; {use}", 64, a=0, b=3)
+            yield Case(f"{TCG_OP.format(reg)}; {use}", 64, a=0, b=3)
     for setter in ("ror eax, 5", "rol rax, 3", "shl rax, cl", "imul rax, rbx",
-                   "mul rbx", "bswap rax"):
+                   "mul rbx", TCG_OP.format("rax")):
         for use in ("add rax, rbx", "cmp rbx, rax", "xor ebx, ebx",
                     "sub ebx, eax; setb cl"):
             yield Case(f"{setter}; {use}", 64, a=0, b=3)
@@ -3523,6 +3552,21 @@ def unary_cases(op, width):
                writes=True)
 
 
+def bswap_cases():
+    """ BSWAP of a register at each width, and with the data size prefix,
+    which is the 32-bit one. """
+    for width in BSWAP_WIDTHS:
+        for n in (0, 9):
+            yield Case(f"bswap {reg_name(n, width)}", width, a=n)
+    yield Case(".byte 0x66, 0x0f, 0xc8", 32, a=0)
+    yield Case(".byte 0x66, 0x41, 0x0f, 0xc9", 32, a=9)
+    # REX.W makes it the 64-bit one, prefix or not.
+    yield Case(".byte 0x66, 0x48, 0x0f, 0xc8", 64, a=0)
+    # The flags state carries across it.
+    yield Case("cmp eax, ebx; bswap eax; jl 1f; mov ecx, 1; 1:", 32, a=0,
+               b=3)
+
+
 # Shift counts: as the encoding takes them, before the mask (0x1f, or 0x3f
 # at 64 bits); those that mask to 0 are TCG's.
 SHIFT_COUNTS = (1, 2, 7, 8, 9, 15, 16, 17, 31, 32, 33, 63, 64, 65, 255)
@@ -3666,9 +3710,9 @@ def cond_cases():
         for cond in (4, 5):
             yield Case(f"{setter}; j{CONDS[cond]} 1f; mov ecx, 1; 1:", 64,
                        stack=True)
-    # A joined gadget after a TCG op, which leaves its input (BSWAP) or an
-    # output of the gadget, cc_dst (XADD), in a host register.
-    for setup in ("bswap rax", "xadd rax, rbx"):
+    # A joined gadget after a TCG op that leaves the gadget's input
+    # (TCG_OP) or one of its outputs, cc_dst (XADD), in a host register.
+    for setup in (TCG_OP.format("rax"), "xadd rax, rbx"):
         for setter in ("cmp rax, rbx", "test rax, rax"):
             yield Case(f"{setup}; {setter}; je 1f; mov ecx, 1; 1:", 64, a=0,
                        b=3)
@@ -3928,9 +3972,11 @@ def fault_cases():
 
 def rotate_cases(width):
     """ ROL and ROR by each count, and the flags they leave, after each
-    lazy-flags state and as a condition reads them. Only the register forms
-    at 32 and 64 bits by an immediate have a gadget (ROR's, which ROL uses
-    too); the rest are TCG's. """
+    lazy-flags state and read by a condition. Only the register forms by
+    an immediate have a gadget (ROR's, which ROL uses too); the memory and
+    CL forms, and AH to BH, are TCG's. Below 32 bits, some counts that do
+    not mask to 0 are multiples of the width: they rotate by 0 but set CF
+    and OF. """
     reg = reg_name(0, width)
     text, base, _, bv, _ = memory_operand(width, "b", None)
     for name in ("rol", "ror"):
@@ -3941,8 +3987,9 @@ def rotate_cases(width):
         yield Case(f"{name} {reg}, cl", width, a=0)
         yield Case(f"{name} {text}, 3", width, mem=True, base=base,
                    base_value=bv, writes=True)
-        if width not in ROTATE_WIDTHS:
-            continue
+        if width == 8:
+            yield Case(f"{name} sil, 3", 8, a=6)
+            yield Case(f"{name} ah, 3", 8, a=0)
         for setters in flag_setters(width).values():
             yield Case(f"{setters[0]}; {name} {reg}, 5", width, a=0, b=3)
         for cond in range(16):

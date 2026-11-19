@@ -6253,6 +6253,14 @@ dec qword ptr gs:[0x2ffe010]: d65256997677c370
 dec qword ptr [rbx+8]: d66c9d5b3bf03a42
 dec qword ptr [rbx+8]: a60339037a6be76a
 dec qword ptr [rip+rcg_mem+16]: d65256997677c370
+bswap eax: 56af75fab5018b8a
+bswap r9d: c6f03a439166f466
+bswap rax: a579818bbb84ba8a
+bswap r9: a469a9942ac3f956
+.byte 0x66, 0x0f, 0xc8: 56af75fab5018b8a
+.byte 0x66, 0x41, 0x0f, 0xc9: c6f03a439166f466
+.byte 0x66, 0x48, 0x0f, 0xc8: a579818bbb84ba8a
+cmp eax, ebx; bswap eax; jl 1f; mov ecx, 1; 1:: 330d042984ccd04f
 shl al, 1: 131a91647bcf91eb
 shl al, 2: a375021663f16859
 shl al, 7: aeb5ab5db9701cc5
@@ -7596,6 +7604,30 @@ rol r9b, 65: bbec578ff2b5bbda
 rol r9b, 255: 37b861b4ed408dc6
 rol al, cl: b1e1c7365ed010ec
 rol byte ptr [rbx+8], 3: 36f76e172dfbd75c
+rol sil, 3: c45bc3ccd8fd68f4
+rol ah, 3: d3792a423e3bb889
+cmp al, bl; rol al, 5: ecc17b878e595191
+add al, bl; rol al, 5: 5aab0a338c23fbeb
+test al, bl; rol al, 5: 17183ea8dafc3c71
+inc al; rol al, 5: 8b73290995fc07e9
+dec al; rol al, 5: f69c0ad08c3f3f9d
+shr al, 3; rol al, 5: aabaae8f1f504b1
+rol al, 1; jo 1f; mov ecx, 1; 1:: 6db4353f276bea9e
+rol al, 1; jno 1f; mov ecx, 1; 1:: b05326d60ed631ee
+rol al, 1; jb 1f; mov ecx, 1; 1:: 4ec116bb82dfa8fc
+rol al, 1; jae 1f; mov ecx, 1; 1:: d97f921171de8194
+rol al, 1; je 1f; mov ecx, 1; 1:: 7b9a9eaea8c80d0a
+rol al, 1; jne 1f; mov ecx, 1; 1:: dafbd5da491c5b92
+rol al, 1; jbe 1f; mov ecx, 1; 1:: a564b6e41a5da64
+rol al, 1; ja 1f; mov ecx, 1; 1:: 22e107975116f594
+rol al, 1; js 1f; mov ecx, 1; 1:: 55f11304847cce56
+rol al, 1; jns 1f; mov ecx, 1; 1:: 4225cd76806ed286
+rol al, 1; jp 1f; mov ecx, 1; 1:: 1322c011ade7d7c2
+rol al, 1; jnp 1f; mov ecx, 1; 1:: fece3b3d4892262a
+rol al, 1; jl 1f; mov ecx, 1; 1:: c14abd26dbcfedd2
+rol al, 1; jge 1f; mov ecx, 1; 1:: 5d2077ba4f52438a
+rol al, 1; jle 1f; mov ecx, 1; 1:: 42d8f23d1c41ff66
+rol al, 1; jg 1f; mov ecx, 1; 1:: 95b6f99211e81f06
 ror al, 1: fc9ee93c38162bb7
 ror al, 2: 669fcf677ff90eb0
 ror al, 7: 57edb60395a079ca
@@ -7628,6 +7660,30 @@ ror r9b, 65: 5f19451ae7b99517
 ror r9b, 255: b4ca728427efb41a
 ror al, cl: 5f10b926b3abb62c
 ror byte ptr [rbx+8], 3: 6eec862a5975f128
+ror sil, 3: 12fb05546b849fdc
+ror ah, 3: 9068f1fb50fb45c1
+cmp al, bl; ror al, 5: 3ccab329691fe3dd
+add al, bl; ror al, 5: 3f862c8e9d26f0ab
+test al, bl; ror al, 5: dfc9a139fea6f505
+inc al; ror al, 5: 95969be47f6b1889
+dec al; ror al, 5: 589a3fefe77651ed
+shr al, 3; ror al, 5: 1b034c150c9bec49
+ror al, 1; jo 1f; mov ecx, 1; 1:: 5ff5daa585c32f5
+ror al, 1; jno 1f; mov ecx, 1; 1:: 7ff3c18fb8cc3d95
+ror al, 1; jb 1f; mov ecx, 1; 1:: d1cacacff47ba9f3
+ror al, 1; jae 1f; mov ecx, 1; 1:: 64d17faa43f70feb
+ror al, 1; je 1f; mov ecx, 1; 1:: 3cf9e07643d3668f
+ror al, 1; jne 1f; mov ecx, 1; 1:: b3b96518da613c8f
+ror al, 1; jbe 1f; mov ecx, 1; 1:: cfccc28ddddb7ebb
+ror al, 1; ja 1f; mov ecx, 1; 1:: f7611fd177ad5ac3
+ror al, 1; js 1f; mov ecx, 1; 1:: cc2ddabb830a6a57
+ror al, 1; jns 1f; mov ecx, 1; 1:: 5ea2199902776b47
+ror al, 1; jp 1f; mov ecx, 1; 1:: ad702566ff82c97f
+ror al, 1; jnp 1f; mov ecx, 1; 1:: f83bf7f49f93d13f
+ror al, 1; jl 1f; mov ecx, 1; 1:: d0b55ce99af824fd
+ror al, 1; jge 1f; mov ecx, 1; 1:: 6ea56a4ab829100d
+ror al, 1; jle 1f; mov ecx, 1; 1:: bd5a5fecff73c6d
+ror al, 1; jg 1f; mov ecx, 1; 1:: 60da1368c3fc2415
 rol ax, 1: 5fabeb623a95fcd6
 rol ax, 2: 73aaec2d4233aae8
 rol ax, 7: 8de9965d25c65ad4
@@ -7660,6 +7716,28 @@ rol r9w, 65: 20219ea23cb0b996
 rol r9w, 255: 3e38e3a26a13b552
 rol ax, cl: 6dbdd85bf6b2a6dc
 rol word ptr [rbx+8], 3: 39c6ba9608fab4c4
+cmp ax, bx; rol ax, 5: 39e758059a4ca907
+add ax, bx; rol ax, 5: c9017cf6ba23cdb8
+test ax, bx; rol ax, 5: 295a9ab3d5c4de1f
+inc ax; rol ax, 5: 9ea7872cb378926d
+dec ax; rol ax, 5: d8b3164f98fcee7d
+shr ax, 3; rol ax, 5: a9430bc8e698f479
+rol ax, 1; jo 1f; mov ecx, 1; 1:: fb8bfa73d1c0dcaa
+rol ax, 1; jno 1f; mov ecx, 1; 1:: 4054f50da60f3eda
+rol ax, 1; jb 1f; mov ecx, 1; 1:: 82374f5f84055c58
+rol ax, 1; jae 1f; mov ecx, 1; 1:: 8691290655f0898
+rol ax, 1; je 1f; mov ecx, 1; 1:: 5f17470f9bff49de
+rol ax, 1; jne 1f; mov ecx, 1; 1:: d3bfe56fb230a96
+rol ax, 1; jbe 1f; mov ecx, 1; 1:: ed874f31e13580a0
+rol ax, 1; ja 1f; mov ecx, 1; 1:: 97246837d643080
+rol ax, 1; js 1f; mov ecx, 1; 1:: 3d46a0e4362a8a62
+rol ax, 1; jns 1f; mov ecx, 1; 1:: bfe1356c2d9a22
+rol ax, 1; jp 1f; mov ecx, 1; 1:: cc2dcd68e9f2654e
+rol ax, 1; jnp 1f; mov ecx, 1; 1:: 4c54fac1e55dcb6
+rol ax, 1; jl 1f; mov ecx, 1; 1:: b15848a9ea51527e
+rol ax, 1; jge 1f; mov ecx, 1; 1:: 630a68bc2f10e686
+rol ax, 1; jle 1f; mov ecx, 1; 1:: ea241b4fe3b39bca
+rol ax, 1; jg 1f; mov ecx, 1; 1:: f9a8df326c587aba
 ror ax, 1: 84369cd8a7fceedb
 ror ax, 2: 79d84285400877ac
 ror ax, 7: 4a3fece6a157aaf6
@@ -7692,6 +7770,28 @@ ror r9w, 65: 51f66d35e3c4e493
 ror r9w, 255: 2aeb799655aa11ce
 ror ax, cl: a7da7bf5ee4cf75c
 ror word ptr [rbx+8], 3: d37a6986e5571560
+cmp ax, bx; ror ax, 5: b98bc45714daeb4f
+add ax, bx; ror ax, 5: f121793340f07184
+test ax, bx; ror ax, 5: 14808d7a9b9ce55f
+inc ax; ror ax, 5: 70bed5e45f82bad9
+dec ax; ror ax, 5: 7a64e322720f1d1d
+shr ax, 3; ror ax, 5: 41a64194867d5a61
+ror ax, 1; jo 1f; mov ecx, 1; 1:: 6b232e7ba643f635
+ror ax, 1; jno 1f; mov ecx, 1; 1:: 486e270e2dc7e575
+ror ax, 1; jb 1f; mov ecx, 1; 1:: 5fb685b916c51efb
+ror ax, 1; jae 1f; mov ecx, 1; 1:: 35b28c2c89c7006b
+ror ax, 1; je 1f; mov ecx, 1; 1:: 3c1ed50c1bbe0d6b
+ror ax, 1; jne 1f; mov ecx, 1; 1:: 67c78e05063f7963
+ror ax, 1; jbe 1f; mov ecx, 1; 1:: 6e8e263753433b9b
+ror ax, 1; ja 1f; mov ecx, 1; 1:: 38e5c05575f6f5ab
+ror ax, 1; js 1f; mov ecx, 1; 1:: bbe1b71cf410a82b
+ror ax, 1; jns 1f; mov ecx, 1; 1:: fe4c70a27ad0cc3
+ror ax, 1; jp 1f; mov ecx, 1; 1:: b450ae8514da8f4b
+ror ax, 1; jnp 1f; mov ecx, 1; 1:: 3dbe7dc9d15acf83
+ror ax, 1; jl 1f; mov ecx, 1; 1:: 7d83c67909e8068d
+ror ax, 1; jge 1f; mov ecx, 1; 1:: 14bbaeba73c6e9d
+ror ax, 1; jle 1f; mov ecx, 1; 1:: 2dfab0d6665fefb5
+ror ax, 1; jg 1f; mov ecx, 1; 1:: 4684d596d599dfe5
 rol eax, 1: dd1393affaecdb0e
 rol eax, 2: 13a1863b813f69f0
 rol eax, 7: b0124afc7f9450c8
@@ -19227,8 +19327,8 @@ cmp rsp, 1; je 1f; mov ecx, 1; 1:: a1d1264f90b319e8
 cmp rsp, 1; jne 1f; mov ecx, 1; 1:: 233efb476f98bef8
 test rsp, rsp; je 1f; mov ecx, 1; 1:: 8dba4df31073d08
 test rsp, rsp; jne 1f; mov ecx, 1; 1:: f61ac480fad277b8
-bswap rax; cmp rax, rbx; je 1f; mov ecx, 1; 1:: b6a41be4509431d
-bswap rax; test rax, rax; je 1f; mov ecx, 1; 1:: 9f35e7cbe9fdbb35
+rcr rax, 1; cmp rax, rbx; je 1f; mov ecx, 1; 1:: 7e71ee3e58ba8c2b
+rcr rax, 1; test rax, rax; je 1f; mov ecx, 1; 1:: 8a6dde5713ff2605
 xadd rax, rbx; cmp rax, rbx; je 1f; mov ecx, 1; 1:: c00f5b888f8fc78b
 xadd rax, rbx; test rax, rax; je 1f; mov ecx, 1; 1:: 820d494abd1f4718
 jb 1f; mov ecx, 1; 1:: 59512b9216525f12
@@ -19310,29 +19410,29 @@ lea rsi, [rip+2f]; push rsi; ret 16; 1: ud2; 2: mov esi, 0; mov qword ptr [rsp-2
 lea rsi, [rip+2f]; push rsi; ret 32768; 1: ud2; 2: mov esi, 0; mov qword ptr [rsp-32776], 0: d3038fbf8849f188
 lea rsi, [rip+2f]; push rsi; ret 65528; 1: ud2; 2: mov esi, 0; mov qword ptr [rsp-65536], 0: d830bb9e37091e70
 lea rsi, [rip+2f]; push rsi; addr32 ret; 1: ud2; 2: mov esi, 0; mov qword ptr [rsp-8], 0: 490c331043717988
-bswap rax; mov al, bl: f4a20e4005e8bb21
-bswap rax; add ax, bx: 14c4386348ab8610
-bswap rax; movzx ax, bl: 208008cb44b33f39
-bswap rax; lea ax, [rbx+1]: 6ad885efe79a991d
-bswap rax; setz al: a754ee55efb4edcd
-bswap rax; cmovz rax, rbx: 27084478d7e9b935
-bswap rax; cmovnz eax, ebx: 7708ea05eef5bdd5
-bswap rax; add rax, rbx: 27959ae8755f1aa5
-bswap rax; mov eax, ebx: 74069a732eff1925
-bswap rax; mov rax, rbx: 1d7e43312a427ea5
-bswap rax; xor eax, eax: 203d53e93827d965
-bswap rax; pop rax: 7d7f91f436d62c65
-bswap rcx; shl eax, cl: 4b6d84c2e596e939
-bswap rax; shl eax, cl: e4e4eb92c2c3f461
+rcr rax, 1; mov al, bl: 4deba93bddcafb15
+rcr rax, 1; add ax, bx: d76436dadd40a6d4
+rcr rax, 1; movzx ax, bl: 957dcc272eb53225
+rcr rax, 1; lea ax, [rbx+1]: 5742abbad3a186dd
+rcr rax, 1; setz al: dc3a3db094db1461
+rcr rax, 1; cmovz rax, rbx: 349af1167f7d531
+rcr rax, 1; cmovnz eax, ebx: a75668fc10f9f98d
+rcr rax, 1; add rax, rbx: d567cfa9f3ef1622
+rcr rax, 1; mov eax, ebx: a2002e27736e10f5
+rcr rax, 1; mov rax, rbx: 3a2ee0451d3dc305
+rcr rax, 1; xor eax, eax: 203d53e93827d965
+rcr rax, 1; pop rax: ed58693503e24a85
+rcr rcx, 1; shl eax, cl: 2dd3327522efea21
+rcr rax, 1; shl eax, cl: dba207cccbee4c45
 add rax, rbx; shl eax, cl: 4cae9fbcb275b181
-bswap rax; mul bl: 34081abb1365a3b1
-bswap rax; mul bx: 7dbc9edea4a79c8f
-bswap rax; imul ebx: 5f27c5c61381fc89
-bswap rax; mul rbx: a9fdd54af3218646
-bswap rdx; mul bl: c7482c6febb6c375
-bswap rdx; mul bx: 3adc2674e74cc1c0
-bswap rdx; imul ebx: b96e96ae883587f1
-bswap rdx; mul rbx: f7aa262272603d91
+rcr rax, 1; mul bl: e6261bfd0db1d209
+rcr rax, 1; mul bx: e7830ee47d0fb463
+rcr rax, 1; imul ebx: f733bf4b07f1859e
+rcr rax, 1; mul rbx: 40f82cc0e27dc56e
+rcr rdx, 1; mul bl: e98bd7a0f63fdf25
+rcr rdx, 1; mul bx: e4621797e6e2fe28
+rcr rdx, 1; imul ebx: b96e96ae883587f1
+rcr rdx, 1; mul rbx: f7aa262272603d91
 ror eax, 5; add rax, rbx: 9330cef68711c0b3
 ror eax, 5; cmp rbx, rax: 8cab15a5736f06c4
 ror eax, 5; xor ebx, ebx: 9f4a11e971d53565
@@ -19353,7 +19453,7 @@ mul rbx; add rax, rbx: 5d4d568aad2835fc
 mul rbx; cmp rbx, rax: 3578940df4d0a002
 mul rbx; xor ebx, ebx: ce144a0b5c5f5b72
 mul rbx; sub ebx, eax; setb cl: d45cdc128f2cfdd
-bswap rax; add rax, rbx: 27959ae8755f1aa5
-bswap rax; cmp rbx, rax: dea7d33c2bde4ee9
-bswap rax; xor ebx, ebx: 1b358aa0018a2cc5
-bswap rax; sub ebx, eax; setb cl: f9e086e0b8ebb9d4
+rcr rax, 1; add rax, rbx: d567cfa9f3ef1622
+rcr rax, 1; cmp rbx, rax: 33dceebe423099d
+rcr rax, 1; xor ebx, ebx: 84aa80bd59fb0d65
+rcr rax, 1; sub ebx, eax; setb cl: bd84ce4f31610b34
