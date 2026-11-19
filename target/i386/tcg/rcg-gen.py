@@ -171,7 +171,10 @@ class VFp:
     dest = op src, with the helper gen_fp_sse() or gen_unary_fp_sse() picks
     by prefix: on every lane (ps and pd, lanes of 32 and 64 bits) or on the
     low lane, keeping the rest of the destination (ss and sd). a64 is the
-    AArch64 instruction.
+    AArch64 instruction, or None for MIN and MAX, which have pick instead:
+    the condition on which, after an FCMP of the first input with the
+    source, they take the first input, else the source (see
+    minmax_lines()).
 
     vex is for the VEX.128 encodings, whose names start with v: dest =
     vvvv op src, or for ss and sd, the rest of dest from VEX.vvvv's
@@ -179,9 +182,11 @@ class VFp:
     does. TCG calls the same helpers, with VEX.vvvv's register in place of
     the destination. A 16-byte memory source may be misaligned. """
 
-    def __init__(self, base, a64, suffix, unary=False, vex=False):
+    def __init__(self, base, a64, suffix, unary=False, vex=False,
+                 pick=None):
         self.name = ("v" if vex else "") + base + suffix
         self.a64 = a64
+        self.pick = pick
         self.unary = unary
         self.lane = 32 if suffix[1] == "s" else 64
         self.packed = suffix[0] == "p"
@@ -206,12 +211,39 @@ class VFp:
 # the prefix's index to the ps op. The legacy encodings' ops come first,
 # then the VEX ones' in the same order, which rcg_vex_op() relies on.
 VFP_SUFFIXES = ("ps", "pd", "ss", "sd")
-VFP_OPS = tuple(VFp(base, a64, suffix, unary=base == "sqrt", vex=vex)
+VFP_OPS = tuple(VFp(base, a64, suffix, unary=base == "sqrt", vex=vex,
+                    pick=pick)
                 for vex in (False, True)
-                for base, a64 in (("add", "fadd"), ("sub", "fsub"),
-                                  ("mul", "fmul"), ("div", "fdiv"),
-                                  ("sqrt", "fsqrt"))
+                for base, a64, pick in (("add", "fadd", None),
+                                        ("sub", "fsub", None),
+                                        ("mul", "fmul", None),
+                                        ("div", "fdiv", None),
+                                        ("sqrt", "fsqrt", None),
+                                        ("min", None, "mi"),
+                                        ("max", None, "gt"))
                 for suffix in VFP_SUFFIXES)
+
+
+class VComi:
+    """ UCOMISS, UCOMISD, COMISS and COMISD: compare the low lanes of two
+    XMM registers, or of one and memory, and leave CC_OP_EFLAGS with ZF, PF
+    and CF in cc_src, as the helpers do: none for greater, CF for less, ZF
+    for equal, all three for unordered. COMIS raises IE for any NaN, UCOMIS
+    for a signaling one only. Their VEX encodings do the same and take
+    these gadgets. Like CMP, they write neither operand. """
+
+    writes = False
+
+    def __init__(self, quiet, lane):
+        self.name = f"{'u' if quiet else ''}comis{'s' if lane == 32 else 'd'}"
+        self.lane = lane
+        self.helper = f"helper_{self.name}"
+
+
+# In the order rcg_select() and rcg_operands() rely on: ss then sd, for
+# UCOMIS then COMIS.
+VCOMI_OPS = tuple(VComi(quiet, lane) for quiet in (True, False)
+                  for lane in (32, 64))
 
 
 class VLane:
@@ -688,7 +720,7 @@ class Spec:
     kind is "alu", "zero" (XOR of a register with itself), "mov", "lea",
     "push", "pop", "extend", "unary", "shift", "mul", "imul3", "bt", "cbw",
     "cwd", "xchg", "leave", "call", "jmp", "ret", "vmov", "vfp", "vlane",
-    "vlogic", "vmovd" or "vtbl".
+    "vlogic", "vmovd", "vtbl" or "vcomi".
 
     form is the destination's kind then the source's (r, m or i, or x for
     an XMM register), then for IMUL3 an i if it takes an immediate too; for
@@ -776,10 +808,10 @@ class Spec:
         a memory access the MemOpIdx and the env offset of the MMU index's
         CPUTLBDescFast (TCTI_TLB_FAST_OFS()). A register operand is its env
         offset in CPUX86State.regs[]: "d" if it is written, "s" if only read
-        (or XCHG's source, which it writes too), and "s1" for CMP's, TEST's
-        and BT's first operand, which is only read. An XMM register is its
-        env offset in CPUX86State.xmm_regs[], and a VEX encoding's VEX.vvvv
-        register is "v", after "d". A memory operand is
+        (or XCHG's source, which it writes too), and "s1" for the first
+        operand of CMP, TEST, BT, UCOMIS and COMIS, which is only read. An
+        XMM register is its env offset in CPUX86State.xmm_regs[], and a VEX
+        encoding's VEX.vvvv register is "v", after "d". A memory operand is
         the words of its shape (ea_words()). An immediate is its value,
         sign-extended as decode-new extends it.
 
@@ -808,8 +840,8 @@ class Spec:
             if self.kind != "zero":
                 operands.append("s" if self.form[1] in "rx"
                                 else self.form[1])
-            if (self.kind in ("alu", "bt") and not self.op.writes and
-                    operands[0] == "d"):
+            if (self.kind in ("alu", "bt", "vcomi") and
+                    not self.op.writes and operands[0] == "d"):
                 operands[0] = "s1"
             if self.kind in VEX_KINDS and self.op.reads_v(self.form):
                 operands.insert(1, "v")
@@ -868,9 +900,16 @@ class Spec:
         if (self.kind in ("unary", "shift") and self.op.cc or
                 self.kind in ("mul", "imul3")):
             return ("cc_dst", "cc_src")
-        if self.kind == "bt":
+        if self.kind in ("bt", "vcomi"):
             return ("cc_src",)
         return ()
+
+    @property
+    def env_cc_op(self):
+        """ The CC_OP the gadget writes to env's cc_op on either path, or
+        None. Only UCOMIS and COMIS write it, CC_OP_EFLAGS, as their helpers
+        do. """
+        return "CC_OP_EFLAGS" if self.kind == "vcomi" else None
 
 
 def specs():
@@ -950,6 +989,9 @@ def specs():
         for form in ("xx", "xm"):
             for width in op.widths(form):
                 yield from with_memory(Spec("vtbl", op, form, width))
+    for op in VCOMI_OPS:
+        for form in ("xx", "xm"):
+            yield from with_memory(Spec("vcomi", op, form, op.lane))
 
 
 def with_memory(spec):
@@ -1634,6 +1676,13 @@ def vfp_body(g, spec):
     # softfloat. The load comes first, as it may fault. A VEX encoding's
     # first input is VEX.vvvv's register, and the gadget clears bits 128 to
     # 255 of the destination last, on either path.
+    #
+    # MIN and MAX need only the input checks: no input lane may be a NaN,
+    # which raises IE, or a denormal, which raises DE or, with DAZ,
+    # compares as zero. They round nothing, so the rest of MXCSR does not
+    # matter, and the host's comparison is then the helper's and raises
+    # nothing. ops_sse_host.h's sse_host_plain_ps() checks the same, but
+    # lets denormals through once DE is set and while DAZ is clear.
     op, env = spec.op, g.env
     lane = op.lane
     slow, join = g._labels()
@@ -1643,15 +1692,13 @@ def vfp_body(g, spec):
             g.load128(A, B, ADDR, aligned=not op.vex)
         else:
             g.load(B, ADDR, lane)
-    g.emit(f"ldr {w(R)}, [{env}, %[mxcsr]]",
-           f"ldrh {w(T)}, [{env}, %[sse_flags]]",
-           f"tst {w(R)}, #{MXCSR_RC_FZ:#x}",
-           f"b.ne {slow}f",
-           f"tbnz {w(R)}, #{MXCSR_DAZ_BIT}, {slow}f",
-           f"tbz {w(T)}, #%[sse_inexact], {slow}f")
-    if op.packed:
+    if op.pick:
+        minmax_lines(g, spec, slow)
+    elif op.packed:
+        mxcsr_lines(g, slow)
         packed_vfp_lines(g, spec, slow)
     else:
+        mxcsr_lines(g, slow)
         scalar_vfp_lines(g, spec, slow)
     g.emit(f"{join}:")
     clear_upper(g, spec)
@@ -1660,7 +1707,6 @@ def vfp_body(g, spec):
     # first: TCG's gen_load_sse() loads it there for the helper too.
     # A VEX encoding keeps the destination's word across the call, for
     # clear_upper() after the join.
-    save, restore = g._save((g.word("d"),) if op.vex else ())
     store = []
     # The helper takes (env, d, d, s), or for a VEX encoding (env, d, v, s),
     # or for packed SQRT, which has no second input, (env, d, s): the
@@ -1681,17 +1727,177 @@ def vfp_body(g, spec):
         args = [f"add x2, {env}, {g.word('v')}", source]
     else:
         args = ["mov x2, x1", source]
-    g.cold += [
-        f"{slow}:",
-        *store,
-        *save,
-        f"mov x0, {env}",
-        f"add x1, {env}, {g.word('d')}",
-        *args,
-        f"bl _{op.helper}",
-        *restore,
-        f"b {join}b",
-    ]
+    call_helper(g, slow, join, op.helper,
+                [f"add x1, {env}, {g.word('d')}", *args], store,
+                (g.word("d"),) if op.vex else ())
+
+
+def mxcsr_lines(g, slow):
+    """ Goes to slow unless MXCSR rounds to nearest, without FZ or DAZ, and
+    PE is set already, as vfp_body() says. Uses R and T. """
+    env = g.env
+    g.emit(f"ldr {w(R)}, [{env}, %[mxcsr]]",
+           f"ldrh {w(T)}, [{env}, %[sse_flags]]",
+           f"tst {w(R)}, #{MXCSR_RC_FZ:#x}",
+           f"b.ne {slow}f",
+           f"tbnz {w(R)}, #{MXCSR_DAZ_BIT}, {slow}f",
+           f"tbz {w(T)}, #%[sse_inexact], {slow}f")
+
+
+def call_helper(g, slow, join, helper, args, store=(), keep=()):
+    """ Adds the slow path at slow to g.cold: the lines of store, then a
+    call to helper(env, ...), with args the lines that set x1 onward,
+    keeping the registers in keep across the call, then a branch back to
+    join. """
+    save, restore = g._save(keep)
+    g.cold += [f"{slow}:", *store, *save, f"mov x0, {g.env}", *args,
+               f"bl _{helper}", *restore, f"b {join}b"]
+
+
+def denormal_inputs(g, regs, lane, slow):
+    """ Goes to slow if the lane in any of regs is a denormal: exponent 0,
+    and not a zero. Uses T. """
+    r = w if lane == 32 else (lambda x: x)
+    for reg in regs:
+        g.emit(f"lsl {r(T)}, {r(reg)}, #1",
+               f"tst {r(reg)}, #{VFP_EXP[lane]:#x}",
+               f"ccmp {r(T)}, #0, #4, eq",
+               f"b.ne {slow}f")
+
+
+def compare_low_lanes(g, spec, first, slow):
+    """ Compares the low lane of the first input, at env + first, with the
+    source's (loaded already for a memory source), in A and B and then in
+    s0 and s1 or d0 and d1, going to slow if either is a NaN or a
+    denormal, as vfp_body() says for MIN and MAX. Uses T. """
+    env, lane = g.env, spec.op.lane
+    r = w if lane == 32 else (lambda x: x)
+    f = "s" if lane == 32 else "d"
+    if not spec.has_mem:
+        g.emit(f"ldr {r(B)}, [{env}, {g.word('s')}]")
+    g.emit(f"ldr {r(A)}, [{env}, {first}]")
+    denormal_inputs(g, (A, B), lane, slow)
+    # A NaN makes them unordered, which sets V.
+    g.emit(f"fmov {f}0, {r(A)}",
+           f"fmov {f}1, {r(B)}",
+           f"fcmp {f}0, {f}1",
+           f"b.vs {slow}f")
+
+
+def dup_lanes(g, vreg, xreg, value, t):
+    """ Puts value in each lane of vreg, of arrangement t, by way of
+    xreg. """
+    r = w if t == "4s" else (lambda x: x)
+    g.emit(f"mov {r(xreg)}, #{value:#x}",
+           f"dup {vreg}.{t}, {r(xreg)}")
+
+
+def plain_lanes(g, vreg, t, bad):
+    """ Sets every bit of each lane of bad where vreg's lane is a NaN or a
+    denormal. V4 and V5 must hold VFP_MIN_NORMAL2 and VFP_SPAN in each lane
+    (see dup_lanes()); V3, V6 and V7 are scratch, so none of the five may be
+    vreg or bad. """
+    assert not {vreg, bad} & {"v3", "v4", "v5", "v6", "v7"}, (vreg, bad)
+    # A lane's magnitude, doubled, less the smallest normal's, is at most
+    # SPAN for a normal or an infinity, and above it for a NaN, or for a
+    # zero or a denormal, which wrap around. CMEQ and BIC then let a zero
+    # through.
+    g.emit(f"shl v3.{t}, {vreg}.{t}, #1",
+           f"sub v6.{t}, v3.{t}, v4.{t}",
+           f"cmhi v6.{t}, v6.{t}, v5.{t}",
+           f"cmeq v7.{t}, v3.{t}, #0",
+           "bic v6.16b, v6.16b, v7.16b",
+           f"orr {bad}.16b, {bad}.16b, v6.16b")
+
+
+def minmax_lines(g, spec, slow):
+    """ MIN or MAX, checked as vfp_body() says: the first input (the
+    destination, or for a VEX encoding VEX.vvvv's register) where it is
+    less (MIN) or greater (MAX) than the source, else the source. For ss
+    and sd, the low lanes in A and B (B loaded already for a memory
+    source), keeping the first input's other lanes; else every lane, in V0
+    and V1 (from A and B for a memory source). """
+    op, env, lane = spec.op, g.env, spec.op.lane
+    first = g.word("v") if op.vex else g.word("d")
+    if not op.vex:
+        g.reads.add("d")
+    if not op.packed:
+        f = "s" if lane == 32 else "d"
+        compare_low_lanes(g, spec, first, slow)
+        g.emit(f"fcsel {f}2, {f}0, {f}1, {op.pick}")
+        store_low_lane(g, spec, first, "v2", "v3")
+        return
+    t = "4s" if lane == 32 else "2d"
+    if spec.has_mem:
+        g.emit(f"fmov d1, {A}",
+               f"mov v1.d[1], {B}")
+    else:
+        g.emit(f"ldr q1, [{env}, {g.word('s')}]")
+    g.emit(f"ldr q0, [{env}, {first}]")
+    dup_lanes(g, "v4", "x13", VFP_MIN_NORMAL2[lane], t)
+    dup_lanes(g, "v5", "x24", VFP_SPAN[lane], t)
+    g.emit("movi v2.16b, #0")
+    for v in ("v0", "v1"):
+        plain_lanes(g, v, t, "v2")
+    # Each lane of the first input where it is greater than the source
+    # (MAX) or the source is greater than it (MIN), else the source's.
+    a, b = ("v0", "v1") if op.pick == "gt" else ("v1", "v0")
+    g.emit("umaxv s2, v2.4s",
+           f"fmov {w(T)}, s2",
+           f"cbnz {w(T)}, {slow}f",
+           f"fcmgt v3.{t}, {a}.{t}, {b}.{t}",
+           "bsl v3.16b, v0.16b, v1.16b",
+           f"str q3, [{env}, {g.word('d')}]")
+
+
+def store_low_lane(g, spec, first, src, scratch):
+    """ Stores the result's low lane, from src, a general register or the
+    low lane of a V register, to the destination. A VEX encoding takes the
+    other lanes from the first input, at env + first, by way of V register
+    scratch; a legacy one keeps the destination's. """
+    env, d = g.env, g.word("d")
+    f = "s" if spec.op.lane == 32 else "d"
+    if src.startswith("v"):
+        lane, alone = f"{src}.{f}[0]", f + src[1:]
+    else:
+        lane = alone = w(src) if f == "s" else src
+    if spec.op.vex:
+        q = "q" + scratch[1:]
+        g.emit(f"ldr {q}, [{env}, {first}]",
+               f"mov {scratch}.{f}[0], {lane}",
+               f"str {q}, [{env}, {d}]")
+    else:
+        g.emit(f"str {alone}, [{env}, {d}]")
+
+
+def vcomi_body(g, spec):
+    # On the host's FPU when neither lane is a NaN or a denormal, as
+    # vfp_body() says for MIN and MAX; else the helper, which writes cc_src
+    # and cc_op itself. A memory source goes to xmm_t0 for the helper, as
+    # done by gen_load_sse().
+    op, env, lane = spec.op, g.env, spec.op.lane
+    r = w if lane == 32 else (lambda x: x)
+    slow, join = g._labels()
+    if spec.has_mem:
+        g.ea(ADDR)
+        g.load(B, ADDR, lane)
+    compare_low_lanes(g, spec, g.word("s1"), slow)
+    # Less is mi: CF. Equal is eq: ZF.
+    g.emit(f"cset {w(R)}, mi",
+           f"cset {w(T)}, eq",
+           f"orr {w(R)}, {w(R)}, {w(T)}, lsl #6",
+           f"str {R}, [{env}, %[cc_src]]",
+           f"mov {w(T)}, %[{spec.env_cc_op.lower()}]",
+           f"str {w(T)}, [{env}, %[cc_op]]",
+           f"{join}:")
+    if spec.has_mem:
+        store = [f"str {r(B)}, [{env}, %[xmm_t0]]"]
+        source = f"add x2, {env}, %[xmm_t0]"
+    else:
+        store = []
+        source = f"add x2, {env}, {g.word('s')}"
+    call_helper(g, slow, join, op.helper,
+                [f"add x1, {env}, {g.word('s1')}", source], store)
 
 
 def scalar_vfp_lines(g, spec, slow):
@@ -1718,12 +1924,7 @@ def scalar_vfp_lines(g, spec, slow):
                f"b.hs {slow}f",
                f"fmov {f}1, {r(B)}",
                f"{op.a64} {f}0, {f}1")
-        if op.vex:
-            g.emit(f"ldr q2, [{env}, {first}]",
-                   f"mov v2.{f}[0], v0.{f}[0]",
-                   f"str q2, [{env}, {g.word('d')}]")
-        else:
-            g.emit(f"str {f}0, [{env}, {g.word('d')}]")
+        store_low_lane(g, spec, first, "v0", "v2")
         return
     g.emit(f"ldr {r(A)}, [{env}, {first}]")
     g.emit(f"fmov {f}0, {r(A)}",
@@ -1740,18 +1941,8 @@ def scalar_vfp_lines(g, spec, slow):
            f"cmp {r(T)}, {r('x24')}",
            f"ccmp {r(T)}, #0, #4, lo",
            f"b.eq {slow}f")
-    # A denormal input: exponent 0, and not a zero.
-    for reg in (A, B):
-        g.emit(f"lsl {r(T)}, {r(reg)}, #1",
-               f"tst {r(reg)}, #{VFP_EXP[lane]:#x}",
-               f"ccmp {r(T)}, #0, #4, eq",
-               f"b.ne {slow}f")
-    if op.vex:
-        g.emit(f"ldr q2, [{env}, {first}]",
-               f"mov v2.{f}[0], {r(R)}",
-               f"str q2, [{env}, {g.word('d')}]")
-    else:
-        g.emit(f"str {r(R)}, [{env}, {g.word('d')}]")
+    denormal_inputs(g, (A, B), lane, slow)
+    store_low_lane(g, spec, first, R, "v2")
 
 
 def packed_vfp_lines(g, spec, slow):
@@ -1760,19 +1951,16 @@ def packed_vfp_lines(g, spec, slow):
     memory source), the result in v2. """
     op, env, lane = spec.op, g.env, spec.op.lane
     t = "4s" if lane == 32 else "2d"
-    r = w if lane == 32 else (lambda x: x)
     if spec.has_mem:
         g.emit(f"fmov d1, {A}",
                f"mov v1.d[1], {B}")
     else:
         g.emit(f"ldr q1, [{env}, {g.word('s')}]")
     if op.unary:
-        g.emit(f"mov {r('x13')}, #{VFP_MIN_NORMAL[lane]:#x}",
-               f"dup v4.{t}, {r('x13')}",
-               f"sub v3.{t}, v1.{t}, v4.{t}",
-               f"mov {r('x24')}, #{VFP_SQRT_SPAN[lane]:#x}",
-               f"dup v5.{t}, {r('x24')}",
-               f"cmhs v6.{t}, v3.{t}, v5.{t}",
+        dup_lanes(g, "v4", "x13", VFP_MIN_NORMAL[lane], t)
+        g.emit(f"sub v3.{t}, v1.{t}, v4.{t}")
+        dup_lanes(g, "v5", "x24", VFP_SQRT_SPAN[lane], t)
+        g.emit(f"cmhs v6.{t}, v3.{t}, v5.{t}",
                "umaxv s6, v6.4s",
                f"fmov {w(T)}, s6",
                f"cbnz {w(T)}, {slow}f",
@@ -1784,16 +1972,13 @@ def packed_vfp_lines(g, spec, slow):
     else:
         g.emit(f"ldr q0, [{env}, {g.word('d')}]")
         g.reads.add("d")
+    # As in scalar_vfp_lines(), on each lane: v6 collects the bad ones.
     g.emit(f"{op.a64} v2.{t}, v0.{t}, v1.{t}",
-           # As in scalar_vfp_lines(), on each lane: v6 collects the bad
-           # ones.
-           f"shl v3.{t}, v2.{t}, #1",
-           f"mov {r('x13')}, #{VFP_MIN_NORMAL2[lane]:#x}",
-           f"dup v4.{t}, {r('x13')}",
-           f"sub v3.{t}, v3.{t}, v4.{t}",
-           f"mov {r('x24')}, #{VFP_SPAN[lane]:#x}",
-           f"dup v5.{t}, {r('x24')}",
-           f"cmhs v6.{t}, v3.{t}, v5.{t}",
+           f"shl v3.{t}, v2.{t}, #1")
+    dup_lanes(g, "v4", "x13", VFP_MIN_NORMAL2[lane], t)
+    g.emit(f"sub v3.{t}, v3.{t}, v4.{t}")
+    dup_lanes(g, "v5", "x24", VFP_SPAN[lane], t)
+    g.emit(f"cmhs v6.{t}, v3.{t}, v5.{t}",
            f"cmeq v7.{t}, v3.{t}, #0",
            "orr v6.16b, v6.16b, v7.16b")
     # A denormal input: below the smallest normal, and not a zero.
@@ -2306,6 +2491,7 @@ BODIES = {
     "vlogic": vlogic_body,
     "vmovd": vmovd_body,
     "vtbl": vtbl_body,
+    "vcomi": vcomi_body,
     "fjcc": fused_body,
     "fjccgoto": fused_body,
     "setcc": setcc_body,
@@ -2356,6 +2542,7 @@ BODY_OPERANDS = {
     "cc_op_shlb": "CC_OP_SHLB",
     "cc_op_sarb": "CC_OP_SARB",
     "cc_op_dynamic": "CC_OP_DYNAMIC",
+    "cc_op_eflags": "CC_OP_EFLAGS",
     "cc_s": "CC_S",
     "eflags_0": "CC_O",
     "eflags_1": "CC_C",
@@ -2381,6 +2568,8 @@ BODY_ASSUMPTIONS = (
     "CC_S != CC_Z << 1",
     # vfp_body() adds xmm_t0's offset as an ADD immediate.
     "offsetof(CPUX86State, xmm_t0) > 4095",
+    # vcomi_body() builds cc_src from CF in bit 0 and ZF in bit 6.
+    "CC_C != 1 || CC_Z != 1 << 6",
     # clear_upper() clears bits 128 to 255 of an XMM register 16 bytes in.
     "offsetof(ZMMReg, ZMM_X(1)) != 16",
 )
@@ -2535,13 +2724,14 @@ OP_NAMES = ("add", "sub", "and", "or", "xor", "cmp", "test", "adc", "sbb",
             "cbw", "cwd", "xchg", "leave", "call", "jmp", "ret",
             *(op.name for op in VMOV_OPS), *(op.name for op in VFP_OPS),
             *(op.name for op in VLANE_OPS), *(op.name for op in VLOGIC_OPS),
-            *(op.name for op in VMOVD_OPS), *(op.name for op in VTBL_OPS))
+            *(op.name for op in VMOVD_OPS), *(op.name for op in VTBL_OPS),
+            *(op.name for op in VCOMI_OPS))
 FORM_NAMES = ("rr", "rm", "mr", "ri", "mi", "r", "i", "m", "rri", "rmi",
               "xx", "xm", "mx", "xr", "rx")
 KIND_NAMES = ("alu", "zero", "mov", "lea", "push", "pop", "extend", "unary",
               "shift", "mul", "imul3", "bt", "cbw", "cwd", "xchg", "leave",
               "call", "jmp", "ret", "vmov", "vfp", "vlane", "vlogic", "vmovd",
-              "vtbl")
+              "vtbl", "vcomi")
 WORD_NAMES = ("d", "s", "s1", "base", "index", "disp", "seg", "imm", "oi",
               "tlb", "ccop", "v")
 MAX_WORDS = len(WORD_REGS)
@@ -2572,7 +2762,7 @@ def gadget_file(spec):
         return "vex"
     if spec.kind in ("vmov", "vlogic", "vmovd", "vtbl"):
         return "sse"
-    if spec.kind in ("vfp", "vlane"):
+    if spec.kind in ("vfp", "vlane", "vcomi"):
         return "vfp"
     if spec.kind == "imul3":
         return "mul"
@@ -2789,7 +2979,9 @@ def write_table(all_specs, out):
     p(" * cc_dst, it adds the earlier state's MemOp. srcT: what the")
     p(" * translator puts in cc_srcT after it, as gen_SUB and gen_NEG do. dst,")
     p(" * src: whether it writes cc_dst and cc_src. cf: where the translator")
-    p(" * puts CF from before it.")
+    p(" * puts CF from before it. env_cc_op: the gadget writes cc_op to env")
+    p(" * on either path (UCOMIS and COMIS, whose helpers write it too), so")
+    p(" * the translator assumes it rather than setting it.")
     p(" */")
     p("typedef struct RCGFacts {")
     p("    RCGKind kind;")
@@ -2800,6 +2992,7 @@ def write_table(all_specs, out):
     p("    uint8_t srcT;")
     p("    bool dst, src;")
     p("    RCGCF cf;")
+    p("    bool env_cc_op;")
     p("} RCGFacts;\n")
 
     for spec in all_specs:
@@ -2860,16 +3053,18 @@ def write_table(all_specs, out):
         elif spec.kind == "bt":
             # Plus the earlier state's MemOp, which the translator adds.
             flags = ["CC_OP_SARB", False, "RCG_SRCT_NONE"]
+        elif spec.env_cc_op:
+            flags = [spec.env_cc_op, False, "RCG_SRCT_NONE"]
         else:
             flags = [-1, False, "RCG_SRCT_NONE"]
         flags += ["cc_dst" in spec.cc_writes, "cc_src" in spec.cc_writes,
-                  f"RCG_CF_{spec.cf}"]
+                  f"RCG_CF_{spec.cf}", spec.env_cc_op is not None]
         facts = [f"RCG_KIND_{spec.kind.upper()}",
                  spec.kind in ("push", "pop", "call", "ret", "leave"),
                  spec.kind in ("call", "jmp", "ret"),
                  MO[spec.op.src] if spec.kind == "extend" else -1] + flags
         fields = ("kind", "stack", "branch", "src_ot", "cc_op", "by_width",
-                  "srcT", "dst", "src", "cf")
+                  "srcT", "dst", "src", "cf", "env_cc_op")
         p(f"    [RCG_OP_{name.upper()}] = {{")
         for k, f in zip(fields, facts):
             p(f"        .{k} = " +
@@ -3116,6 +3311,8 @@ def insn_cases():
     yield from movd_cases()
     yield from tbl_cases()
     yield from tbl_fp_cases()
+    yield from comi_cases()
+    yield from minmax_zero_cases()
     yield from cond_cases()
     yield from branch_cases()
     yield from chain_cases()
@@ -3698,6 +3895,9 @@ def fault_cases():
                  "vinsertps xmm1, xmm1, dword ptr [rbx], 0x30"):
         yield mem(insn, 32, xmm=XMM_F64)
     yield mem(f"shufps xmm1, {m}, 0x4e", 128, xmm=XMM_F64, aligned=True)
+    for op in VCOMI_OPS:
+        yield mem(f"{op.name} xmm1, {PTR[op.lane]} ptr [rbx]", op.lane,
+                  xmm=XMM_F32 if op.lane == 32 else XMM_F64)
     # The VEX moves' loads.
     yield mem("vmovdqu xmm1, xmmword ptr [rbx]", 128, xmm=True)
     yield mem("vmovaps xmm1, xmmword ptr [rbx]", 128, xmm=True, aligned=True)
@@ -4308,15 +4508,18 @@ def movd_cases():
         yield Case(insn, 64, a=0, writes=True, **mem)
 
 
-def sweep(insn, width, dest=None):
-    """ Cases of insn, a function of the memory operand's text, which writes
-    XMM register dest, or memory if dest is None: one at each operand shape
-    and segment override, and one RIP-relative. With dest, each case checks
-    its bits 128 to 255 by way of upper(). """
+def sweep(insn, width, dest=None, writes=False, xmm=True):
+    """ Cases of insn, a function of the memory operand's text: one at each
+    operand shape and segment override, and one RIP-relative. dest is the
+    XMM register insn writes, if any, whose bits 128 to 255 each case
+    checks by way of upper(); writes says that insn writes memory; xmm goes
+    to Case. """
+    assert not (dest and writes)
+
     def case(text, **mem):
         i = insn(text)
         return Case(upper(dest, i) if dest else i, width, a=0, mem=True,
-                    xmm=True, writes=not dest,
+                    xmm=xmm, writes=writes,
                     **mem)
 
     for shape in EA_SHAPES:
@@ -4545,7 +4748,7 @@ def tbl_fp_cases():
     yield from sweep(lambda m: f"vinsertps xmm0, xmm1, {m}, 0x50", 32,
                      "xmm0")
     yield from sweep(lambda m: f"vmovlpd xmm0, xmm1, {m}", 64, "xmm0")
-    yield from sweep(lambda m: f"movhpd {m}, xmm2", 64)
+    yield from sweep(lambda m: f"movhpd {m}, xmm2", 64, writes=True)
     for target in MISALIGNED:
         for width, insn in ((128, "vpermilps xmm0, {}, 0x1b"),
                             (64, "vmovhps xmm0, xmm1, {}"),
@@ -4566,6 +4769,56 @@ def tbl_fp_cases():
         yield Case("vinsertf128 ymm1, ymm1, xmm3, 1; "
                    f"vinsertf128 ymm2, ymm2, xmm0, 1; {insn}; "
                    "vextractf128 xmm3, ymm0, 1", 128, a=0, b=1, xmm=True)
+
+
+def comi_cases():
+    """ UCOMISS, UCOMISD, COMISS and COMISD in both encodings: between
+    registers, over the floating-point values and over normal ones only
+    (which take the host's comparison), and with memory. Each is also
+    followed by Jcc, SETcc and CMOVcc, which read the flags. The legacy
+    encoding also runs with XMM9 and XMM10, which need REX, and with
+    memory at every operand shape and segment override and RIP-relative.
+    """
+    for op in VCOMI_OPS:
+        xmm, n = (XMM_F32, XMM_F32N) if op.lane == 32 else (XMM_F64, XMM_F64N)
+        text, base, index, bv, iv = memory_operand(op.lane, "bi1", None)
+        for v in ("", "v"):
+            insn = f"{v}{op.name}"
+            yield Case(f"{insn} xmm1, xmm2", op.lane, a=0, b=1, xmm=xmm)
+            yield Case(f"{insn} xmm1, xmm2", op.lane, a=0, b=1, xmm=n)
+            yield Case(f"{insn} xmm2, xmm2", op.lane, a=0, b=1, xmm=xmm)
+            if v:
+                yield Case(f"{insn} xmm1, {text}", op.lane, a=0, xmm=xmm,
+                           mem=True, base=base, index=index, base_value=bv,
+                           index_value=iv)
+            for jcc in ("jb", "jz", "jp", "ja", "jbe"):
+                yield Case(f"{insn} xmm1, xmm2; {jcc} 1f; mov ecx, 1; 1:",
+                           op.lane, a=0, b=1, xmm=xmm)
+            yield Case(f"{insn} xmm1, xmm2; setb al; setz cl; setp dl; "
+                       "seta bl", op.lane, a=0, b=1, xmm=xmm)
+            yield Case(f"{insn} xmm1, xmm2; cmova rax, rbx; cmovp rcx, rdx",
+                       op.lane, a=0, b=1, xmm=xmm)
+        # XMM1 and XMM2 swap after the copies, so a gadget that dropped
+        # REX would compare the other way around.
+        yield Case(f"movaps xmm9, xmm1; movaps xmm10, xmm2; "
+                   f"movaps xmm1, xmm10; movaps xmm2, xmm9; "
+                   f"{op.name} xmm9, xmm10", op.lane, a=0, b=1, xmm=xmm)
+        yield from sweep(lambda m: f"{op.name} xmm1, {m}", op.lane, xmm=xmm)
+
+
+def minmax_zero_cases():
+    """ MIN and MAX of -0 and +0, in both orders, which pick the source.
+    XMM1 holds -0 in every lane and XMM2 +0; vfp_cases() pairs the two
+    zeros only in the lanes its values happen to. """
+    for t, shift in (("s", "pslld xmm1, 31"), ("d", "psllq xmm1, 63")):
+        zeros = f"pcmpeqd xmm1, xmm1; {shift}; xorps xmm2, xmm2"
+        for insn in (binary("", "xmm1", "xmm1", "xmm2", f"maxp{t}"),
+                     binary("", "xmm1", "xmm1", "xmm2", f"minp{t}"),
+                     binary("", "xmm2", "xmm2", "xmm1", f"maxs{t}"),
+                     binary("", "xmm2", "xmm2", "xmm1", f"mins{t}"),
+                     binary("v", "xmm0", "xmm2", "xmm1", f"maxp{t}"),
+                     binary("v", "xmm0", "xmm1", "xmm2", f"mins{t}")):
+            yield Case(f"{zeros}; {insn}", 128, a=0, xmm=True)
 
 
 def addr32_cases():

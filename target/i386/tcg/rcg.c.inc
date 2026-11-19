@@ -102,17 +102,25 @@ static const struct {
     { gen_VMOVSS,     RCG_OP_MOVSS, 0, 2, -1 },
     { gen_VMOVSS_st,  RCG_OP_MOVSS, 0, 2, -1 },
     /*
-     * The SSE floating-point ops, by their ps op: rcg_select() picks pd, ss
-     * or sd by the prefix. op[1] is the destination again in the legacy
-     * encodings, and VEX.vvvv's register in the VEX ones, for which
-     * rcg_vex_op() picks the op. Packed SQRT has no op[1]:
-     * decode_sse_unary() leaves it out.
+     * The SSE floating-point ops (ADD, SUB, MUL, DIV, SQRT, MIN and MAX), by
+     * their ps op: rcg_select() picks pd, ss or sd by the prefix. op[1] is
+     * the destination again in the legacy encodings, and VEX.vvvv's
+     * register in the VEX ones, for which rcg_vex_op() picks the op. Packed
+     * SQRT has no op[1]: decode_sse_unary() leaves it out.
      */
     { gen_VADD,   RCG_OP_ADDPS, 0, 2, -1 },
     { gen_VSUB,   RCG_OP_SUBPS, 0, 2, -1 },
     { gen_VMUL,   RCG_OP_MULPS, 0, 2, -1 },
     { gen_VDIV,   RCG_OP_DIVPS, 0, 2, -1 },
     { gen_VSQRT,  RCG_OP_SQRTPS, 0, 2, -1 },
+    { gen_VMIN,   RCG_OP_MINPS, 0, 2, -1 },
+    { gen_VMAX,   RCG_OP_MAXPS, 0, 2, -1 },
+    /*
+     * UCOMISS and COMISS, which compare op[1] with op[2] and write neither;
+     * rcg_select() picks sd by the prefix.
+     */
+    { gen_VUCOMI, RCG_OP_UCOMISS, 1, 2, -1 },
+    { gen_VCOMI,  RCG_OP_COMISS,  1, 2, -1 },
     /* UNPCKLPS and UNPCKHPS; rcg_select() picks pd by the prefix. */
     { gen_VUNPCKLPx, RCG_OP_UNPCKLPS, 0, 2, -1 },
     { gen_VUNPCKHPx, RCG_OP_UNPCKHPS, 0, 2, -1 },
@@ -197,14 +205,19 @@ QEMU_BUILD_BUG_ON(RCG_OP_ADDSD != RCG_OP_ADDPS + 3 ||
                   RCG_OP_MULPS != RCG_OP_ADDPS + 8 ||
                   RCG_OP_DIVSD != RCG_OP_ADDPS + 15 ||
                   RCG_OP_SQRTSD != RCG_OP_ADDPS + 19 ||
+                  RCG_OP_MINPS != RCG_OP_ADDPS + 20 ||
+                  RCG_OP_MAXSD != RCG_OP_ADDPS + 27 ||
+                  RCG_OP_UCOMISD != RCG_OP_UCOMISS + 1 ||
+                  RCG_OP_COMISS != RCG_OP_UCOMISS + 2 ||
+                  RCG_OP_COMISD != RCG_OP_COMISS + 1 ||
                   RCG_OP_UNPCKLPD != RCG_OP_UNPCKLPS + 1 ||
                   RCG_OP_UNPCKHPD != RCG_OP_UNPCKHPS + 1);
 
 /* The VEX encodings' ops, in the order of the legacy ones: rcg_vex_op(). */
 QEMU_BUILD_BUG_ON(RCG_OP_VMOVSS - RCG_OP_VMOVDQA !=
                   RCG_OP_MOVSS - RCG_OP_MOVDQA ||
-                  RCG_OP_VSQRTSD - RCG_OP_VADDPS !=
-                  RCG_OP_SQRTSD - RCG_OP_ADDPS ||
+                  RCG_OP_VMAXSD - RCG_OP_VADDPS !=
+                  RCG_OP_MAXSD - RCG_OP_ADDPS ||
                   RCG_OP_VUNPCKHPD - RCG_OP_VUNPCKLPS !=
                   RCG_OP_UNPCKHPD - RCG_OP_UNPCKLPS ||
                   RCG_OP_VPXOR - RCG_OP_VPAND != RCG_OP_PXOR - RCG_OP_PAND ||
@@ -610,10 +623,12 @@ static bool rcg_select(DisasContext *s, X86DecodedInsn *decode, RCGOp *op,
         /* ps, pd, ss or sd, by the prefix: gen_fp_sse()'s choice. */
         *op += s->prefix & PREFIX_REPZ ? 2 : s->prefix & PREFIX_REPNZ ? 3 :
                s->prefix & PREFIX_DATA ? 1 : 0;
-    } else if (gen == gen_VUNPCKLPx || gen == gen_VUNPCKHPx) {
+    } else if (rcg_facts[*op].kind == RCG_KIND_VCOMI ||
+               gen == gen_VUNPCKLPx || gen == gen_VUNPCKHPx) {
         /*
-         * ps or pd; decode-new allows no other prefix. The integer unpacks
-         * name their op in rcg_insns[] already.
+         * ps or pd (for UCOMIS and COMIS, ss or sd) by the 0x66 prefix;
+         * decode-new allows no other prefix. The integer unpacks name their
+         * op in rcg_insns[] already.
          */
         *op += s->prefix & PREFIX_DATA ? 1 : 0;
     } else if (*op == RCG_OP_MOVD && ((*first)->has_ea || (*second)->has_ea)) {
@@ -642,7 +657,7 @@ static bool rcg_select(DisasContext *s, X86DecodedInsn *decode, RCGOp *op,
 
 /*
  * Whether float_status keeps its exception flags in its first two bytes,
- * where the SSE floating-point gadgets read them with LDRH.
+ * where the SSE ADD, SUB, MUL, DIV and SQRT gadgets read them with LDRH.
  */
 static bool rcg_sse_flags_ok(void)
 {
@@ -759,8 +774,10 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
          * encodings, whose gadgets require it, and may be misaligned in the
          * VEX ones, whose gadgets allow it. A table shuffle's source in
          * memory may instead be 1 to 8 bytes (see rcg_tbl_table()), which
-         * have no alignment to keep. The floating-point gadgets read
-         * float_status's flags directly; the others raise nothing.
+         * have no alignment to keep. All the floating-point gadgets but
+         * MIN's and MAX's read float_status's flags directly;
+         * rcg_sse_flags_ok() also gates MIN and MAX, which do not need it.
+         * The other gadgets raise nothing.
          */
         char a = rcg_kind(s, first), b = rcg_kind(s, second);
         bool fp = rcg_facts[op].kind == RCG_KIND_VFP;
@@ -780,6 +797,13 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
             return -1;
         }
         return rcg_form(a, b);
+    }
+    case RCG_KIND_VCOMI: {
+        /* The low lanes; memory is just the lane, which may be misaligned. */
+        char a = rcg_kind(s, first), b = rcg_kind(s, second);
+
+        *ot = (op - RCG_OP_UCOMISS) % 2 ? MO_64 : MO_32;
+        return a == 'x' && b ? rcg_form(a, b) : -1;
     }
     case RCG_KIND_LEAVE:
         /* Only a 64-bit RBP. */
@@ -918,7 +942,8 @@ static unsigned rcg_pack_words(const RCGGadget *g, uint64_t *words,
  * gadgets take VEX.vvvv's register as their first input where the
  * instruction has one, and clear bits 128 to 255 of the destination
  * register. A move to memory or to a general register is the same as the
- * legacy encoding and uses its gadgets.
+ * legacy encoding and uses its gadgets; so do UCOMIS and COMIS, which
+ * write no XMM register.
  */
 static int rcg_vex_op(RCGOp op, int form)
 {
@@ -935,6 +960,8 @@ static int rcg_vex_op(RCGOp op, int form)
         return form == RCG_FORM_RX ? op : RCG_OP_VMOVD;
     case RCG_KIND_VTBL:
         return op - RCG_OP_TBL1 + RCG_OP_VTBL1;
+    case RCG_KIND_VCOMI:
+        return op;
     default:
         return -1;
     }
@@ -1279,6 +1306,9 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     if (facts->src) {
         rcg_note(outs, &nb_outs, cpu_cc_src);
     }
+    if (facts->env_cc_op) {
+        rcg_note_temp(outs, &nb_outs, tcgv_i32_temp(cpu_cc_op));
+    }
     if (by_cl) {
         /* With a count of 0 it keeps the flags state, cc_op included. */
         rcg_note_temp(outs, &nb_outs, tcgv_i32_temp(cpu_cc_op));
@@ -1399,8 +1429,9 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     }
 
     /*
-     * Record the lazy-flags state the gadget left. After a shift by CL it
-     * is in env, which the gadget wrote.
+     * Record the lazy-flags state the gadget left. After a shift by CL it is
+     * in env, which the gadget wrote. An env_cc_op gadget writes its state
+     * to env as well.
      */
     if (by_cl) {
         assume_cc_op(s, CC_OP_DYNAMIC);
@@ -1408,7 +1439,13 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
         /* cc_dst is kept, so the width is the earlier state's. */
         set_cc_op(s, CC_OP_SARB + cc_op_size(s->cc_op));
     } else if (facts->cc_op >= 0) {
-        set_cc_op(s, facts->cc_op + (facts->by_width ? ot : 0));
+        CCOp cc_op = facts->cc_op + (facts->by_width ? ot : 0);
+
+        if (facts->env_cc_op) {
+            assume_cc_op(s, cc_op);
+        } else {
+            set_cc_op(s, cc_op);
+        }
         if (facts->srcT == RCG_SRCT_SUM) {
             tcg_gen_add_tl(s->cc_srcT, cpu_cc_dst, cpu_cc_src);
         } else if (facts->srcT == RCG_SRCT_ZERO) {
