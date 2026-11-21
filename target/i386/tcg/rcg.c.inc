@@ -30,7 +30,9 @@ QEMU_BUILD_BUG_ON(TARGET_PAGE_BITS != TCTI_TLB_PAGE_BITS);
  * itself is the zero idiom, and MOV with ZExtT0 or SExtT0 is MOVZX, MOVSX
  * or MOVSXD: rcg_select() picks those. MOV to and from segment, control
  * and debug registers also uses gen_MOV, but rcg_kind() refuses those
- * operands.
+ * operands. CMPPS, CMPPD, CMPSS and CMPSD are not in the table:
+ * rcg_select() picks their op from the immediate and the prefix, as done
+ * by gen_VCMP.
  */
 static const struct {
     X86GenFunc gen;
@@ -256,7 +258,13 @@ QEMU_BUILD_BUG_ON(RCG_OP_ADDSD != RCG_OP_ADDPS + 3 ||
                   RCG_OP_UNPCKHPD != RCG_OP_UNPCKHPS + 1 ||
                   RCG_OP_VFMADD132PD != RCG_OP_VFMADD132PS + 1 ||
                   RCG_OP_VFMADD132SS != RCG_OP_VFMADD132PS + 2 ||
-                  RCG_OP_VFNMSUB231SD != RCG_OP_VFMADD132PS + 47);
+                  RCG_OP_VFNMSUB231SD != RCG_OP_VFMADD132PS + 47 ||
+                  RCG_OP_CMP0SD != RCG_OP_CMP0PS + 3 ||
+                  RCG_OP_CMP1PS != RCG_OP_CMP0PS + 4 ||
+                  RCG_OP_CMP7SD != RCG_OP_CMP0PS + 31 ||
+                  RCG_OP_VCMP0PS != RCG_OP_CMP0PS + 32 ||
+                  RCG_OP_VCMP1PS != RCG_OP_VCMP0PS + 4 ||
+                  RCG_OP_VCMP31SD != RCG_OP_VCMP0PS + 127);
 
 /* The VEX encodings' ops, in the order of the legacy ones: rcg_vex_op(). */
 QEMU_BUILD_BUG_ON(RCG_OP_VMOVSS - RCG_OP_VMOVDQA !=
@@ -613,6 +621,16 @@ static void rcg_rotate_flags(DisasContext *s, MemOp ot, TCGv reg, bool left,
 }
 
 /*
+ * ps, pd, ss or sd (0 to 3) by the prefix: gen_fp_sse()'s and gen_VCMP's
+ * choice.
+ */
+static int rcg_fp_type(DisasContext *s)
+{
+    return s->prefix & PREFIX_REPZ ? 2 : s->prefix & PREFIX_REPNZ ? 3 :
+           s->prefix & PREFIX_DATA ? 1 : 0;
+}
+
+/*
  * The op for decode's instruction, and its first and second operands as
  * rcg_insns[] describes them; or false if RCG has no op for it.
  */
@@ -649,6 +667,23 @@ static bool rcg_select(DisasContext *s, X86DecodedInsn *decode, RCGOp *op,
         }
     }
 
+    if (gen == gen_VCMP) {
+        /*
+         * CMPPS, CMPPD, CMPSS and CMPSD: the op by the predicate, the
+         * immediate's low 3 bits (5 for VEX), then by ps, pd, ss or sd
+         * (rcg_fp_type()), both as done by gen_VCMP. op[1] is the
+         * destination again, or VEX.vvvv's register.
+         */
+        bool vex = s->prefix & PREFIX_VEX;
+        int predicate = decode->immediate & (vex ? 31 : 7);
+
+        *op = (vex ? RCG_OP_VCMP0PS : RCG_OP_CMP0PS) + predicate * 4 +
+              rcg_fp_type(s);
+        *first = &decode->op[0];
+        *second = &decode->op[2];
+        return true;
+    }
+
     for (i = 0; i < ARRAY_SIZE(rcg_insns); i++) {
         if (rcg_insns[i].gen == gen) {
             break;
@@ -669,9 +704,7 @@ static bool rcg_select(DisasContext *s, X86DecodedInsn *decode, RCGOp *op,
         sse_needs_alignment(s, decode, decode->op[0].ot)) {
         *op = RCG_OP_MOVDQA;
     } else if (rcg_facts[*op].kind == RCG_KIND_VFP) {
-        /* ps, pd, ss or sd, by the prefix: gen_fp_sse()'s choice. */
-        *op += s->prefix & PREFIX_REPZ ? 2 : s->prefix & PREFIX_REPNZ ? 3 :
-               s->prefix & PREFIX_DATA ? 1 : 0;
+        *op += rcg_fp_type(s);
     } else if (rcg_facts[*op].kind == RCG_KIND_VFMA) {
         /* pd or sd by VEX.W: the FMA_SSE gen functions' choice. */
         *op += s->vex_w;
@@ -891,16 +924,20 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
         }
         return rcg_form(a, b);
     }
-    case RCG_KIND_VFMA: {
+    case RCG_KIND_VFMA:
+    case RCG_KIND_VCMP: {
         /*
          * Between XMM registers only; with memory, TCG's. The width is the
-         * lanes' for ss and sd, which keep the rest of the destination.
+         * lanes' for ss and sd. Both kinds' ops come in fours: ps, pd, ss
+         * and sd. Only the FMA gadgets read float_status's flags, so only
+         * they need rcg_sse_flags_ok().
          */
         char a = rcg_kind(s, first), b = rcg_kind(s, second);
-        int type = (op - RCG_OP_VFMADD132PS) % 4;
+        bool fma = rcg_facts[op].kind == RCG_KIND_VFMA;
+        int type = (op - (fma ? RCG_OP_VFMADD132PS : RCG_OP_CMP0PS)) % 4;
 
         *ot = type == 2 ? MO_32 : type == 3 ? MO_64 : MO_128;
-        if (a != 'x' || b != 'x' || !rcg_sse_flags_ok()) {
+        if (a != 'x' || b != 'x' || (fma && !rcg_sse_flags_ok())) {
             return -1;
         }
         return rcg_form(a, b);
@@ -1057,7 +1094,9 @@ static unsigned rcg_pack_words(const RCGGadget *g, uint64_t *words,
  * one between registers for the broadcasts. The BMI shifts and the FMA ops
  * have only a VEX encoding and keep their op. They take VEX.vvvv's
  * register elsewhere: a BMI shift as its count (its last input), and an
- * FMA op as a factor or the addend, by its order.
+ * FMA op as a factor or the addend, by its order. CMPPS, CMPPD, CMPSS and
+ * CMPSD keep their op too: rcg_select() picks the VEX one, since the VEX
+ * encodings take 32 predicates.
  */
 static int rcg_vex_op(RCGOp op, int form, MemOp ot)
 {
@@ -1077,6 +1116,7 @@ static int rcg_vex_op(RCGOp op, int form, MemOp ot)
         return op - RCG_OP_TBL1 + RCG_OP_VTBL1;
     case RCG_KIND_VCOMI:
     case RCG_KIND_VFMA:
+    case RCG_KIND_VCMP:
     case RCG_KIND_BMISHIFT:
         return op;
     default:

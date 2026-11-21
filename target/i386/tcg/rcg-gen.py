@@ -284,6 +284,71 @@ VFMA_OPS = tuple(VFma(variant, a64, order, suffix)
                  for suffix in VFP_SUFFIXES)
 
 
+class VCmp:
+    """ CMPPS, CMPPD, CMPSS and CMPSD by one predicate, the immediate,
+    between XMM registers: each lane of the result is all ones where the
+    predicate holds for the first input's lane and the source's, else 0;
+    ss and sd keep the first input's other lanes. The first input is the
+    destination, or for a VEX encoding VEX.vvvv's register, as for VFp.
+    The legacy encodings take predicates 0 to 7, the VEX ones 0 to 31.
+    helper is gen_VCMP's helper for the predicate and type.
+
+    With no NaN and no denormal input lane, which raise IE or DE, no
+    predicate raises anything, and each is one of eight relations, which
+    RELATIONS gives by the predicate's low 3 bits: equal, less, less or
+    equal, greater and greater or equal of the first input to the source,
+    not equal, never and always. """
+
+    # gen_helper_cmp_funcs[]'s names, by predicate.
+    HELPERS = ("cmpeq", "cmplt", "cmple", "cmpunord",
+               "cmpneq", "cmpnlt", "cmpnle", "cmpord",
+               "cmpequ", "cmpnge", "cmpngt", "cmpfalse",
+               "cmpnequ", "cmpge", "cmpgt", "cmptrue",
+               "cmpeqs", "cmpltq", "cmpleq", "cmpunords",
+               "cmpneqq", "cmpnltq", "cmpnleq", "cmpords",
+               "cmpequs", "cmpngeq", "cmpngtq", "cmpfalses",
+               "cmpnequs", "cmpgeq", "cmpgtq", "cmptrues")
+
+    # Without NaNs, predicate p is the relation of p % 8: the packed
+    # compare, whether it takes the source first, whether its result is
+    # inverted, and the condition after FCMP of the first input with the
+    # source; or Nones for never and always, which always tells apart.
+    RELATIONS = (("fcmeq", False, False, "eq"),
+                 ("fcmgt", True, False, "mi"),
+                 ("fcmge", True, False, "ls"),
+                 (None, False, False, None),
+                 ("fcmeq", False, True, "ne"),
+                 ("fcmge", False, False, "ge"),
+                 ("fcmgt", False, False, "gt"),
+                 (None, False, False, None))
+
+    def __init__(self, predicate, suffix, vex=False):
+        self.predicate = predicate
+        self.suffix = suffix
+        self.name = f"{'v' if vex else ''}cmp{predicate}{suffix}"
+        self.fcm, self.swap, self.negate, self.cond = \
+            self.RELATIONS[predicate % 8]
+        self.always = predicate % 8 == 7
+        self.lane = 32 if suffix[1] == "s" else 64
+        self.packed = suffix[0] == "p"
+        self.width = 128 if self.packed else self.lane
+        self.helper = (f"helper_{self.HELPERS[predicate]}{suffix}" +
+                       ("_xmm" if self.packed else ""))
+        self.vex = vex
+
+    def reads_v(self, form=None):
+        return self.vex
+
+
+# The legacy encodings' ops, then the VEX ones', each by predicate and then
+# by type in VFP_SUFFIXES' order, which rcg_select() and rcg_operands() rely
+# on.
+VCMP_OPS = (*(VCmp(predicate, suffix) for predicate in range(8)
+              for suffix in VFP_SUFFIXES),
+            *(VCmp(predicate, suffix, vex=True) for predicate in range(32)
+              for suffix in VFP_SUFFIXES))
+
+
 class VComi:
     """ UCOMISS, UCOMISD, COMISS and COMISD: compare the low lanes of two
     XMM registers, or of one and memory, and leave CC_OP_EFLAGS with ZF, PF
@@ -396,7 +461,8 @@ VMOVD_OPS = (VMovd(), VMovd(vex=True))
 # VEX.vvvv's register as their "v" word (op.reads_v()): the SSE ops, and the
 # FMA ops, which have only a VEX encoding. The BMI shifts, which also have
 # only a VEX encoding, take VEX.vvvv's register as their "c" word instead.
-VEX_KINDS = ("vmov", "vfp", "vfma", "vlane", "vlogic", "vmovd", "vtbl")
+VEX_KINDS = ("vmov", "vfp", "vfma", "vcmp", "vlane", "vlogic", "vmovd",
+             "vtbl")
 
 
 class VTbl:
@@ -884,8 +950,8 @@ class Spec:
     kind is "alu", "zero" (XOR of a register with itself), "mov", "lea",
     "push", "pop", "extend", "unary", "shift", "mul", "imul3", "div",
     "bmishift", "bitcount", "bt", "cbw", "cwd", "xchg", "leave", "call",
-    "jmp", "ret", "vmov", "vfp", "vfma", "vlane", "vlogic", "vmovd", "vtbl"
-    or "vcomi".
+    "jmp", "ret", "vmov", "vfp", "vfma", "vcmp", "vlane", "vlogic",
+    "vmovd", "vtbl" or "vcomi".
 
     form is the destination's kind then the source's (r, m or i, or x for
     an XMM register), then for IMUL3 an i if it takes an immediate too; for
@@ -929,7 +995,7 @@ class Spec:
             return self.form in ("rr", "rm")
         if self.kind in ("vfp", "vfma", "vtbl"):
             return self.op.reads_d
-        if self.kind in ("vlane", "vlogic"):
+        if self.kind in ("vcmp", "vlane", "vlogic"):
             return not self.op.vex
         return self.kind in ("alu", "unary", "shift", "bt", "cbw", "xchg")
 
@@ -1170,6 +1236,8 @@ def specs():
             yield Spec("vfp", op, "xx", 256)
     for op in VFMA_OPS:
         yield Spec("vfma", op, "xx", op.width)
+    for op in VCMP_OPS:
+        yield Spec("vcmp", op, "xx", op.width)
     for op in VLANE_OPS:
         for form in ("xx", "xm"):
             yield from with_memory(Spec("vlane", op, form, op.width))
@@ -2251,6 +2319,46 @@ def vfma_body(g, spec):
     call_helper(g, slow, join, op.helper, args, keep=(g.word("d"),))
 
 
+def vcmp_body(g, spec):
+    # The work of gen_VCMP's helper for the predicate, between registers.
+    # With no NaN and no denormal input lane, as vfp_body() says for MIN and
+    # MAX, the host's comparison gives every lane's mask and raises nothing,
+    # whatever MXCSR holds; else the helper. A VEX encoding's first input
+    # is VEX.vvvv's register, and the gadget then clears bits 128 to 255 of
+    # the destination last, on either path.
+    op, env, lane = spec.op, g.env, spec.op.lane
+    slow, join = g._labels()
+    first = g.word("v") if op.vex else g.word("d")
+    if not op.vex:
+        g.reads.add("d")
+    if op.packed:
+        t = "4s" if lane == 32 else "2d"
+        g.emit(f"ldr q0, [{env}, {first}]",
+               f"ldr q1, [{env}, {g.word('s')}]")
+        plain_inputs(g, lane, t, slow)
+        if op.fcm:
+            a, b = ("v1", "v0") if op.swap else ("v0", "v1")
+            g.emit(f"{op.fcm} v3.{t}, {a}.{t}, {b}.{t}")
+            if op.negate:
+                g.emit("mvn v3.16b, v3.16b")
+        else:
+            g.emit(f"movi v3.16b, #{'0xff' if op.always else '0'}")
+        g.emit(f"str q3, [{env}, {g.word('d')}]")
+    else:
+        compare_low_lanes(g, spec, first, slow)
+        if op.cond:
+            g.emit(f"csetm {R}, {op.cond}")
+        else:
+            g.emit(f"mov {R}, #{-1 if op.always else 0}")
+        store_low_lane(g, spec, first, R, "v2")
+    g.emit(f"{join}:")
+    clear_upper(g, spec)
+    args = [f"add x1, {env}, {g.word('d')}", f"add x2, {env}, {first}",
+            f"add x3, {env}, {g.word('s')}"]
+    call_helper(g, slow, join, op.helper, args,
+                keep=(g.word("d"),) if op.vex else ())
+
+
 def call_helper(g, slow, join, helper, args, store=(), keep=(),
                 raises=False):
     """ Adds the slow path at slow to g.cold: with raises, a store of
@@ -2389,20 +2497,26 @@ def minmax_lines(g, spec, slow):
     else:
         g.emit(f"ldr q1, [{env}, {g.word('s')}]")
     g.emit(f"ldr q0, [{env}, {first}]")
+    plain_inputs(g, lane, t, slow)
+    # Each lane of the first input where it is greater than the source
+    # (MAX) or the source is greater than it (MIN), else the source's.
+    a, b = ("v0", "v1") if op.pick == "gt" else ("v1", "v0")
+    g.emit(f"fcmgt v3.{t}, {a}.{t}, {b}.{t}",
+           "bsl v3.16b, v0.16b, v1.16b",
+           f"str q3, [{env}, {g.word('d')}]")
+
+
+def plain_inputs(g, lane, t, slow):
+    """ Goes to slow if any lane of V0 or V1 is a NaN or a denormal. Uses
+    V2 to V7, x13, x24 and T. """
     dup_lanes(g, "v4", "x13", VFP_MIN_NORMAL2[lane], t)
     dup_lanes(g, "v5", "x24", VFP_SPAN[lane], t)
     g.emit("movi v2.16b, #0")
     for v in ("v0", "v1"):
         plain_lanes(g, v, t, "v2")
-    # Each lane of the first input where it is greater than the source
-    # (MAX) or the source is greater than it (MIN), else the source's.
-    a, b = ("v0", "v1") if op.pick == "gt" else ("v1", "v0")
     g.emit("umaxv s2, v2.4s",
            f"fmov {w(T)}, s2",
-           f"cbnz {w(T)}, {slow}f",
-           f"fcmgt v3.{t}, {a}.{t}, {b}.{t}",
-           "bsl v3.16b, v0.16b, v1.16b",
-           f"str q3, [{env}, {g.word('d')}]")
+           f"cbnz {w(T)}, {slow}f")
 
 
 def store_low_lane(g, spec, first, src, scratch):
@@ -3155,6 +3269,7 @@ BODIES = {
     "imul3": imul3_body,
     "div": div_body,
     "vfma": vfma_body,
+    "vcmp": vcmp_body,
     "bmishift": bmishift_body,
     "bitcount": bitcount_body,
     "bt": bt_body,
@@ -3397,13 +3512,15 @@ OP_NAMES = ("add", "sub", "and", "or", "xor", "cmp", "test", "adc", "sbb",
             *(op.name for op in VFP_OPS),
             *(op.name for op in VLANE_OPS), *(op.name for op in VLOGIC_OPS),
             *(op.name for op in VMOVD_OPS), *(op.name for op in VTBL_OPS),
-            *(op.name for op in VCOMI_OPS), *(op.name for op in VFMA_OPS))
+            *(op.name for op in VCOMI_OPS), *(op.name for op in VFMA_OPS),
+            *(op.name for op in VCMP_OPS))
 FORM_NAMES = ("rr", "rm", "mr", "ri", "mi", "r", "i", "m", "rri", "rmi",
               "xx", "xm", "mx", "xr", "rx")
 KIND_NAMES = ("alu", "zero", "mov", "lea", "push", "pop", "extend", "unary",
               "shift", "mul", "imul3", "div", "bmishift", "bitcount", "bt",
               "cbw", "cwd", "xchg", "leave", "call", "jmp", "ret", "vmov",
-              "vfp", "vlane", "vlogic", "vmovd", "vtbl", "vcomi", "vfma")
+              "vfp", "vlane", "vlogic", "vmovd", "vtbl", "vcomi", "vfma",
+              "vcmp")
 WORD_NAMES = ("d", "s", "s1", "base", "index", "disp", "seg", "imm", "oi",
               "tlb", "ccop", "v", "c", "oi2")
 MAX_WORDS = len(WORD_REGS)
@@ -3434,7 +3551,7 @@ def gadget_file(spec):
         return "vex"
     if spec.kind in ("vmov", "vlogic", "vmovd", "vtbl"):
         return "sse"
-    if spec.kind in ("vfp", "vlane", "vcomi"):
+    if spec.kind in ("vfp", "vcmp", "vlane", "vcomi"):
         return "vfp"
     if spec.kind in ("imul3", "div"):
         return "mul"
@@ -4007,6 +4124,7 @@ def insn_cases():
     yield from vex_vfp_cases()
     yield from vex256_vfp_cases()
     yield from fma_cases()
+    yield from cmp_cases()
     yield from vex256_broadcast_cases()
     yield from vec_alias_cases()
     yield from mmx_cases()
@@ -5322,6 +5440,50 @@ def vex_vfp_cases():
             yield Case(upper("xmm0", insn("xmm0", "xmm1", text)), width,
                        a=0, mem=True, base=base, index=index, base_value=bv,
                        index_value=iv, xmm=n)
+
+
+def cmp_cases():
+    """ CMPPS, CMPPD, CMPSS and CMPSD by each predicate, between XMM
+    registers, with XMM1 and XMM2 taking every pair of values, and again
+    with normal values only; then with the destination as the source, and
+    for VEX as VEX.vvvv's register too, and registers above XMM7; and with
+    an immediate above the last predicate, which gen_VCMP masks. With
+    memory, and in their VEX.256 encodings, they stay with TCG. Most VEX
+    cases check bits 128 to 255 by way of upper(). """
+    for op in VCMP_OPS:
+        mnemonic = f"{'v' if op.vex else ''}cmp{op.suffix}"
+        imm = op.predicate
+        xmm = XMM_F64 if op.lane == 64 else XMM_F32
+        n = XMM_F64N if op.lane == 64 else XMM_F32N
+        if op.vex:
+            text = f"{mnemonic} xmm0, xmm1, xmm2, {imm}"
+            for x in (xmm, n):
+                yield Case(upper("xmm0", text), op.width, a=0, b=1, xmm=x)
+            yield Case(upper("xmm2", f"{mnemonic} xmm2, xmm1, xmm2, {imm}"),
+                       op.width, a=0, b=1, xmm=xmm)
+            yield Case(upper("xmm1", f"{mnemonic} xmm1, xmm1, xmm2, {imm}"),
+                       op.width, a=0, b=1, xmm=xmm)
+            yield Case(f"movaps xmm10, xmm1; {mnemonic} xmm9, xmm10, xmm2, "
+                       f"{imm}; movaps xmm0, xmm9", op.width, a=0, b=1,
+                       xmm=xmm)
+        else:
+            for x in (xmm, n):
+                yield Case(f"{mnemonic} xmm1, xmm2, {imm}", op.width, a=0,
+                           b=1, xmm=x)
+            yield Case(f"{mnemonic} xmm2, xmm2, {imm}", op.width, a=0,
+                       xmm=xmm)
+            yield Case(f"movaps xmm9, xmm1; movaps xmm10, xmm2; "
+                       f"{mnemonic} xmm9, xmm10, {imm}; movaps xmm1, xmm9",
+                       op.width, a=0, b=1, xmm=xmm)
+    yield Case("cmpps xmm1, xmm2, 13", 128, a=0, b=1, xmm=XMM_F32)
+    yield Case(upper("xmm0", "vcmpsd xmm0, xmm1, xmm2, 45"), 64, a=0, b=1,
+               xmm=XMM_F64)
+    # With memory, and VEX.256: TCG's.
+    text, base, _, bv, _ = memory_operand(128, "b", None)
+    yield Case(f"cmpps xmm1, {text}, 1", 128, a=0, mem=True, base=base,
+               base_value=bv, xmm=XMM_F32)
+    yield Case("vcmpps ymm0, ymm1, ymm2, 1", 256, a=0, b=1, xmm=XMM_F32,
+               ymm=True)
 
 
 def fma_cases():
