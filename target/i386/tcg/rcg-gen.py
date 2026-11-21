@@ -1335,8 +1335,9 @@ class Body:
         gen_op_mov_v_reg() reads it for any width but AH to BH. For those
         the word is the offset of RAX to RBX plus 1 (see rcg_reg_op() in
         rcg.c.inc), so that dest's low byte is the register and the rest
-        reaches into the next one: a gadget the translator gives them to
-        uses no more of dest than its low byte. """
+        reaches into the next one. The translator gives AH to BH to every
+        gadget but ROR's, so a body must use no more of an 8-bit register
+        than its low byte. """
         self.emit(f"ldr {dest}, [{self.env}, {self.word(word)}]")
         self.define(dest)
         self.reads.add(word)
@@ -3291,7 +3292,7 @@ def insn_cases():
         for n in (0, 8):
             r = reg_name(n, width)
             yield Case(f"xor {r}, {r}", width, a=n)
-    # A high-byte register, left to TCG.
+    # A high-byte register, which the gadget takes as RAX's second byte.
     yield Case("xor ah, ah", 8, a=0)
     for width in WIDTHS:
         yield from mov_cases(width)
@@ -3576,7 +3577,6 @@ def shift_cases(op, width):
     for n in (0, 9):
         for count in SHIFT_COUNTS:
             yield Case(f"{op.name} {reg_name(n, width)}, {count}", width, a=n)
-        # By CL: TCG's.
         yield Case(f"{op.name} {reg_name(n, width)}, cl", width, a=n)
     if width == 8:
         yield Case(f"{op.name} ah, 3", 8, a=0)
@@ -3836,6 +3836,7 @@ def fault_cases():
     # AH to BH with memory.
     yield mem("mov ah, byte ptr [rbx]", 8, a=0)
     yield mem("mov byte ptr [rbx], ch", 8, a=1, writes=True)
+    yield mem("add byte ptr [rbx], ah", 8, a=0, writes=True)
     for op in EXTEND_OPS:
         for width in op.widths:
             # The case's width is the access's, the source's here.
@@ -4885,11 +4886,15 @@ def addr32_cases():
 
 
 def high_byte_cases():
-    """ AH, CH, DH and BH with the instructions whose gadgets take them,
-    which use no more of an 8-bit register than its low byte: MOV, MOVZX,
-    MOVSX, XCHG, MUL, IMUL and SETcc. Those left to TCG are in
-    alu_cases(), shift_cases() and so on. Some share RAX with an operand
-    the instruction reads or writes without naming it. """
+    """ AH, CH, DH and BH, which every op's gadgets but ROL's and ROR's
+    take. Most forms are in alu_cases(), unary_cases(), shift_cases() and
+    so on. These add MOV, MOVZX, MOVSX, XCHG, MUL, IMUL and SETcc with more
+    registers; the ALU ops with memory, with the two low bytes of one
+    register, and with one byte twice (SBB, which stays with TCG); shifts
+    by CL; and the flags states the ALU, unary and shift ops leave, read by
+    a Jcc, joined (after CMP and TEST) or not. Some share RAX with an
+    operand the instruction reads or writes without naming it, and some put
+    CH with CL in RCX. """
     text, base, _, bv, _ = memory_operand(8, "b", None)
     for insn, a, b in (("mov ah, bh", 0, 3), ("mov ch, al", 1, 0),
                        ("mov dh, 0x7f", 2, -1), ("xchg ah, al", 0, -1),
@@ -4902,9 +4907,35 @@ def high_byte_cases():
                        ("imul ah", 0, -1)):
         yield Case(insn, 8, a=a, b=b)
     for insn, a, writes in ((f"mov ah, {text}", 0, False),
-                            (f"mov {text}, ch", 1, True)):
+                            (f"mov {text}, ch", 1, True),
+                            (f"add {text}, ah", 0, True),
+                            (f"sub ch, {text}", 1, False),
+                            (f"cmp {text}, dh", 2, False)):
         yield Case(insn, 8, a=a, mem=True, base=base, base_value=bv,
                    writes=writes)
+    # BH as the source, with RSI as the base, since BH is in RBX.
+    text, base, _, bv, _ = memory_operand(8, "b", None, base=6)
+    yield Case(f"test {text}, bh", 8, a=3, mem=True, base=base,
+               base_value=bv)
+    # A fused CMP with memory and DH.
+    text, base, _, bv, _ = memory_operand(8, "b", None)
+    yield Case(f"cmp {text}, dh; jne 1f; mov ecx, 1; 1:", 8, a=2, mem=True,
+               base=base, base_value=bv)
+    for insn, a in (("add ah, al", 0), ("sub al, ah", 0), ("adc ch, cl", 1),
+                    ("sbb ah, ah", 0), ("shl ch, cl", 1)):
+        yield Case(insn, 8, a=a)
+    for insn, a in (("sar ah, cl", 0), ("shr bh, cl", 3)):
+        yield Case(insn, 8, a=a, b=1)
+    for setter, a, b in (("cmp ah, bh", 0, 3), ("test dh, 0x81", 2, -1),
+                         ("add dh, al", 2, 0), ("sub bh, 1", 3, -1),
+                         ("or ah, 0x80", 0, -1), ("inc ah", 0, -1),
+                         ("neg dh", 2, -1), ("sar bh, 3", 3, -1),
+                         ("shr ah, cl", 0, 1)):
+        # O, B, E and S, which read one flag each, and A, L and LE, which
+        # combine them.
+        for cond in (0, 2, 4, 7, 8, 12, 14):
+            yield Case(f"{setter}; j{CONDS[cond]} 1f; mov ecx, 1; 1:", 8,
+                       a=a, b=b)
     for cond in range(16):
         yield Case(f"cmp eax, ebx; set{CONDS[cond]} bh", 32, a=0, b=3)
         yield Case(f"cmp eax, ebx; set{CONDS[cond]} ah", 32, a=0, b=3)
