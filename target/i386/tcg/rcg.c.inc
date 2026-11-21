@@ -211,6 +211,34 @@ static const struct {
     { gen_VBLENDPD,     RCG_OP_TBL2, 0, 2, -1 },
     { gen_VPBLENDW,     RCG_OP_TBL2, 0, 2, -1 },
     { gen_VMOVHPx_st,   RCG_OP_MOVSD, 0, 2, -1 },
+    /*
+     * The FMA ops, by their ps op (or ss, for the scalar ones):
+     * rcg_select() picks pd or sd by VEX.W. op[1] is VEX.vvvv's register.
+     */
+    { gen_VFMADD132Px,    RCG_OP_VFMADD132PS, 0, 2, -1 },
+    { gen_VFMADD132Sx,    RCG_OP_VFMADD132SS, 0, 2, -1 },
+    { gen_VFMADD213Px,    RCG_OP_VFMADD213PS, 0, 2, -1 },
+    { gen_VFMADD213Sx,    RCG_OP_VFMADD213SS, 0, 2, -1 },
+    { gen_VFMADD231Px,    RCG_OP_VFMADD231PS, 0, 2, -1 },
+    { gen_VFMADD231Sx,    RCG_OP_VFMADD231SS, 0, 2, -1 },
+    { gen_VFMSUB132Px,    RCG_OP_VFMSUB132PS, 0, 2, -1 },
+    { gen_VFMSUB132Sx,    RCG_OP_VFMSUB132SS, 0, 2, -1 },
+    { gen_VFMSUB213Px,    RCG_OP_VFMSUB213PS, 0, 2, -1 },
+    { gen_VFMSUB213Sx,    RCG_OP_VFMSUB213SS, 0, 2, -1 },
+    { gen_VFMSUB231Px,    RCG_OP_VFMSUB231PS, 0, 2, -1 },
+    { gen_VFMSUB231Sx,    RCG_OP_VFMSUB231SS, 0, 2, -1 },
+    { gen_VFNMADD132Px,   RCG_OP_VFNMADD132PS, 0, 2, -1 },
+    { gen_VFNMADD132Sx,   RCG_OP_VFNMADD132SS, 0, 2, -1 },
+    { gen_VFNMADD213Px,   RCG_OP_VFNMADD213PS, 0, 2, -1 },
+    { gen_VFNMADD213Sx,   RCG_OP_VFNMADD213SS, 0, 2, -1 },
+    { gen_VFNMADD231Px,   RCG_OP_VFNMADD231PS, 0, 2, -1 },
+    { gen_VFNMADD231Sx,   RCG_OP_VFNMADD231SS, 0, 2, -1 },
+    { gen_VFNMSUB132Px,   RCG_OP_VFNMSUB132PS, 0, 2, -1 },
+    { gen_VFNMSUB132Sx,   RCG_OP_VFNMSUB132SS, 0, 2, -1 },
+    { gen_VFNMSUB213Px,   RCG_OP_VFNMSUB213PS, 0, 2, -1 },
+    { gen_VFNMSUB213Sx,   RCG_OP_VFNMSUB213SS, 0, 2, -1 },
+    { gen_VFNMSUB231Px,   RCG_OP_VFNMSUB231PS, 0, 2, -1 },
+    { gen_VFNMSUB231Sx,   RCG_OP_VFNMSUB231SS, 0, 2, -1 },
 };
 
 /* Each op's ps, pd, ss and sd, in this order: see rcg_select(). */
@@ -225,7 +253,10 @@ QEMU_BUILD_BUG_ON(RCG_OP_ADDSD != RCG_OP_ADDPS + 3 ||
                   RCG_OP_COMISS != RCG_OP_UCOMISS + 2 ||
                   RCG_OP_COMISD != RCG_OP_COMISS + 1 ||
                   RCG_OP_UNPCKLPD != RCG_OP_UNPCKLPS + 1 ||
-                  RCG_OP_UNPCKHPD != RCG_OP_UNPCKHPS + 1);
+                  RCG_OP_UNPCKHPD != RCG_OP_UNPCKHPS + 1 ||
+                  RCG_OP_VFMADD132PD != RCG_OP_VFMADD132PS + 1 ||
+                  RCG_OP_VFMADD132SS != RCG_OP_VFMADD132PS + 2 ||
+                  RCG_OP_VFNMSUB231SD != RCG_OP_VFMADD132PS + 47);
 
 /* The VEX encodings' ops, in the order of the legacy ones: rcg_vex_op(). */
 QEMU_BUILD_BUG_ON(RCG_OP_VMOVSS - RCG_OP_VMOVDQA !=
@@ -641,6 +672,9 @@ static bool rcg_select(DisasContext *s, X86DecodedInsn *decode, RCGOp *op,
         /* ps, pd, ss or sd, by the prefix: gen_fp_sse()'s choice. */
         *op += s->prefix & PREFIX_REPZ ? 2 : s->prefix & PREFIX_REPNZ ? 3 :
                s->prefix & PREFIX_DATA ? 1 : 0;
+    } else if (rcg_facts[*op].kind == RCG_KIND_VFMA) {
+        /* pd or sd by VEX.W: the FMA_SSE gen functions' choice. */
+        *op += s->vex_w;
     } else if (rcg_facts[*op].kind == RCG_KIND_VCOMI ||
                gen == gen_VUNPCKLPx || gen == gen_VUNPCKHPx) {
         /*
@@ -675,7 +709,7 @@ static bool rcg_select(DisasContext *s, X86DecodedInsn *decode, RCGOp *op,
 
 /*
  * Whether float_status keeps its exception flags in its first two bytes,
- * where the SSE ADD, SUB, MUL, DIV and SQRT gadgets read them with LDRH.
+ * where the ADD, SUB, MUL, DIV, SQRT and FMA gadgets read them with LDRH.
  */
 static bool rcg_sse_flags_ok(void)
 {
@@ -857,6 +891,20 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
         }
         return rcg_form(a, b);
     }
+    case RCG_KIND_VFMA: {
+        /*
+         * Between XMM registers only; with memory, TCG's. The width is the
+         * lanes' for ss and sd, which keep the rest of the destination.
+         */
+        char a = rcg_kind(s, first), b = rcg_kind(s, second);
+        int type = (op - RCG_OP_VFMADD132PS) % 4;
+
+        *ot = type == 2 ? MO_32 : type == 3 ? MO_64 : MO_128;
+        if (a != 'x' || b != 'x' || !rcg_sse_flags_ok()) {
+            return -1;
+        }
+        return rcg_form(a, b);
+    }
     case RCG_KIND_VCOMI: {
         /* The low lanes; memory is just the lane, which may be misaligned. */
         char a = rcg_kind(s, first), b = rcg_kind(s, second);
@@ -1006,9 +1054,10 @@ static unsigned rcg_pack_words(const RCGGadget *g, uint64_t *words,
  * same as the legacy encoding and use its gadgets. At 256 bits, which
  * rcg_ymm_ok() has accepted, MOVDQA and MOVDQU have gadgets for every
  * form, stores too; ps and pd have them between registers; and VTBL1 has
- * one between registers for the broadcasts. The BMI shifts have only a VEX
- * encoding and keep their op; VEX.vvvv's register is their count, their
- * last input.
+ * one between registers for the broadcasts. The BMI shifts and the FMA ops
+ * have only a VEX encoding and keep their op. They take VEX.vvvv's
+ * register elsewhere: a BMI shift as its count (its last input), and an
+ * FMA op as a factor or the addend, by its order.
  */
 static int rcg_vex_op(RCGOp op, int form, MemOp ot)
 {
@@ -1027,6 +1076,7 @@ static int rcg_vex_op(RCGOp op, int form, MemOp ot)
     case RCG_KIND_VTBL:
         return op - RCG_OP_TBL1 + RCG_OP_VTBL1;
     case RCG_KIND_VCOMI:
+    case RCG_KIND_VFMA:
     case RCG_KIND_BMISHIFT:
         return op;
     default:

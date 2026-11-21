@@ -806,8 +806,8 @@ static inline void rcg_init_hi(void)
  * reaches the cases' data, if the CPU lacks XSAVE or AVX (for the VEX
  * encodings), SSSE3 (for PALIGNR), SSE4.1 (for INSERTPS and the blends),
  * AVX2 (for the broadcasts and VPBLENDD), BMI1 (for SHLX, SHRX, SARX and
- * LZCNT) or ABM (for TZCNT), or if it lacks XSAVEOPT, without which QEMU
- * will not set CR4.OSXSAVE.
+ * LZCNT), ABM (for TZCNT) or FMA (for the FMA ops), or if it lacks
+ * XSAVEOPT, without which QEMU will not set CR4.OSXSAVE.
  */
 static inline void rcg_init(void)
 {
@@ -845,16 +845,16 @@ static inline void rcg_init(void)
     asm volatile("mov %0, %%cr4" : : "r"(cr | 0x600));
 
     /*
-     * Checks for XSAVE, AVX, SSSE3, SSE4.1, AVX2, BMI1 and ABM, then sets
-     * CR4.OSXSAVE and enables x87, SSE and AVX in XCR0.
+     * Checks for XSAVE, AVX, SSSE3, SSE4.1, FMA, AVX2, BMI1 and ABM, then
+     * sets CR4.OSXSAVE and enables x87, SSE and AVX in XCR0.
      */
     asm volatile("cpuid" : "+a"(eax), "+c"(ecx) : : "ebx", "edx");
     if (!(ecx & (1 << 26)) || !(ecx & (1 << 28))) {
         ml_printf("FAIL: the CPU has no XSAVE or AVX\n");
         asm volatile("outw %w0, $0xf4" : : "a"(1));
     }
-    if (!(ecx & (1 << 9)) || !(ecx & (1 << 19))) {
-        ml_printf("FAIL: the CPU has no SSSE3 or SSE4.1\n");
+    if (!(ecx & (1 << 9)) || !(ecx & (1 << 19)) || !(ecx & (1 << 12))) {
+        ml_printf("FAIL: the CPU has no SSSE3, SSE4.1 or FMA\n");
         asm volatile("outw %w0, $0xf4" : : "a"(1));
     }
     eax = 7;

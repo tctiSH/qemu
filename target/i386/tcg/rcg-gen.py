@@ -235,6 +235,55 @@ VFP_OPS = tuple(VFp(base, a64, suffix, unary=base == "sqrt", vex=vex,
                 for suffix in VFP_SUFFIXES)
 
 
+class VFma:
+    """ The FMA ops, VEX.128 only and between XMM registers: VFMADD,
+    VFMSUB, VFNMADD and VFNMSUB, in each order (132, 213 and 231) and type
+    (ps, pd, ss and sd). With x86's operands d (the destination, which is
+    always an input), v (VEX.vvvv's register) and s (the source), 132 is
+    d * s + v, 213 is v * d + s and 231 is v * s + d; ROLES gives each
+    order's two factors, then its addend. FMSUB negates the addend, FNMADD
+    the product and FNMSUB both, by the flags gen_<op>Px and gen_<op>Sx
+    pass to helper_fma4*. a64 is the AArch64 instruction for ss and sd:
+    x86's FMSUB is AArch64's FNMSUB, its FNMADD FMSUB and its FNMSUB
+    FNMADD. The host's fused multiply-add rounds once, as softfloat's
+    muladd does, so under vfp_body()'s conditions it gives the helper's
+    result and leaves the exception flags as they are. ss and sd keep the
+    rest of the destination's low 16 bytes; all of them clear bits 128 to
+    255 of the destination. """
+
+    ROLES = {"132": ("d", "s", "v"), "213": ("v", "d", "s"),
+             "231": ("v", "s", "d")}
+
+    def __init__(self, variant, a64, order, suffix):
+        self.name = f"v{variant}{order}{suffix}"
+        self.variant = variant
+        self.a64 = a64
+        self.lane = 32 if suffix[1] == "s" else 64
+        self.packed = suffix[0] == "p"
+        self.width = 128 if self.packed else self.lane
+        self.helper = f"helper_fma4{suffix}" + ("_xmm" if self.packed else "")
+        self.neg_product = variant in ("fnmadd", "fnmsub")
+        self.neg_addend = variant in ("fmsub", "fnmsub")
+        self.vex = True
+        self.roles = self.ROLES[order]
+
+    reads_d = True
+
+    def reads_v(self, form=None):
+        return True
+
+
+# Each variant and order's four types, ps, pd, ss and sd, in this order, which
+# rcg_select() relies on.
+VFMA_OPS = tuple(VFma(variant, a64, order, suffix)
+                 for variant, a64 in (("fmadd", "fmadd"),
+                                      ("fmsub", "fnmsub"),
+                                      ("fnmadd", "fmsub"),
+                                      ("fnmsub", "fnmadd"))
+                 for order in ("132", "213", "231")
+                 for suffix in VFP_SUFFIXES)
+
+
 class VComi:
     """ UCOMISS, UCOMISD, COMISS and COMISD: compare the low lanes of two
     XMM registers, or of one and memory, and leave CC_OP_EFLAGS with ZF, PF
@@ -343,11 +392,11 @@ class VMovd:
 
 VMOVD_OPS = (VMovd(), VMovd(vex=True))
 
-# The kinds of the SSE ops, which have VEX encodings (op.vex) whose gadgets
-# may read VEX.vvvv's register (op.reads_v()). The BMI shifts, which
-# have only a VEX encoding, take VEX.vvvv's register as their "c" word
-# instead.
-VEX_KINDS = ("vmov", "vfp", "vlane", "vlogic", "vmovd", "vtbl")
+# The kinds whose VEX encodings (op.vex) have gadgets that may read
+# VEX.vvvv's register as their "v" word (op.reads_v()): the SSE ops, and the
+# FMA ops, which have only a VEX encoding. The BMI shifts, which also have
+# only a VEX encoding, take VEX.vvvv's register as their "c" word instead.
+VEX_KINDS = ("vmov", "vfp", "vfma", "vlane", "vlogic", "vmovd", "vtbl")
 
 
 class VTbl:
@@ -835,8 +884,8 @@ class Spec:
     kind is "alu", "zero" (XOR of a register with itself), "mov", "lea",
     "push", "pop", "extend", "unary", "shift", "mul", "imul3", "div",
     "bmishift", "bitcount", "bt", "cbw", "cwd", "xchg", "leave", "call",
-    "jmp", "ret", "vmov", "vfp", "vlane", "vlogic", "vmovd", "vtbl" or
-    "vcomi".
+    "jmp", "ret", "vmov", "vfp", "vfma", "vlane", "vlogic", "vmovd", "vtbl"
+    or "vcomi".
 
     form is the destination's kind then the source's (r, m or i, or x for
     an XMM register), then for IMUL3 an i if it takes an immediate too; for
@@ -878,7 +927,7 @@ class Spec:
         it. """
         if self.kind == "imul3":
             return self.form in ("rr", "rm")
-        if self.kind in ("vfp", "vtbl"):
+        if self.kind in ("vfp", "vfma", "vtbl"):
             return self.op.reads_d
         if self.kind in ("vlane", "vlogic"):
             return not self.op.vex
@@ -1119,6 +1168,8 @@ def specs():
             yield from with_memory(Spec("vfp", op, form, op.width))
         if op.vex and op.packed:
             yield Spec("vfp", op, "xx", 256)
+    for op in VFMA_OPS:
+        yield Spec("vfma", op, "xx", op.width)
     for op in VLANE_OPS:
         for form in ("xx", "xm"):
             yield from with_memory(Spec("vlane", op, form, op.width))
@@ -1159,7 +1210,8 @@ def with_memory(spec):
 
 # A gadget's operand words arrive in these registers, in order, however the
 # spec's stream holds them. They are none of x0-x4, which a slow path sets
-# up as a helper's arguments before it is done with the words.
+# up as a helper's arguments before it is done with the words; a slow path
+# that sets x5 or x6 too does so last.
 WORD_REGS = ("x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12")
 
 # What a body computes in: the address, the first and second operands, the
@@ -2121,13 +2173,8 @@ def vfp256_body(g, spec):
         else:
             # The result and input checks of packed_vfp_lines().
             g.emit(f"ldr q0, [{B}, #{half}]",
-                   f"{op.a64} {res}.{t}, v0.{t}, v1.{t}",
-                   f"shl v3.{t}, {res}.{t}, #1",
-                   f"sub v3.{t}, v3.{t}, v4.{t}",
-                   f"cmhs v7.{t}, v3.{t}, v5.{t}",
-                   f"cmeq v16.{t}, v3.{t}, #0",
-                   "orr v7.16b, v7.16b, v16.16b",
-                   f"orr {bad}.16b, {bad}.16b, v7.16b")
+                   f"{op.a64} {res}.{t}, v0.{t}, v1.{t}")
+            unusual_result_lanes(g, res, t, bad)
             for v in ("v0", "v1"):
                 denormal_lanes(g, v, t, bad)
     g.emit(f"umaxv s{bad[1:]}, {bad}.4s",
@@ -2142,6 +2189,68 @@ def vfp256_body(g, spec):
                 [f"add x1, {env}, {g.word('d')}", *inputs, source])
 
 
+def vfma_body(g, spec):
+    # The helper_fma4* that gen_<op>Px or gen_<op>Sx calls, on the host's
+    # FPU under vfp_body()'s conditions, with the checks of
+    # packed_vfp_lines() and scalar_vfp_lines(): no input lane denormal,
+    # every result lane normal and above the smallest normal. The inputs
+    # come in VFma.roles' order: the factors in V0 and V1 (for ss and sd, A
+    # and B), the addend in V2 (ADDR); the packed result replaces V2. For
+    # ss and sd, op.a64 does the whole op on the low lane. For ps and pd,
+    # FMLA or FMLS adds the product to the addend or subtracts it, after an
+    # FNEG of the addend for FMSUB and FNMSUB.
+    op, env, lane = spec.op, g.env, spec.op.lane
+    t = "4s" if lane == 32 else "2d"
+    f = "s" if lane == 32 else "d"
+    r = w if lane == 32 else (lambda x: x)
+    slow, join = g._labels()
+    g.reads.add("d")
+    a, b, c = (g.word(role) for role in op.roles)
+    mxcsr_lines(g, slow)
+    if op.packed:
+        g.emit(f"ldr q0, [{env}, {a}]",
+               f"ldr q1, [{env}, {b}]",
+               f"ldr q2, [{env}, {c}]")
+        dup_lanes(g, "v4", "x13", VFP_MIN_NORMAL2[lane], t)
+        dup_lanes(g, "v5", "x24", VFP_SPAN[lane], t)
+        g.emit("movi v6.16b, #0")
+        for v in ("v0", "v1", "v2"):
+            denormal_lanes(g, v, t, "v6")
+        if op.neg_addend:
+            g.emit(f"fneg v2.{t}, v2.{t}")
+        g.emit(f"{'fmls' if op.neg_product else 'fmla'} v2.{t}, v0.{t}, "
+               f"v1.{t}")
+        unusual_result_lanes(g, "v2", t, "v6")
+        g.emit("umaxv s6, v6.4s",
+               f"fmov {w(T)}, s6",
+               f"cbnz {w(T)}, {slow}f",
+               f"str q2, [{env}, {g.word('d')}]")
+    else:
+        g.emit(f"ldr {r(A)}, [{env}, {a}]",
+               f"ldr {r(B)}, [{env}, {b}]",
+               f"ldr {r(ADDR)}, [{env}, {c}]")
+        denormal_inputs(g, (A, B, ADDR), lane, slow)
+        g.emit(f"fmov {f}0, {r(A)}",
+               f"fmov {f}1, {r(B)}",
+               f"fmov {f}2, {r(ADDR)}",
+               f"{op.a64} {f}3, {f}0, {f}1, {f}2",
+               f"fmov {r(R)}, {f}3")
+        unusual_result(g, R, lane, slow)
+        store_low_lane(g, spec, g.word("d"), R, "v2")
+    g.emit(f"{join}:")
+    clear_upper(g, spec)
+    # The helper takes (env, d, a, b, c, flags), and for ps and pd flip,
+    # which toggles the flags on odd lanes: 0 here, as in FMA_SSE. a, b and
+    # c may be x5 or x6 (see WORD_REGS), so w5 and w6 are set last.
+    args = [f"add x1, {env}, {g.word('d')}",
+            *(f"add x{n}, {env}, {word}"
+              for n, word in enumerate((a, b, c), 2)),
+            f"mov w5, %[fma_{op.variant}]"]
+    if op.packed:
+        args.append("mov w6, #0")
+    call_helper(g, slow, join, op.helper, args, keep=(g.word("d"),))
+
+
 def call_helper(g, slow, join, helper, args, store=(), keep=(),
                 raises=False):
     """ Adds the slow path at slow to g.cold: with raises, a store of
@@ -2154,6 +2263,37 @@ def call_helper(g, slow, join, helper, args, store=(), keep=(),
     getpc = [f"str {g.h.retaddr}, [{g.h.getpc}]"] if raises else []
     g.cold += [f"{slow}:", *getpc, *store, *save, f"mov x0, {g.env}",
                *args, f"bl _{helper}", *restore, f"b {join}b"]
+
+
+def unusual_result(g, reg, lane, slow):
+    """ Goes to slow unless the lane in reg is normal and above the
+    smallest normal. Uses T, x13 and x24. """
+    r = w if lane == 32 else (lambda x: x)
+    # The result's magnitude, doubled, less the smallest normal's: 0 for
+    # the smallest normal, wrapped around for smaller ones, and SPAN or
+    # more for an infinity or a NaN.
+    g.emit(f"lsl {r(T)}, {r(reg)}, #1",
+           f"mov {r('x13')}, #{VFP_MIN_NORMAL2[lane]:#x}",
+           f"sub {r(T)}, {r(T)}, {r('x13')}",
+           f"mov {r('x24')}, #{VFP_SPAN[lane]:#x}",
+           f"cmp {r(T)}, {r('x24')}",
+           f"ccmp {r(T)}, #0, #4, lo",
+           f"b.eq {slow}f")
+
+
+def unusual_result_lanes(g, vreg, t, bad):
+    """ The same on every lane: sets every bit of each lane of bad where
+    vreg's lane is a NaN, an infinity, a zero, a denormal or the smallest
+    normal. V4 and V5 must hold VFP_MIN_NORMAL2 and VFP_SPAN in each lane
+    (see dup_lanes()); V3, V7 and V16 are scratch, so none of the five may
+    be vreg or bad. """
+    assert not {vreg, bad} & {"v3", "v4", "v5", "v7", "v16"}, (vreg, bad)
+    g.emit(f"shl v3.{t}, {vreg}.{t}, #1",
+           f"sub v3.{t}, v3.{t}, v4.{t}",
+           f"cmhs v7.{t}, v3.{t}, v5.{t}",
+           f"cmeq v16.{t}, v3.{t}, #0",
+           "orr v7.16b, v7.16b, v16.16b",
+           f"orr {bad}.16b, {bad}.16b, v7.16b")
 
 
 def denormal_inputs(g, regs, lane, slow):
@@ -2268,8 +2408,8 @@ def minmax_lines(g, spec, slow):
 def store_low_lane(g, spec, first, src, scratch):
     """ Stores the result's low lane, from src, a general register or the
     low lane of a V register, to the destination. A VEX encoding takes the
-    other lanes from the first input, at env + first, by way of V register
-    scratch; a legacy one keeps the destination's. """
+    other lanes from env + first, by way of V register scratch; a legacy
+    one keeps the destination's. """
     env, d = g.env, g.word("d")
     f = "s" if spec.op.lane == 32 else "d"
     if src.startswith("v"):
@@ -2345,17 +2485,8 @@ def scalar_vfp_lines(g, spec, slow):
     g.emit(f"fmov {f}0, {r(A)}",
            f"fmov {f}1, {r(B)}",
            f"{op.a64} {f}0, {f}0, {f}1",
-           f"fmov {r(R)}, {f}0",
-           # The result's magnitude, doubled, less the smallest normal's:
-           # 0 for the smallest normal, wrapped around for smaller ones, and
-           # SPAN or more for an infinity or a NaN.
-           f"lsl {r(T)}, {r(R)}, #1",
-           f"mov {r('x13')}, #{VFP_MIN_NORMAL2[lane]:#x}",
-           f"sub {r(T)}, {r(T)}, {r('x13')}",
-           f"mov {r('x24')}, #{VFP_SPAN[lane]:#x}",
-           f"cmp {r(T)}, {r('x24')}",
-           f"ccmp {r(T)}, #0, #4, lo",
-           f"b.eq {slow}f")
+           f"fmov {r(R)}, {f}0")
+    unusual_result(g, R, lane, slow)
     denormal_inputs(g, (A, B), lane, slow)
     store_low_lane(g, spec, first, R, "v2")
 
@@ -3023,6 +3154,7 @@ BODIES = {
     "mul": mul_body,
     "imul3": imul3_body,
     "div": div_body,
+    "vfma": vfma_body,
     "bmishift": bmishift_body,
     "bitcount": bitcount_body,
     "bt": bt_body,
@@ -3084,6 +3216,10 @@ BODY_OPERANDS = {
     "sse_flags": "offsetof(CPUX86State, sse_status)",
     "sse_inexact": "__builtin_ctz(float_flag_inexact)",
     "xmm_t0": "offsetof(CPUX86State, xmm_t0)",
+    "fma_fmadd": "0",
+    "fma_fmsub": "float_muladd_negate_c",
+    "fma_fnmadd": "float_muladd_negate_product",
+    "fma_fnmsub": "float_muladd_negate_c | float_muladd_negate_product",
 }
 
 # What the bodies take for granted of QEMU's definitions, beyond what their
@@ -3261,13 +3397,13 @@ OP_NAMES = ("add", "sub", "and", "or", "xor", "cmp", "test", "adc", "sbb",
             *(op.name for op in VFP_OPS),
             *(op.name for op in VLANE_OPS), *(op.name for op in VLOGIC_OPS),
             *(op.name for op in VMOVD_OPS), *(op.name for op in VTBL_OPS),
-            *(op.name for op in VCOMI_OPS))
+            *(op.name for op in VCOMI_OPS), *(op.name for op in VFMA_OPS))
 FORM_NAMES = ("rr", "rm", "mr", "ri", "mi", "r", "i", "m", "rri", "rmi",
               "xx", "xm", "mx", "xr", "rx")
 KIND_NAMES = ("alu", "zero", "mov", "lea", "push", "pop", "extend", "unary",
               "shift", "mul", "imul3", "div", "bmishift", "bitcount", "bt",
               "cbw", "cwd", "xchg", "leave", "call", "jmp", "ret", "vmov",
-              "vfp", "vlane", "vlogic", "vmovd", "vtbl", "vcomi")
+              "vfp", "vlane", "vlogic", "vmovd", "vtbl", "vcomi", "vfma")
 WORD_NAMES = ("d", "s", "s1", "base", "index", "disp", "seg", "imm", "oi",
               "tlb", "ccop", "v", "c", "oi2")
 MAX_WORDS = len(WORD_REGS)
@@ -3329,6 +3465,7 @@ def write_gadgets(outdir):
               file=f)
         print('#include "qemu/osdep.h"', file=f)
         print('#include "cpu.h"', file=f)
+        print('#include "fpu/softfloat.h"', file=f)
         print('#include "tcti-gadget-defs.h"\n', file=f)
         files[name] = f
 
@@ -3869,6 +4006,7 @@ def insn_cases():
     yield from vfp_cases()
     yield from vex_vfp_cases()
     yield from vex256_vfp_cases()
+    yield from fma_cases()
     yield from vex256_broadcast_cases()
     yield from vec_alias_cases()
     yield from mmx_cases()
@@ -5184,6 +5322,33 @@ def vex_vfp_cases():
             yield Case(upper("xmm0", insn("xmm0", "xmm1", text)), width,
                        a=0, mem=True, base=base, index=index, base_value=bv,
                        index_value=iv, xmm=n)
+
+
+def fma_cases():
+    """ The FMA ops between XMM registers, with XMM0, XMM1 and XMM2 as the
+    inputs, which take every pair of values: each as the destination, then
+    XMM3 as all three, then XMM9, XMM10 and XMM12, which need REX. Each runs
+    again with normal values only, which mostly take the host's FPU. Each
+    case but those writing XMM3 or XMM9 checks bits 128 to 255 by way of
+    upper(). Last come a memory source and a VEX.256 encoding, which stay
+    with TCG. """
+    for op in VFMA_OPS:
+        n = XMM_F64N if op.lane == 64 else XMM_F32N
+        for xmm in (XMM_F64 if op.lane == 64 else XMM_F32, n):
+            for dest in ("xmm0", "xmm1", "xmm2"):
+                yield Case(upper(dest, f"{op.name} {dest}, xmm1, xmm2"),
+                           op.width, a=0, b=1, xmm=xmm)
+            yield Case(f"{op.name} xmm3, xmm3, xmm3", op.width, a=0,
+                       xmm=xmm)
+            yield Case(f"movaps xmm9, xmm0; movaps xmm10, xmm1; "
+                       f"movaps xmm12, xmm2; {op.name} xmm9, xmm10, xmm12; "
+                       f"movaps xmm0, xmm9", op.width, a=0, b=1, xmm=xmm)
+        xmm = XMM_F64 if op.lane == 64 else XMM_F32
+        text, base, _, bv, _ = memory_operand(op.width, "b", None)
+        yield Case(upper("xmm0", f"{op.name} xmm0, xmm1, {text}"), op.width,
+                   a=0, mem=True, base=base, base_value=bv, xmm=xmm)
+    yield Case("vfmadd231ps ymm0, ymm1, ymm2", 256, a=0, b=1, xmm=XMM_F32,
+               ymm=True)
 
 
 def vex256_broadcast_cases():
