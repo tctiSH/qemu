@@ -70,6 +70,9 @@ static const struct {
     { gen_MUL,    RCG_OP_MUL,  -1,  1, X86_SPECIAL_ZExtT0 },
     { gen_IMUL,   RCG_OP_IMUL, -1,  1, X86_SPECIAL_SExtT0 },
     { gen_IMUL3,  RCG_OP_IMUL3, 0,  1, X86_SPECIAL_SExtT0 },
+    /* DIV and IDIV divide RDX:RAX by op[1]. */
+    { gen_DIV,    RCG_OP_DIV,  -1,  1, -1 },
+    { gen_IDIV,   RCG_OP_IDIV, -1,  1, -1 },
     /*
      * The bit number is op[2]. BT writes nothing, so its operand is op[1];
      * BTS, BTR and BTC write op[0], and op[1] is the same operand.
@@ -733,6 +736,7 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
         *ot = first->ot;
         return rcg_form(rcg_kind(s, first), 0);
     case RCG_KIND_MUL:
+    case RCG_KIND_DIV:
         *ot = second->ot;
         return rcg_form(rcg_kind(s, second), 0);
     case RCG_KIND_CBW:
@@ -1133,7 +1137,7 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     const RCGFacts *facts;
     uint64_t imm = 0;
     int form, shape = 0, seg = -1;
-    bool ordered = false, rotate_left = false, by_cl;
+    bool ordered = false, rotate_left = false, by_cl, may_fault;
     const RCGSlot *slot;
     const RCGGadget *g;
     uint64_t words[RCG_MAX_WORDS + RCG_TABLE_WORDS];
@@ -1184,6 +1188,7 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     if (!slot->gadgets) {
         return NULL;
     }
+    may_fault = slot->access || facts->raises;
 
     /*
      * The gadget for the width, the address's shape and whether a segment
@@ -1214,12 +1219,12 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
          * CF is written to cc_src2 before the gadget runs. A fault in the
          * gadget restores the flags state from before the instruction, and
          * if that state uses cc_src2, its value would already be lost. So
-         * a gadget that accesses memory is refused after such a state.
+         * a gadget that may fault is refused after such a state.
          */
         if (((form == RCG_FORM_RI || form == RCG_FORM_MI) && !imm) ||
             (op == RCG_OP_SBB && form == RCG_FORM_RR &&
              first->n == second->n) ||
-            (slot->access && (cc_op_live(s->cc_op) & USES_CC_SRC2))) {
+            (may_fault && (cc_op_live(s->cc_op) & USES_CC_SRC2))) {
             return NULL;
         }
     }
@@ -1279,6 +1284,16 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
         if (ot == MO_16) {
             rcg_note(ins, &nb_ins, cpu_regs[R_EDX]);
         }
+    }
+    if (facts->kind == RCG_KIND_DIV) {
+        /*
+         * It reads RAX and RDX and writes them (at 32 bits, EAX and EDX
+         * zero-extended); the helper writes them too on the slow path.
+         */
+        rcg_note(outs, &nb_outs, cpu_regs[R_EAX]);
+        rcg_note(ins, &nb_ins, cpu_regs[R_EAX]);
+        rcg_note(outs, &nb_outs, cpu_regs[R_EDX]);
+        rcg_note(ins, &nb_ins, cpu_regs[R_EDX]);
     }
     if (facts->branch && !(op == RCG_OP_CALL && form == RCG_FORM_I)) {
         rcg_note(outs, &nb_outs, cpu_eip);
@@ -1416,7 +1431,7 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
         rcg_tbl_table(s, decode, second, (uint8_t *)&words[n]);
         n += RCG_TABLE_WORDS;
     }
-    tcg_gen_rich(g->gadget, words, n, slot->access ? TCG_RICH_MAY_FAULT : 0,
+    tcg_gen_rich(g->gadget, words, n, may_fault ? TCG_RICH_MAY_FAULT : 0,
                  outs, nb_outs, ins, nb_ins);
     if (facts->cf == RCG_CF_SRC) {
         tcg_gen_mov_tl(cpu_cc_src, cf);

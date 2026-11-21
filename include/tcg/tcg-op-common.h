@@ -65,8 +65,8 @@ void tcg_gen_mb(TCGBar);
  * The gadget does a whole guest instruction. It touches no globals but
  * those listed, which must be direct, and clobbers the registers a helper
  * call does. With TCG_RICH_MAY_FAULT, it writes no global and no guest
- * memory before its last access that may fault, so that a fault leaves
- * the guest as it was before the instruction. Call only while
+ * memory before the last point at which it may fault, so that a fault
+ * leaves the guest as it was before the instruction. Call only while
  * tcg_rcg_active().
  */
 void tcg_gen_rich(const void *gadget, const uint64_t *words,
@@ -137,8 +137,9 @@ const void *tcg_rich_gadget(TCGOp *op);
  * The op takes @prev's place, so it belongs to @prev's instruction and runs
  * before the ops that followed @prev, such as discards. If @prev has
  * TCG_RICH_MAY_FAULT, the op may fault as @prev may. It writes nothing
- * before its last access that may fault, and every global is synced before
- * it, so a fault leaves the guest as it was before @prev's instruction.
+ * before the last point at which it may fault, and every global is synced
+ * before it, so a fault leaves the guest as it was before @prev's
+ * instruction.
  */
 void tcg_gen_rich_br_join(TCGOp *prev, const void *gadget,
                           const uint64_t *words, unsigned nb_words,

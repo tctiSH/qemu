@@ -234,10 +234,11 @@ Function call
        |
        | The gadget reads *<ins>* from memory, writes all of each of *<outs>*
          there (a global it writes in part is in *<ins>* too), and clobbers
-         the registers a helper call does. It touches no other global. With TCG_RICH_MAY_FAULT in 'flags', every global is
-         synced first, and the gadget may raise exceptions, which unwind as
-         if from just after its words, within the instruction's code. It
-         writes nothing before its last access that may fault. See
+         the registers a helper call does. It touches no other global.
+         With TCG_RICH_MAY_FAULT in 'flags', every global is synced first,
+         and the gadget may raise exceptions, which unwind as if from just
+         after its words, within the instruction's code. It writes nothing
+         before the last point at which it may fault. See
          ``tcg_gen_rich()``.
 
    * - rich_br gadget, words, nb_words, jumps, label, *<outs>*, *<ins>*

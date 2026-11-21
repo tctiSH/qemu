@@ -537,6 +537,25 @@ IMUL3_FORMS = ("rr", "rm", "rri", "rmi")
 IMUL3_WIDTHS = (16, 32, 64)
 
 
+class Div:
+    """ DIV and IDIV of RDX:RAX, or EDX:EAX at 32 bits, by a register, as
+    unsigned or signed: the quotient to RAX and the remainder to RDX, or at
+    32 bits to EAX and EDX, zero-extended, like TCG's helpers. The gadget
+    does that itself where the divisor is not 0 and the quotient fits the
+    width, at 64 bits only when RDX:RAX is RAX extended and, for IDIV, the
+    divisor is not -1. Otherwise it calls the helper gen_DIV or gen_IDIV
+    would, which raises #DE or, at 64 bits, may instead divide all 128
+    bits. The flags are undefined, and TCG leaves them alone. """
+
+    def __init__(self, name, signed):
+        self.name = name
+        self.signed = signed
+
+
+DIV_OPS = (Div("div", False), Div("idiv", True))
+DIV_WIDTHS = (32, 64)
+
+
 class BitTest:
     """ BT, BTS, BTR and BTC: CF = bit n of dest, n being the source (a
     register or an immediate) masked to the operand size; BTS, BTR and BTC
@@ -761,13 +780,13 @@ class Spec:
     """ One gadget: what it does and the words it takes.
 
     kind is "alu", "zero" (XOR of a register with itself), "mov", "lea",
-    "push", "pop", "extend", "unary", "shift", "mul", "imul3", "bt", "cbw",
-    "cwd", "xchg", "leave", "call", "jmp", "ret", "vmov", "vfp", "vlane",
-    "vlogic", "vmovd", "vtbl" or "vcomi".
+    "push", "pop", "extend", "unary", "shift", "mul", "imul3", "div", "bt",
+    "cbw", "cwd", "xchg", "leave", "call", "jmp", "ret", "vmov", "vfp",
+    "vlane", "vlogic", "vmovd", "vtbl" or "vcomi".
 
     form is the destination's kind then the source's (r, m or i, or x for
     an XMM register), then for IMUL3 an i if it takes an immediate too; for
-    MUL and IMUL with one operand it is the source's, for CBW the
+    MUL, IMUL with one operand, DIV and IDIV it is the source's, for CBW the
     destination's, for CALL and JMP the target's (i for CALL rel32), for
     RET i and for LEAVE r. shape and seg are the memory operand's, if any.
     ordered is for the twin that keeps the guest's memory order
@@ -859,8 +878,9 @@ class Spec:
         sign-extended as decode-new extends it.
 
         CALL's imm is the return address less env's eip, and RET's how far
-        it moves RSP. MUL and IMUL with one operand take no words for RAX
-        and RDX, whose offsets are fixed, nor LEAVE for RBP and RSP. """
+        it moves RSP. MUL and IMUL with one operand, DIV and IDIV take no
+        words for RAX and RDX, whose offsets are fixed, nor LEAVE for RBP
+        and RSP. """
         if self.kind in ("call", "jmp", "ret"):
             words = (ea_words(self.shape, self.seg) if self.form == "m"
                      else ["s"] if self.form == "r" else [])
@@ -871,7 +891,7 @@ class Spec:
             return words
         if self.kind == "leave":
             operands = []
-        elif self.kind in ("push", "mul"):
+        elif self.kind in ("push", "mul", "div"):
             operands = ["s" if self.form == "r" else self.form]
         elif self.kind == "imul3":
             operands = ["d", "s" if self.form[1] == "r" else "m",
@@ -948,6 +968,12 @@ class Spec:
         return ()
 
     @property
+    def raises(self):
+        """ Whether the gadget may raise an exception other than a fault on
+        its access, from a helper: DIV's and IDIV's #DE. """
+        return self.kind == "div"
+
+    @property
     def env_cc_op(self):
         """ The CC_OP the gadget writes to env's cc_op on either path, or
         None. Only UCOMIS and COMIS write it, CC_OP_EFLAGS, as their helpers
@@ -999,6 +1025,9 @@ def specs():
     for form in IMUL3_FORMS:
         for width in IMUL3_WIDTHS:
             yield from with_memory(Spec("imul3", IMUL3_OP, form, width))
+    for op in DIV_OPS:
+        for width in DIV_WIDTHS:
+            yield Spec("div", op, "r", width)
     for op in BT_OPS:
         for form in BT_FORMS:
             for width in BT_WIDTHS:
@@ -1108,10 +1137,14 @@ class Harness:
     env is the register that holds env. A gadget's body may use the
     registers of scratch, and keeps every other register. It passes retaddr
     to a cputlb helper as the return address the helper unwinds from, and
-    keeps what it needs across that call with save and restore. """
+    keeps what it needs across that call with save and restore. getpc holds
+    the address of tcti_call_return_address, from which a helper that may
+    raise reads GETPC(): TCTI's call gadget stores retaddr there before
+    each call. """
 
     env = "x14"
     retaddr = "x28"
+    getpc = "x25"
     save = tcti_memory.C_CALL_PROLOGUE
     restore = tcti_memory.C_CALL_EPILOGUE
     scratch = (*(f"x{n}" for n in range(14)), *tcti_memory.TMP)
@@ -1869,14 +1902,18 @@ def mxcsr_lines(g, slow):
            f"tbz {w(T)}, #%[sse_inexact], {slow}f")
 
 
-def call_helper(g, slow, join, helper, args, store=(), keep=()):
-    """ Adds the slow path at slow to g.cold: the lines of store, then a
-    call to helper(env, ...), with args the lines that set x1 onward,
-    keeping the registers in keep across the call, then a branch back to
-    join. """
+def call_helper(g, slow, join, helper, args, store=(), keep=(),
+                raises=False):
+    """ Adds the slow path at slow to g.cold: with raises, a store of
+    retaddr at the address in g.h.getpc, from which a helper that may raise
+    reads GETPC(), as TCTI's call gadget does before each call; then the
+    lines of store, then a call to helper(env, ...), with args the lines
+    that set x1 onward, keeping the registers in keep across the call, then
+    a branch back to join. """
     save, restore = g._save(keep)
-    g.cold += [f"{slow}:", *store, *save, f"mov x0, {g.env}", *args,
-               f"bl _{helper}", *restore, f"b {join}b"]
+    getpc = [f"str {g.h.retaddr}, [{g.h.getpc}]"] if raises else []
+    g.cold += [f"{slow}:", *getpc, *store, *save, f"mov x0, {g.env}",
+               *args, f"bl _{helper}", *restore, f"b {join}b"]
 
 
 def denormal_inputs(g, regs, lane, slow):
@@ -2473,6 +2510,56 @@ def mul_body(g, spec):
         g.write_cc(dst=A, src=T)
 
 
+def div_body(g, spec):
+    # gen_DIV and gen_IDIV by a register, on the host's divider where Div's
+    # docstring says; else the helper, which writes RAX and RDX itself if
+    # it does not raise.
+    op, width, env = spec.op, spec.width, g.env
+    slow, join = g._labels()
+    g.read_reg(B, "s")
+    g.emit(f"ldr {A}, [{env}, %[rax]]",
+           f"ldr {T}, [{env}, %[rdx]]")
+    if width == 32:
+        # EDX:EAX as one 64-bit dividend.
+        g.extend(B, 32, op.signed)
+        g.emit(f"bfi {A}, {T}, #32, #32",
+               f"cbz {B}, {slow}f")
+        if op.signed:
+            # The quotient fits if it is its low half sign-extended. On the
+            # host, INT64_MIN / -1 gives INT64_MIN, which fails this too.
+            g.emit(f"sdiv {R}, {A}, {B}",
+                   f"cmp {R}, {w(R)}, sxtw",
+                   f"b.ne {slow}f")
+        else:
+            # The quotient fits if EDX is below the divisor.
+            g.emit(f"cmp {w(T)}, {w(B)}",
+                   f"b.hs {slow}f",
+                   f"udiv {R}, {A}, {B}")
+        g.emit(f"msub {T}, {R}, {B}, {A}")
+        if op.signed:
+            g.emit(f"mov {w(R)}, {w(R)}",
+                   f"mov {w(T)}, {w(T)}")
+    else:
+        g.emit(f"cbz {B}, {slow}f")
+        if op.signed:
+            # The quotient fits if RDX:RAX is RAX sign-extended and the
+            # divisor is not -1, as INT64_MIN / -1 does not (the host gives
+            # INT64_MIN); the helper does the other divisions by -1.
+            g.emit(f"cmp {T}, {A}, asr #63",
+                   f"ccmn {B}, #1, #4, eq",
+                   f"b.eq {slow}f",
+                   f"sdiv {R}, {A}, {B}")
+        else:
+            g.emit(f"cbnz {T}, {slow}f",
+                   f"udiv {R}, {A}, {B}")
+        g.emit(f"msub {T}, {R}, {B}, {A}")
+    g.emit(f"str {R}, [{env}, %[rax]]",
+           f"str {T}, [{env}, %[rdx]]",
+           f"{join}:")
+    helper = f"helper_{op.name}{'l' if width == 32 else 'q'}_EAX"
+    call_helper(g, slow, join, helper, [f"mov x1, {B}"], raises=spec.raises)
+
+
 def imul3_body(g, spec):
     # gen_IMUL3: both operands sign-extended from the operand size, so that
     # below 64 bits one MUL makes the whole product, which TCG keeps in
@@ -2641,6 +2728,7 @@ BODIES = {
     "cmov": cmov_body,
     "mul": mul_body,
     "imul3": imul3_body,
+    "div": div_body,
     "bt": bt_body,
     "cbw": cbw_body,
     "cwd": cwd_body,
@@ -2769,7 +2857,9 @@ def check():
                 continue
             for operand in re.findall(r"%\[(\w+)\]", line):
                 assert operand in BODY_OPERANDS, (spec.name, line)
-            for reg in re.findall(r"\b([xw](?:\d+|zr)|sp|lr)\b", line):
+            # The getpc register may appear, but only as a base address.
+            regs = line.replace(f"[{h.getpc}]", "")
+            for reg in re.findall(r"\b([xw](?:\d+|zr)|sp|lr)\b", regs):
                 assert "x" + reg[1:] in allowed or reg in allowed, \
                     (spec.name, line)
             for reg in re.findall(r"(?<![.%])\b[vqdsh](\d+)\b", line):
@@ -2786,8 +2876,8 @@ def check():
 class TctiHarness(Harness):
     """ TCTI's streams: tcg_out_rich() writes a gadget's address, then its
     operand words, in the spec's stream words. The gadget loads the words
-    first, so x28, the return address its slow paths pass, points past
-    them. """
+    first, so x28, the return address its slow paths pass or store, points
+    past them. """
 
     def enter(self, stream):
         # Each stream word loads into its last word's register. A pair is
@@ -2868,18 +2958,19 @@ class TctiHarness(Harness):
 OP_NAMES = ("add", "sub", "and", "or", "xor", "cmp", "test", "adc", "sbb",
             "zero", "mov", "lea", "push", "pop", "movzxb", "movzxw", "movsxb",
             "movsxw", "movsxd", "not", "neg", "inc", "dec", "bswap", "shl",
-            "shr", "sar", "ror", "mul", "imul", "imul3", "bt", "bts", "btr",
-            "btc", "cbw", "cwd", "xchg", "leave", "call", "jmp", "ret",
-            *(op.name for op in VMOV_OPS), *(op.name for op in VFP_OPS),
+            "shr", "sar", "ror", "mul", "imul", "imul3", "div", "idiv", "bt",
+            "bts", "btr", "btc", "cbw", "cwd", "xchg", "leave", "call", "jmp",
+            "ret", *(op.name for op in VMOV_OPS),
+            *(op.name for op in VFP_OPS),
             *(op.name for op in VLANE_OPS), *(op.name for op in VLOGIC_OPS),
             *(op.name for op in VMOVD_OPS), *(op.name for op in VTBL_OPS),
             *(op.name for op in VCOMI_OPS))
 FORM_NAMES = ("rr", "rm", "mr", "ri", "mi", "r", "i", "m", "rri", "rmi",
               "xx", "xm", "mx", "xr", "rx")
 KIND_NAMES = ("alu", "zero", "mov", "lea", "push", "pop", "extend", "unary",
-              "shift", "mul", "imul3", "bt", "cbw", "cwd", "xchg", "leave",
-              "call", "jmp", "ret", "vmov", "vfp", "vlane", "vlogic", "vmovd",
-              "vtbl", "vcomi")
+              "shift", "mul", "imul3", "div", "bt", "cbw", "cwd", "xchg",
+              "leave", "call", "jmp", "ret", "vmov", "vfp", "vlane", "vlogic",
+              "vmovd", "vtbl", "vcomi")
 WORD_NAMES = ("d", "s", "s1", "base", "index", "disp", "seg", "imm", "oi",
               "tlb", "ccop", "v")
 MAX_WORDS = len(WORD_REGS)
@@ -2912,7 +3003,7 @@ def gadget_file(spec):
         return "sse"
     if spec.kind in ("vfp", "vlane", "vcomi"):
         return "vfp"
-    if spec.kind == "imul3":
+    if spec.kind in ("imul3", "div"):
         return "mul"
     return name if name in GADGET_FILES else "other"
 
@@ -3132,6 +3223,9 @@ def write_table(all_specs, out):
     p(" * before it. env_cc_op: the gadget writes cc_op to env on either path")
     p(" * (UCOMIS and COMIS, whose helpers write it too), so the translator")
     p(" * assumes it rather than setting it.")
+    p(" *")
+    p(" * raises: the gadget may raise an exception other than a fault on its")
+    p(" * access, from a helper (DIV's and IDIV's #DE).")
     p(" */")
     p("typedef struct RCGFacts {")
     p("    RCGKind kind;")
@@ -3143,6 +3237,7 @@ def write_table(all_specs, out):
     p("    bool dst, src;")
     p("    RCGCF cf;")
     p("    bool env_cc_op;")
+    p("    bool raises;")
     p("} RCGFacts;\n")
 
     for spec in all_specs:
@@ -3214,9 +3309,10 @@ def write_table(all_specs, out):
         facts = [f"RCG_KIND_{spec.kind.upper()}",
                  spec.kind in ("push", "pop", "call", "ret", "leave"),
                  spec.kind in ("call", "jmp", "ret"),
-                 MO[spec.op.src] if spec.kind == "extend" else -1] + flags
+                 MO[spec.op.src] if spec.kind == "extend" else -1,
+                 *flags, spec.raises]
         fields = ("kind", "stack", "branch", "src_ot", "cc_op", "by_width",
-                  "srcT", "dst", "src", "cf", "env_cc_op")
+                  "srcT", "dst", "src", "cf", "env_cc_op", "raises")
         p(f"    [RCG_OP_{name.upper()}] = {{")
         for k, f in zip(fields, facts):
             p(f"        .{k} = " +
@@ -3447,6 +3543,9 @@ def insn_cases():
             yield from mul_cases(op, width)
     for width in IMUL3_WIDTHS:
         yield from imul3_cases(width)
+    for op in DIV_OPS:
+        for width in WIDTHS:
+            yield from div_cases(op, width)
     for op in BT_OPS:
         for width in BT_WIDTHS:
             yield from bt_cases(op, width)
@@ -4202,6 +4301,38 @@ def mul_cases(op, width):
     for cond in range(16):
         yield Case(f"{op.name} {reg_name(3, width)}; j{CONDS[cond]} 1f; "
                    f"mov ecx, 1; 1:", width, a=0, b=3)
+
+
+def div_cases(op, width):
+    """ DIV or IDIV of RDX:RAX (EDX:EAX at 32 bits) by a register: with RDX
+    0 for DIV or RAX's sign for IDIV, which the gadget divides itself where
+    the divisor is not 0 (nor -1, for IDIV at 64 bits), and with RDX 1 or
+    left at rcg_setup()'s fill value. At 64 bits those go to the helper,
+    which may divide all 128 bits; at 32 bits they test whether the
+    quotient fits. A divisor of 0, or a quotient too big for the width,
+    raises #DE (see rcg-insns.c). The divisor may be RAX or RDX too. At 8
+    and 16 bits, and with memory, they are TCG's. """
+    if width < 32:
+        yield Case(f"{op.name} {reg_name(3, width)}", width, a=0, b=3)
+        return
+    ra, rd = reg_name(0, width), reg_name(2, width)
+    extend = ("cqo" if width == 64 else "cdq") if op.signed else "xor edx, edx"
+    for setup in (f"{extend}; ", "mov edx, 1; ", ""):
+        for n in (3, 9):
+            yield Case(f"{setup}{op.name} {reg_name(n, width)}", width, a=0,
+                       b=n)
+    yield Case(f"{extend}; {op.name} {ra}", width, a=0)
+    yield Case(f"{op.name} {rd}", width, a=0, b=2)
+    if op.signed and width == 32:
+        # Divide by EDX = -1, which the host's divider does itself for a
+        # negative EAX, and divide an EDX:EAX that may be INT64_MIN by EBX,
+        # which the gadget must leave to the helper when EBX is -1, as the
+        # host gives INT64_MIN.
+        yield Case("mov edx, -1; idiv edx", width, a=0)
+        yield Case("mov edx, 0x80000000; idiv ebx", width, a=0, b=3)
+    text, base, _, bv, _ = memory_operand(width, "b", None)
+    yield Case(f"{extend}; {op.name} {text}", width, a=0, mem=True, base=base,
+               base_value=bv)
 
 
 def imul3_cases(width):

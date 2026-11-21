@@ -8796,6 +8796,48 @@ imul rax, rbx; jl 1f; mov ecx, 1; 1:: ebc3dd4aa3c35773
 imul rax, rbx; jge 1f; mov ecx, 1; 1:: 3258634e3014af0b
 imul rax, rbx; jle 1f; mov ecx, 1; 1:: 4baf99a6a2321aa9
 imul rax, rbx; jg 1f; mov ecx, 1; 1:: fceff5a93e7f0a01
+div bl: f55b2e43a14f711
+div bx: d2a41add47cd961b
+xor edx, edx; div ebx: bbc57f227638c875
+xor edx, edx; div r9d: e7efc796dd404bcd
+mov edx, 1; div ebx: 2d40f20c5f2d52db
+mov edx, 1; div r9d: 81250e6a6edaf1bb
+div ebx: 1b71547dc3e5a2b2
+div r9d: 8d9879b60aeed80a
+xor edx, edx; div eax: da1026087ea26325
+div edx: d674acd6e0fe3a5
+xor edx, edx; div dword ptr [rbx+8]: 86488da3dbfccbb9
+xor edx, edx; div rbx: 7a98ba0bbb20b9ab
+xor edx, edx; div r9: f6f5b0cc281c0f3
+mov edx, 1; div rbx: 9b1d78cd8ec794ab
+mov edx, 1; div r9: 852dba35f31edaeb
+div rbx: f235cf7a4545ed86
+div r9: d3127633a2c62ca6
+xor edx, edx; div rax: 17dfc4ed8400c806
+div rdx: d674acd6e0fe3a5
+xor edx, edx; div qword ptr [rbx+8]: aecd3ea7ec5ce95f
+idiv bl: a403f9d27a225f2f
+idiv bx: 922c7a7e990b2d36
+cdq; idiv ebx: 909d79fcf793abbb
+cdq; idiv r9d: 6f50612d30c06b13
+mov edx, 1; idiv ebx: 27ff3497b52340b5
+mov edx, 1; idiv r9d: 4f7f2f584f044d3d
+idiv ebx: 4c3e4cee178f06d
+idiv r9d: 7c313d008927ac75
+cdq; idiv eax: 8ebe0ef317c11e05
+idiv edx: c09a0cb790b29d29
+mov edx, -1; idiv edx: 7840ba927c2c49cc
+mov edx, 0x80000000; idiv ebx: 9445e118c46bddfd
+cdq; idiv dword ptr [rbx+8]: c88a75b214dc040b
+cqo; idiv rbx: 25aaf8e4e9efcd
+cqo; idiv r9: 77a76756af8d92d5
+mov edx, 1; idiv rbx: a64f4c9dec4ce3f2
+mov edx, 1; idiv r9: 16062901421ba3ca
+idiv rbx: a1f7a56516390085
+idiv r9: 76abbcddb11c6055
+cqo; idiv rax: 50e9faa7fee546a6
+idiv rdx: 599ed5fbcd7cb67f
+cqo; idiv qword ptr [rbx+8]: e57f109970fe274d
 bt ax, bx: 645bbb421936bac1
 bt cx, cx: fcd4e69263cef19c
 bt r8w, r15w: b7d79a38f48651d1

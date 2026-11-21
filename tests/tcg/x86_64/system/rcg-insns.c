@@ -12,8 +12,9 @@
  * rcg_starts (those marked fp only for the cases with floating-point
  * values). The registers, the arithmetic flags, SETcc's result for each
  * condition, XMM0 to XMM3 for a case that uses them, MXCSR for one with
- * floating-point values, and the memory the case can reach are hashed, and
- * a case prints its hash.
+ * floating-point values, the memory the case can reach, and where it
+ * raised a divide error, if it did, are hashed, and a case prints its
+ * hash.
  *
  * rcg-insns.ref holds TCG's hashes. To regenerate it after rcg-gen.py
  * changes the cases, run the test under TCG (in a build with TCTI, with
@@ -29,9 +30,24 @@
 
 #define NB_CASES (sizeof(rcg_insn_cases) / sizeof(rcg_insn_cases[0]))
 
+/*
+ * Where the instructions a case runs start and end. A divide error (#DE)
+ * from DIV or IDIV between the two sets divide_error, and divide_error_at
+ * to its offset from the start, and the run resumes at the end.
+ */
+static uint64_t insn_addr, insn_end, divide_error_at;
+static bool divide_error;
+
 bool rcg_exception(struct rcg_frame *f)
 {
-    return false;
+    /* Vector 0 is #DE. */
+    if (f->vector != 0 || f->rip < insn_addr || f->rip >= insn_end) {
+        return false;
+    }
+    divide_error = true;
+    divide_error_at = f->rip - insn_addr;
+    f->rip = insn_end;
+    return true;
 }
 
 static uint64_t run(const struct rcg_case *c)
@@ -49,8 +65,19 @@ static uint64_t run(const struct rcg_case *c)
                 uint64_t flags;
 
                 rcg_setup(c, rcg_values[x], rcg_values[y], &rcg_starts[s]);
+                insn_addr = rcg_insn_addr(c, &rcg_starts[s]);
+                insn_end = rcg_insn_end(c, &rcg_starts[s]);
+                divide_error = false;
                 rcg_run(c, &rcg_starts[s]);
                 flags = rcg_out.flags & RCG_FLAGS;
+                /*
+                 * Only when one is raised, so that runs that raise none
+                 * hash as before.
+                 */
+                if (divide_error) {
+                    h = rcg_hash(h, &divide_error_at,
+                                 sizeof(divide_error_at));
+                }
                 h = rcg_hash(h, rcg_out.r, sizeof(rcg_out.r));
                 h = rcg_hash(h, &flags, sizeof(flags));
                 h = rcg_hash(h, rcg_out.cc, sizeof(rcg_out.cc));

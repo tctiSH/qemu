@@ -252,9 +252,10 @@ asm(
     "    .endm\n");
 
 /*
- * A case's functions, name and name_sub, and the labels of the instruction
- * in each, name_insn and name_sub_insn, which is where an exception the
- * instruction raises points, and of its end, name_end and name_sub_end.
+ * A case's functions, name and name_sub, and in each the labels at the
+ * start and end of its instructions: name_insn and name_end, name_sub_insn
+ * and name_sub_end. An exception the first instruction raises points at
+ * name_insn or name_sub_insn.
  * name_sub compares rcg_sub_in with 1 first, after loading the registers,
  * so that the instruction runs from the state a SUB leaves, in the same TB.
  * xmm is the case's xmm (see RCG_XMM_F64).
@@ -486,7 +487,7 @@ static inline void rcg_run(const struct rcg_case *c, const struct rcg_start *s)
      c->fn)();
 }
 
-/* The address of the instruction rcg_run() runs. */
+/* The address of the start of the instructions rcg_run() runs. */
 static inline uint64_t rcg_insn_addr(const struct rcg_case *c,
                                      const struct rcg_start *s)
 {
@@ -494,7 +495,7 @@ static inline uint64_t rcg_insn_addr(const struct rcg_case *c,
                       s->sub ? c->insn_sub : c->insn);
 }
 
-/* The address of the end of the instruction rcg_run() runs. */
+/* The address of the end of the instructions rcg_run() runs. */
 static inline uint64_t rcg_insn_end(const struct rcg_case *c,
                                     const struct rcg_start *s)
 {
