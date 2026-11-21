@@ -60,7 +60,8 @@
 
 /*
  * The registers, the flags, SETcc's result for each condition, XMM0 to
- * XMM3, as two 64-bit halves each, and MXCSR.
+ * XMM3, as two 64-bit halves each, MXCSR, and bits 128 to 255 of YMM0 to
+ * YMM3, the same way.
  */
 struct rcg_state {
     uint64_t r[16];
@@ -68,11 +69,13 @@ struct rcg_state {
     uint8_t cc[16];
     uint64_t x[4][2];
     uint32_t mxcsr;
+    uint64_t y[4][2];
 };
 
-/* Where rcg_enter and rcg_leave find x and mxcsr. */
+/* Where rcg_enter and rcg_leave find x, mxcsr and y. */
 _Static_assert(offsetof(struct rcg_state, x) == 152, "x moved");
 _Static_assert(offsetof(struct rcg_state, mxcsr) == 216, "mxcsr moved");
+_Static_assert(offsetof(struct rcg_state, y) == 224, "y moved");
 
 /*
  * A case's xmm: 0 if it uses no XMM register, 1 if it uses XMM0 to XMM3
@@ -114,9 +117,10 @@ uint64_t rcg_sub_in;
  * register, RCG_TARGET_MEM (the memory operand) or RCG_TARGET_STACK (the
  * top of the stack). -1 is no register. xmm says that the case uses XMM0
  * to XMM3 (see RCG_XMM_F64), which rcg-insns then compares too. aligned
- * says that its access must be on a 16-byte boundary, for rcg-faults, and
- * store_offset is the byte of XMM2 where a store starts, also for
- * rcg-faults.
+ * says that its access must be on a 16-byte boundary, or a 32-byte one for
+ * a 32-byte access, for rcg-faults, and store_offset is the byte of XMM2
+ * where a store starts, also for rcg-faults. ymm says that the case uses
+ * YMM0 to YMM3 too, whose bits 128 to 255 the tests then compare.
  */
 struct rcg_case {
     const char *name;
@@ -142,19 +146,21 @@ struct rcg_case {
     uint8_t xmm;
     bool aligned;
     uint8_t store_offset;
+    bool ymm;
 };
 
 asm(
     /*
-     * Keep the caller's registers, then load the case's, with XMM0 to XMM3 if
-     * xmm is not 0, and MXCSR too with floating-point values. POPF ends the
-     * TB, so the case's instruction starts the next one. The code from the
-     * XMM loads to the RET starts on a 512 byte boundary and fits in 512
+     * Keep the caller's registers, then load the case's, with XMM0 to XMM3
+     * if xmm is not 0 (and MXCSR with floating-point values) and the upper
+     * halves of YMM0 to YMM3 if ymm is not 0. POPF ends the TB, so the
+     * case's instruction starts the next one. The code from the XMM loads
+     * to the last SETcc starts on a 512-byte boundary and fits in 512
      * bytes, so that the instruction and the SETcc after it are never split
-     * across a page, which would end the TB between them. The XMM loads and
-     * stores are left out of the other cases to keep that true.
+     * across a page, which would end the TB between them. The XMM and YMM
+     * loads and stores are left out of the other cases to keep that true.
      */
-    "    .macro rcg_enter xmm\n"
+    "    .macro rcg_enter xmm ymm\n"
     "    mov %rbx, rcg_host+3*8(%rip)\n"
     "    mov %rsp, rcg_host+4*8(%rip)\n"
     "    mov %rbp, rcg_host+5*8(%rip)\n"
@@ -172,6 +178,12 @@ asm(
     "    .ifge \\xmm-2\n"
     "    ldmxcsr rcg_in+216(%rip)\n"
     "    .endif\n"
+    "    .endif\n"
+    "    .if \\ymm\n"
+    "    vinsertf128 $1, rcg_in+224(%rip), %ymm0, %ymm0\n"
+    "    vinsertf128 $1, rcg_in+240(%rip), %ymm1, %ymm1\n"
+    "    vinsertf128 $1, rcg_in+256(%rip), %ymm2, %ymm2\n"
+    "    vinsertf128 $1, rcg_in+272(%rip), %ymm3, %ymm3\n"
     "    .endif\n"
     "    popfq\n"
     "    mov rcg_in+0*8(%rip), %rax\n"
@@ -195,9 +207,10 @@ asm(
     /*
      * Store SETcc's results, the case's registers and flags, which SETcc
      * and MOV do not change, and XMM0 to XMM3 if xmm is not 0, with MXCSR
-     * for floating-point values. Then return with the caller's registers.
+     * for floating-point values, and the upper halves of YMM0 to YMM3 if
+     * ymm is not 0. Then return with the caller's registers.
      */
-    "    .macro rcg_leave xmm\n"
+    "    .macro rcg_leave xmm ymm\n"
     "    seto rcg_out+17*8+0(%rip)\n"
     "    setno rcg_out+17*8+1(%rip)\n"
     "    setb rcg_out+17*8+2(%rip)\n"
@@ -242,6 +255,12 @@ asm(
     "    stmxcsr rcg_out+216(%rip)\n"
     "    .endif\n"
     "    .endif\n"
+    "    .if \\ymm\n"
+    "    vextractf128 $1, %ymm0, rcg_out+224(%rip)\n"
+    "    vextractf128 $1, %ymm1, rcg_out+240(%rip)\n"
+    "    vextractf128 $1, %ymm2, rcg_out+256(%rip)\n"
+    "    vextractf128 $1, %ymm3, rcg_out+272(%rip)\n"
+    "    .endif\n"
     "    mov rcg_host+3*8(%rip), %rbx\n"
     "    mov rcg_host+5*8(%rip), %rbp\n"
     "    mov rcg_host+12*8(%rip), %r12\n"
@@ -258,31 +277,31 @@ asm(
  * name_insn or name_sub_insn.
  * name_sub compares rcg_sub_in with 1 first, after loading the registers,
  * so that the instruction runs from the state a SUB leaves, in the same TB.
- * xmm is the case's xmm (see RCG_XMM_F64).
+ * xmm is the case's xmm (see RCG_XMM_F64) and ymm its ymm.
  */
-#define RCG_CASE(name, insn, xmm)                               \
+#define RCG_CASE(name, insn, xmm, ymm)                          \
     void name(void);                                            \
     void name##_sub(void);                                      \
     extern const char name##_insn[], name##_end[];              \
     extern const char name##_sub_insn[], name##_sub_end[];      \
     asm("    .pushsection .text\n"                              \
         #name ":\n"                                             \
-        "    rcg_enter " #xmm "\n"                              \
+        "    rcg_enter " #xmm " " #ymm "\n"                     \
         "    .intel_syntax noprefix\n"                          \
         #name "_insn:\n"                                        \
         "    " insn "\n"                                        \
         #name "_end:\n"                                         \
         "    .att_syntax prefix\n"                              \
-        "    rcg_leave " #xmm "\n"                              \
+        "    rcg_leave " #xmm " " #ymm "\n"                     \
         #name "_sub:\n"                                         \
-        "    rcg_enter " #xmm "\n"                              \
+        "    rcg_enter " #xmm " " #ymm "\n"                     \
         "    cmpq $1, rcg_sub_in(%rip)\n"                       \
         "    .intel_syntax noprefix\n"                          \
         #name "_sub_insn:\n"                                    \
         "    " insn "\n"                                        \
         #name "_sub_end:\n"                                     \
         "    .att_syntax prefix\n"                              \
-        "    rcg_leave " #xmm "\n"                              \
+        "    rcg_leave " #xmm " " #ymm "\n"                     \
         "    .popsection\n");
 
 /*
@@ -291,19 +310,19 @@ asm(
  * registers, so that the instruction runs from the state an ADC leaves,
  * which uses cc_src2, in the same TB.
  */
-#define RCG_ADC_CASE(name, insn, xmm)                           \
+#define RCG_ADC_CASE(name, insn, xmm, ymm)                      \
     void name##_adc(void);                                      \
     extern const char name##_adc_insn[], name##_adc_end[];      \
     asm("    .pushsection .text\n"                              \
         #name "_adc:\n"                                         \
-        "    rcg_enter " #xmm "\n"                              \
+        "    rcg_enter " #xmm " " #ymm "\n"                     \
         "    adcq $1, rcg_sub_in(%rip)\n"                       \
         "    .intel_syntax noprefix\n"                          \
         #name "_adc_insn:\n"                                    \
         "    " insn "\n"                                        \
         #name "_adc_end:\n"                                     \
         "    .att_syntax prefix\n"                              \
-        "    rcg_leave " #xmm "\n"                              \
+        "    rcg_leave " #xmm " " #ymm "\n"                     \
         "    .popsection\n");
 
 /*
@@ -312,19 +331,19 @@ asm(
  * so that the instruction runs from CC_OP_EFLAGS, with the flags in
  * cc_src, in the same TB.
  */
-#define RCG_STC_CASE(name, insn, xmm)                           \
+#define RCG_STC_CASE(name, insn, xmm, ymm)                      \
     void name##_stc(void);                                      \
     extern const char name##_stc_insn[], name##_stc_end[];      \
     asm("    .pushsection .text\n"                              \
         #name "_stc:\n"                                         \
-        "    rcg_enter " #xmm "\n"                              \
+        "    rcg_enter " #xmm " " #ymm "\n"                     \
         "    stc\n"                                             \
         "    .intel_syntax noprefix\n"                          \
         #name "_stc_insn:\n"                                    \
         "    " insn "\n"                                        \
         #name "_stc_end:\n"                                     \
         "    .att_syntax prefix\n"                              \
-        "    rcg_leave " #xmm "\n"                              \
+        "    rcg_leave " #xmm " " #ymm "\n"                     \
         "    .popsection\n");
 
 /* The values every operand is tested with: the edges of each width. */
@@ -567,6 +586,14 @@ static inline void rcg_setup(const struct rcg_case *c, uint64_t x, uint64_t y,
             rcg_in.x[n][1] = rcg_fp_bits(c, (n & 1 ? j : i) + 5);
         }
         rcg_in.mxcsr = s->mxcsr;
+    }
+    /*
+     * The upper half of each of YMM0 to YMM3 is the next XMM register's,
+     * its 8-byte halves swapped.
+     */
+    for (int n = 0; n < 4; n++) {
+        rcg_in.y[n][0] = rcg_in.x[(n + 1) % 4][1];
+        rcg_in.y[n][1] = rcg_in.x[(n + 1) % 4][0];
     }
     rcg_in.flags = s->flags;
     rcg_sub_in = s->sub_in;

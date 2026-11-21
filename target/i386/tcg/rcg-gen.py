@@ -62,8 +62,10 @@ REGS64 = ("rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
 R_ESP = 4
 
 WIDTHS = (8, 16, 32, 64)
-PTR = {8: "byte", 16: "word", 32: "dword", 64: "qword", 128: "xmmword"}
-MO = {8: "MO_8", 16: "MO_16", 32: "MO_32", 64: "MO_64", 128: "MO_128"}
+PTR = {8: "byte", 16: "word", 32: "dword", 64: "qword", 128: "xmmword",
+       256: "ymmword"}
+MO = {8: "MO_8", 16: "MO_16", 32: "MO_32", 64: "MO_64", 128: "MO_128",
+      256: "MO_256"}
 
 
 def reg_name(n, width):
@@ -105,10 +107,10 @@ def ea_words(shape, seg):
     return words
 
 
-# The operand words that always fit in 32 bits, signed: env offsets, the
-# MemOpIdx, the CPUTLBDescFast's offset and a CC_OP. disp and imm may not.
-NARROW_WORDS = ("d", "s", "s1", "base", "index", "seg", "oi", "tlb", "ccop",
-                "v", "c")
+# The operand words that always fit in 32 bits, signed: env offsets,
+# MemOpIdxs, the CPUTLBDescFast's offset and a CC_OP. disp and imm may not.
+NARROW_WORDS = ("d", "s", "s1", "base", "index", "seg", "oi", "oi2", "tlb",
+                "ccop", "v", "c")
 
 
 def stream_words(words):
@@ -131,19 +133,25 @@ def stream_words(words):
 #
 
 class VMov:
-    """ A move of width bits between XMM registers and memory. At 128 bits,
-    as gen_MOVDQ does: MOVDQA and MOVAPS (aligned, which a memory operand
-    must be), and MOVDQU and MOVUPS. At 64 and 32 bits, the low lane, as
-    MOVSD and MOVSS do: from memory, the rest of the register is cleared
-    (gen_VMOVSD_ld, gen_VMOVSS_ld); between registers, it is kept
+    """ A move of width bits between XMM (or YMM) registers and memory. At
+    128 bits, as gen_MOVDQ does: MOVDQA and MOVAPS (aligned, which a memory
+    operand must be), and MOVDQU and MOVUPS. At 64 and 32 bits, the low
+    lane, as MOVSD and MOVSS do: from memory, the rest of the register is
+    cleared (gen_VMOVSD_ld, gen_VMOVSS_ld); between registers, it is kept
     (gen_VMOVLPx, gen_VMOVSS); to memory, only the lane is stored
     (gen_VMOVLPx_st, gen_VMOVSS_st).
 
-    vex is for the VEX.128 encodings, whose names start with v, and which
-    only have gadgets for a register destination: they clear its bits 128
-    to 255, as gen_writeback() does. Between registers, MOVSD and MOVSS
-    take the rest of the destination from VEX.vvvv's register instead. A
-    store is the same as the legacy encoding's and uses its gadget. """
+    vex is for the VEX encodings, whose names start with v. At 128 bits
+    and below they only have gadgets for a register destination: they clear
+    its bits 128 to 255, as gen_writeback() does. Between registers, MOVSD
+    and MOVSS take the rest of the destination from VEX.vvvv's register
+    instead. A store is the same as the legacy encoding's and uses its
+    gadget.
+
+    The VEX.256 encodings of MOVDQA and MOVDQU have gadgets of the VEX ops
+    at 256 bits in every form (VEX256_VMOV_FORMS), stores included: 32
+    bytes between YMM registers and to and from memory, with nothing to
+    clear. """
 
     def __init__(self, name, width, aligned=False, vex=False):
         self.name = ("v" if vex else "") + name
@@ -164,6 +172,7 @@ VMOV_OPS = tuple(VMov(name, width, aligned=name == "movdqa", vex=vex)
                  for vex in (False, True)
                  for name, width in (("movdqa", 128), ("movdqu", 128),
                                      ("movsd", 64), ("movss", 32)))
+VEX256_VMOV_FORMS = ("xx", "xm", "mx")
 
 
 class VFp:
@@ -905,16 +914,17 @@ class Spec:
     def words(self):
         """ The gadget's operand words, in the translator's order before
         packing (see stream): the destination's, then the source's, then for
-        a memory access the MemOpIdx and the env offset of the MMU index's
-        CPUTLBDescFast (TCTI_TLB_FAST_OFS()). A register operand is its env
-        offset in CPUX86State.regs[]: "d" if it is written, "s" if only read
-        (or XCHG's source, which it writes too), and "s1" for the first
-        operand of CMP, TEST, BT, UCOMIS and COMIS, which is only read. An
-        XMM register is its env offset in CPUX86State.xmm_regs[], and a VEX
-        encoding's VEX.vvvv register is "v", after "d"; a BMI shift's count
-        register, VEX.vvvv's, is "c", after "s". A memory operand is the
-        words of its shape (ea_words()). An immediate is its value,
-        sign-extended as decode-new extends it.
+        a memory access the MemOpIdx, at 32 bytes the high half's too
+        ("oi2", which checks no alignment), and the env offset of the MMU
+        index's CPUTLBDescFast (TCTI_TLB_FAST_OFS()). A register operand is
+        its env offset in CPUX86State.regs[]: "d" if it is written, "s" if
+        only read (or XCHG's source, which it writes too), and "s1" for the
+        first operand of CMP, TEST, BT, UCOMIS and COMIS, which is only
+        read. An XMM register is its env offset in CPUX86State.xmm_regs[],
+        and a VEX encoding's VEX.vvvv register is "v", after "d"; a BMI
+        shift's count register, VEX.vvvv's, is "c", after "s". A memory
+        operand is the words of its shape (ea_words()). An immediate is its
+        value, sign-extended as decode-new extends it.
 
         CALL's imm is the return address less env's eip, and RET's how far
         it moves RSP. MUL and IMUL with one operand, DIV and IDIV take no
@@ -960,7 +970,8 @@ class Spec:
         if self.kind == "shift" and self.form[1] == "r":
             words.append("ccop")
         if self.accesses_memory:
-            words += ["oi", "tlb"]
+            words += ["oi", "oi2", "tlb"] if self.width == 256 else \
+                     ["oi", "tlb"]
         return words
 
     @property
@@ -1093,6 +1104,9 @@ def specs():
     for op in VMOV_OPS:
         for form in op.forms:
             yield from with_memory(Spec("vmov", op, form, op.width))
+        if op.vex and op.width == 128:
+            for form in VEX256_VMOV_FORMS:
+                yield from with_memory(Spec("vmov", op, form, 256))
     for op in VFP_OPS:
         for form in ("xx", "xm"):
             yield from with_memory(Spec("vfp", op, form, op.width))
@@ -1417,6 +1431,93 @@ class Body:
             *restore,
             f"b {join}b",
         ]
+
+    def _halves(self, helper, args):
+        """ The slow path's calls of helper for each half of a 32-byte
+        access, at the address in OUT, the low half first. args(half, oi),
+        with oi the register of the half's MemOpIdx ("oi" for the low half,
+        which checks any alignment, "oi2" for the high half), returns three
+        lists of lines: those that load the arguments from x2 on, those
+        right after the call, and those after the restore. """
+        save, restore = self._save(self.used | set(self.word_regs.values()))
+        lines = []
+        for half in (0, 16):
+            load, called, after = args(half, self.word("oi2" if half
+                                                       else "oi"))
+            lines += [*save, f"mov x0, {self.env}", f"add x1, {OUT}, #{half}",
+                      *load, f"bl _{helper}", *called, *restore, *after]
+        return lines
+
+    def load256(self, addr, aligned):
+        """ q0 and q1 = the 32 bytes of guest memory at addr, as TCG's
+        gen_ldy_env_A0() loads them: two 16-byte halves, atomic only in
+        8-byte parts (MO_ATOM_IFALIGN_PAIR), as one LDP of two Q registers
+        is. One TLB lookup covers all 32 bytes. A miss, an access across a
+        page and, for an aligned move, an address off a 32-byte boundary go
+        to the slow path, which loads each half with the helper, as TCG
+        does, the first checking the alignment. The halves meet in xmm_t0,
+        as no Q register survives a C call whole. The ordered twin orders
+        the load before what follows with DMB ISHLD, as load128() does. TCG
+        also orders the two halves, which one LDP does not; x86 does not
+        promise that order for an access wider than 8 bytes. """
+        t, out, page = tcti_memory.TMP
+        miss, join = self._labels()
+        if aligned:
+            self.emit(f"tst {addr}, #31", f"b.ne {miss}f")
+        self.emit(*tcti_memory.create_tlb_fastpath(
+            is_write=False, size=32, addr=addr, miss_label=miss,
+            env=self.env, tlb=self.word("tlb"), cmp_operand="tlb_cmp_read"),
+                  f"add {out}, {out}, {addr}",
+                  f"ldp q0, q1, [{out}]",
+                  f"{join}:")
+        if self.spec.ordered:
+            self.emit("dmb ishld")
+
+        def args(half, oi):
+            # Int128 comes back in x0 and x1, which the restore may reload.
+            return ([f"mov x2, {oi}", f"mov x3, {self.h.retaddr}"],
+                    [f"mov {t}, x0", f"mov {page}, x1"],
+                    [f"add {T}, {self.env}, %[xmm_t0]",
+                     f"stp {t}, {page}, [{T}, #{half}]"])
+
+        self.cold += [f"{miss}:", f"mov {out}, {addr}",
+                      *self._halves("helper_ld16_mmu", args),
+                      f"add {T}, {self.env}, %[xmm_t0]",
+                      f"ldp q0, q1, [{T}]",
+                      f"b {join}b"]
+
+    def store256(self, src, addr, aligned):
+        """ The 32 bytes of the YMM register at env + src, loaded already
+        into q0 and q1, to guest memory at addr, as load256() loads them,
+        with one STP; the ordered twin puts DMB ISHST before it. The slow
+        path stores each half with the helper, the low half first, as TCG's
+        gen_sty_env_A0() does, so that a fault in the high half comes after
+        the low half is written. As for load256(), one STP leaves the halves
+        unordered, which x86 allows. """
+        out = OUT
+        miss, join = self._labels()
+        ordered = ["dmb ishst"] if self.spec.ordered else []
+        if aligned:
+            self.emit(f"tst {addr}, #31", f"b.ne {miss}f")
+        self.emit(*tcti_memory.create_tlb_fastpath(
+            is_write=True, size=32, addr=addr, miss_label=miss,
+            env=self.env, tlb=self.word("tlb"), cmp_operand="tlb_cmp_write"),
+                  f"add {out}, {out}, {addr}",
+                  *ordered,
+                  f"stp q0, q1, [{out}]",
+                  f"{join}:")
+
+        def args(half, oi):
+            # oi and src may be any word register, x5 among them.
+            return ([f"add {T}, {self.env}, {src}",
+                     f"ldp x2, x3, [{T}, #{half}]",
+                     f"mov x4, {oi}",
+                     f"mov x5, {self.h.retaddr}",
+                     *ordered], [], [])
+
+        self.cold += [f"{miss}:", f"mov {out}, {addr}",
+                      *self._halves("helper_st16_mmu", args),
+                      f"b {join}b"]
 
     def ea(self, dest, with_seg=True):
         """ dest = the memory operand's effective address, as TCG's
@@ -1777,14 +1878,29 @@ def alu_body(g, spec):
 
 def vmov_body(g, spec):
     # gen_MOVDQ: the 16 bytes of the source, an XMM register in env or
-    # memory, to the destination (MOVSD and MOVSS: scalar_vmov_body()).
-    # Each form has at most one memory access, and nothing is written
-    # before it.
+    # memory, to the destination, or at 256 bits the 32 bytes of a YMM
+    # register or memory. MOVSD and MOVSS go to scalar_vmov_body(). Each
+    # form has at most one memory access, and nothing is written before it,
+    # except that a 32-byte store's slow path writes the low half before
+    # the high half's access (see store256()).
     aligned = spec.op.aligned
     if spec.has_mem:
         g.ea(ADDR)
     if spec.width < 128:
         scalar_vmov_body(g, spec)
+        return
+    if spec.width == 256:
+        # The source's 32 bytes, in q0 and q1.
+        if spec.form[1] == "m":
+            g.load256(ADDR, aligned)
+        else:
+            g.emit(f"add {T}, {g.env}, {g.word('s')}",
+                   f"ldp q0, q1, [{T}]")
+        if spec.form[0] == "m":
+            g.store256(g.word("s"), ADDR, aligned)
+        else:
+            g.emit(f"add {T}, {g.env}, {g.word('d')}",
+                   f"stp q0, q1, [{T}]")
         return
     if spec.form[1] == "m":
         g.load128(A, B, ADDR, aligned)
@@ -3059,7 +3175,7 @@ KIND_NAMES = ("alu", "zero", "mov", "lea", "push", "pop", "extend", "unary",
               "cbw", "cwd", "xchg", "leave", "call", "jmp", "ret", "vmov",
               "vfp", "vlane", "vlogic", "vmovd", "vtbl", "vcomi")
 WORD_NAMES = ("d", "s", "s1", "base", "index", "disp", "seg", "imm", "oi",
-              "tlb", "ccop", "v", "c")
+              "tlb", "ccop", "v", "c", "oi2")
 MAX_WORDS = len(WORD_REGS)
 # The stream words of a vtbl gadget's table: its 16 bytes.
 TABLE_WORDS = 2
@@ -3505,15 +3621,18 @@ class Case:
     xmm says that it uses XMM0 to XMM3, which rcg-insns then compares: 1
     with the integer values, XMM_F64 or XMM_F32 with floating-point ones,
     XMM_F64N or XMM_F32N with normal ones only.
-    aligned says that its access must be on a 16-byte boundary, for
-    rcg-faults. store_offset is the byte of XMM2 where a store starts, for
-    rcg-faults to compare memory with: 8 for MOVHPS and MOVHPD.
+    aligned says that its access must be on a 16-byte boundary, or a
+    32-byte one for a 32-byte access, for rcg-faults. store_offset is the
+    byte of XMM2 where a store starts, for rcg-faults to compare memory
+    with: 8 for MOVHPS and MOVHPD. ymm says that it uses YMM0 to YMM3,
+    whose upper halves the tests then compare too.
     """
 
     def __init__(self, insn, width, a=-1, b=-1, mem=False, base=-1,
                  index=-1, base_value=0, index_value=0, stack=False,
                  writes=False, operand=OPERAND, rsp=STACK, moved=-1,
-                 target=-1, xmm=False, aligned=False, store_offset=0):
+                 target=-1, xmm=False, aligned=False, store_offset=0,
+                 ymm=False):
         self.insn = insn
         self.width = width
         self.a = a
@@ -3532,6 +3651,7 @@ class Case:
         self.xmm = xmm
         self.aligned = aligned
         self.store_offset = store_offset
+        self.ymm = ymm
 
 
 # A case's xmm for floating-point values, doubles or floats: rcg-test.h's
@@ -3651,6 +3771,7 @@ def insn_cases():
     yield from vmov_cases()
     yield from scalar_vmov_cases()
     yield from vex_vmov_cases()
+    yield from vex256_vmov_cases()
     yield from vfp_cases()
     yield from vex_vfp_cases()
     yield from vec_alias_cases()
@@ -4311,6 +4432,13 @@ def fault_cases():
     # The VEX moves' loads.
     yield mem("vmovdqu xmm1, xmmword ptr [rbx]", 128, xmm=True)
     yield mem("vmovaps xmm1, xmmword ptr [rbx]", 128, xmm=True, aligned=True)
+    # 32 bytes, on a 32-byte boundary for the aligned moves. A store whose
+    # high half faults has already written its low half, as under TCG.
+    for insn, aligned in (("vmovdqu", False), ("vmovaps", True)):
+        yield mem(f"{insn} ymm1, ymmword ptr [rbx]", 256, xmm=True, ymm=True,
+                  aligned=aligned)
+        yield mem(f"{insn} ymmword ptr [rbx], ymm2", 256, writes=True,
+                  xmm=True, ymm=True, aligned=aligned)
     for width, insn in ((64, "vmovsd"), (32, "vmovss")):
         yield mem(f"{insn} xmm1, {PTR[width]} ptr [rbx]", width, xmm=True)
     yield mem("push qword ptr [rbx]", 64, stack=True)
@@ -4858,6 +4986,54 @@ def vex_vmov_cases():
                        **mem)
 
 
+def vex256_vmov_cases():
+    """ The VEX.256 encodings of the 16-byte moves: 32 bytes between YMM
+    registers and to and from memory, MOVDQA and MOVDQU at every memory
+    shape, and the unaligned moves misaligned too. The aligned moves run on
+    a 32-byte boundary and off one, where they raise #GP. Last, LDDQU,
+    MOVNTDQA and the MOVNT stores, which take the same gadgets. """
+    insns = ("vmovdqa", "vmovdqu", "vmovaps", "vmovups", "vmovapd", "vmovupd")
+    ymm = dict(xmm=True, ymm=True)
+    for insn in insns:
+        yield Case(f"{insn} ymm1, ymm2", 256, a=0, **ymm)
+        yield Case(f"{{store}} {insn} ymm1, ymm2", 256, a=0, **ymm)
+    for insn in ("vmovdqa", "vmovdqu"):
+        for shape in EA_SHAPES:
+            for seg in SEGS:
+                at = RCG_MEM + 32 if shape == "d" else hi(RCG_MEM + 32)
+                text, base, index, bv, iv = memory_operand(256, shape, seg,
+                                                           target=at)
+                mem = dict(mem=True, base=base, index=index, base_value=bv,
+                           index_value=iv, operand=at, **ymm)
+                yield Case(f"{insn} ymm1, {text}", 256, a=0, **mem)
+                yield Case(f"{insn} {text}, ymm2", 256, a=0, writes=True,
+                           **mem)
+        yield Case(f"{insn} ymm0, {PTR[256]} ptr [rip+rcg_mem+32]", 256,
+                   a=0, mem=True, operand=RCG_MEM + 32, **ymm)
+    for target in (OPERAND, *MISALIGNED):
+        text, base, _, bv, _ = memory_operand(256, "b", None, target=target)
+        mem = dict(mem=True, base=base, base_value=bv, operand=target, **ymm)
+        for insn in ("vmovups", "vmovdqu"):
+            yield Case(f"{insn} ymm0, {text}", 256, a=0, **mem)
+            yield Case(f"{insn} {text}, ymm2", 256, a=0, writes=True, **mem)
+        # Off a 32-byte boundary: #GP.
+        for insn in ("vmovaps", "vmovdqa"):
+            yield Case(f"{insn} ymm0, {text}", 256, a=0, **mem)
+            yield Case(f"{insn} {text}, ymm2", 256, a=0, writes=True, **mem)
+    at = hi(RCG_MEM + 32)
+    text, base, index, bv, iv = memory_operand(256, "bi1", None, target=at)
+    mem = dict(mem=True, base=base, index=index, base_value=bv,
+               index_value=iv, operand=at, **ymm)
+    for insn in insns:
+        yield Case(f"{insn} ymm1, {text}", 256, a=0, **mem)
+        yield Case(f"{insn} {text}, ymm2", 256, a=0, writes=True, **mem)
+    # The same gadgets by other decodings.
+    yield Case(f"vlddqu ymm1, {text}", 256, a=0, **mem)
+    yield Case(f"vmovntdqa ymm1, {text}", 256, a=0, **mem)
+    for insn in ("vmovntdq", "vmovntps", "vmovntpd"):
+        yield Case(f"{insn} {text}, ymm2", 256, a=0, writes=True, **mem)
+
+
 def vex_vfp_cases():
     """ The VEX.128 encodings of the ops vfp_cases() tests: XMM0 from XMM1
     and the source, which takes every pair of values, then each input as
@@ -5402,12 +5578,13 @@ def write_cases(cases, out, prefix, faults=False):
     print("/* Automatically generated by rcg-gen.py. Do not edit. */\n",
           file=out)
     for i, c in enumerate(cases):
-        print(f'RCG_CASE({prefix}{i}, "{c.insn}", {int(c.xmm)})', file=out)
+        print(f'RCG_CASE({prefix}{i}, "{c.insn}", {int(c.xmm)}, '
+              f'{int(c.ymm)})', file=out)
         if faults:
-            print(f'RCG_ADC_CASE({prefix}{i}, "{c.insn}", {int(c.xmm)})',
-                  file=out)
-            print(f'RCG_STC_CASE({prefix}{i}, "{c.insn}", {int(c.xmm)})',
-                  file=out)
+            print(f'RCG_ADC_CASE({prefix}{i}, "{c.insn}", {int(c.xmm)}, '
+                  f'{int(c.ymm)})', file=out)
+            print(f'RCG_STC_CASE({prefix}{i}, "{c.insn}", {int(c.xmm)}, '
+                  f'{int(c.ymm)})', file=out)
     print(f"\nstatic const struct rcg_case {prefix}cases[] = {{", file=out)
     for i, c in enumerate(cases):
         name = f"{prefix}{i}"
@@ -5422,7 +5599,7 @@ def write_cases(cases, out, prefix, faults=False):
               f'{c.index}, {c.base_value:#x}, {c.index_value}, '
               f'{int(c.stack)}, {int(c.writes)}, {c.operand:#x}, {c.rsp:#x}, '
               f'{c.moved}, {c.target}, {int(c.xmm)}, {int(c.aligned)}, '
-              f'{c.store_offset} }},',
+              f'{c.store_offset}, {int(c.ymm)} }},',
               file=out)
     print("};", file=out)
 

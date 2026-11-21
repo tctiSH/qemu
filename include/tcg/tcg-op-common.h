@@ -64,10 +64,11 @@ void tcg_gen_mb(TCGBar);
  *
  * The gadget does a whole guest instruction. It touches no globals but
  * those listed, which must be direct, and clobbers the registers a helper
- * call does. With TCG_RICH_MAY_FAULT, it writes no global and no guest
- * memory before the last point at which it may fault, so that a fault
- * leaves the guest as it was before the instruction. Call only while
- * tcg_rcg_active().
+ * call does. With TCG_RICH_MAY_FAULT, before the last point at which it
+ * may fault it writes no global and no guest memory except what TCG's ops
+ * would also have written by then, such as the low half of a 32-byte
+ * store, which the instruction writes again when retried. A fault then
+ * leaves the guest as TCG's would. Call only while tcg_rcg_active().
  */
 void tcg_gen_rich(const void *gadget, const uint64_t *words,
                   unsigned nb_words, unsigned flags,
@@ -83,7 +84,9 @@ void tcg_gen_rich(const void *gadget, const uint64_t *words,
  * release stores instead: this emits nothing and returns true, and the
  * caller must use the gadget's ordered twin. Either way, a gadget with
  * more than one access must order them among themselves as TCG's barriers
- * between them would.
+ * between them would. The exception is the two 16-byte halves of a 32-byte
+ * access: TCG orders them, but x86 does not promise that, so one LDP or STP
+ * may do both.
  */
 bool tcg_gen_rich_mo(TCGBar type);
 
@@ -136,10 +139,10 @@ const void *tcg_rich_gadget(TCGOp *op);
  *
  * The op takes @prev's place, so it belongs to @prev's instruction and runs
  * before the ops that followed @prev, such as discards. If @prev has
- * TCG_RICH_MAY_FAULT, the op may fault as @prev may. It writes nothing
- * before the last point at which it may fault, and every global is synced
- * before it, so a fault leaves the guest as it was before @prev's
- * instruction.
+ * TCG_RICH_MAY_FAULT, the op may fault as @prev may. Before the last point
+ * at which it may fault, it writes only what @prev may write before it
+ * faults, and every global is synced before it, so a fault leaves the
+ * guest as a fault in @prev would.
  */
 void tcg_gen_rich_br_join(TCGOp *prev, const void *gadget,
                           const uint64_t *words, unsigned nb_words,

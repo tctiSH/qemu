@@ -238,8 +238,9 @@ Function call
          With TCG_RICH_MAY_FAULT in 'flags', every global is synced first,
          and the gadget may raise exceptions, which unwind as if from just
          after its words, within the instruction's code. It writes nothing
-         before the last point at which it may fault. See
-         ``tcg_gen_rich()``.
+         before the last point at which it may fault except what TCG's
+         ops would also have written by then, such as the low half of a
+         32-byte store. See ``tcg_gen_rich()``.
 
    * - rich_br gadget, words, nb_words, jumps, label, *<outs>*, *<ins>*
 

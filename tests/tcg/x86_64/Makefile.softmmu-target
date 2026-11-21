@@ -41,10 +41,10 @@ run-tlb-next-page: QEMU_OPTS := -m 256M $(QEMU_OPTS)
 # XSAVE. QEMU also wants XSAVEOPT, or another CPUID 0xD.1 feature, before
 # it lets the guest set CR4.OSXSAVE. PALIGNR needs SSSE3; INSERTPS, BLENDPS,
 # BLENDPD and PBLENDW need SSE4.1; the integer broadcasts, VBROADCASTSS from
-# a register and VPBLENDD need AVX2; ADCX and ADOX need ADX; and decode-new
-# wants BMI1 for SHLX, SHRX, SARX and LZCNT, and ABM for TZCNT. Hardware has
-# the shifts under BMI2, LZCNT under ABM and TZCNT under BMI1; the CPU has
-# all three.
+# a register, VPBLENDD and VMOVNTDQA to a YMM register need AVX2; ADCX and
+# ADOX need ADX; and decode-new wants BMI1 for SHLX, SHRX, SARX and LZCNT,
+# and ABM for TZCNT. Hardware has the shifts under BMI2, LZCNT under ABM and
+# TZCNT under BMI1; the CPU has all three.
 RCG_CPU := qemu64,+xsave,+xsaveopt,+avx,+ssse3,+sse4.1,+avx2,+adx,+bmi1,+bmi2,+abm
 run-rcg-insns run-rcg-jcc run-rcg-faults run-rcg-faults-jcc: \
 	QEMU_OPTS := -cpu $(RCG_CPU) $(QEMU_OPTS)

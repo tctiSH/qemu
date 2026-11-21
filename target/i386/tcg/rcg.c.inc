@@ -259,12 +259,12 @@ static char rcg_kind(DisasContext *s, X86DecodedOp *op)
     case X86_OP_SSE:
         /*
          * rcg_operands() takes the width from the RCG op, for MOVD and MOVQ
-         * from the general register (64 bits between XMM registers), and for
-         * a table shuffle from memory from the memory operand. A VEX.256
-         * encoding works on the whole YMM register, which no gadget does; a
-         * VEX.128 one takes the op rcg_vex_op() picks.
+         * from the general register (64 bits between XMM registers), for a
+         * table shuffle from memory from the memory operand, and for a
+         * VEX.256 move from VEX.L; it refuses every other VEX.256 encoding.
+         * A VEX encoding takes the op rcg_vex_op() picks.
          */
-        return (s->prefix & PREFIX_VEX) && s->vex_l ? 0 : 'x';
+        return 'x';
     default:
         return 0;
     }
@@ -700,6 +700,15 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
                         X86DecodedOp *first, X86DecodedOp *second,
                         MemOp *ot, uint64_t *imm, bool *rotate_left)
 {
+    bool ymm = (s->prefix & PREFIX_VEX) && s->vex_l;
+
+    /*
+     * A VEX.256 encoding works on whole YMM registers, which only the
+     * gadgets of MOVDQA and MOVDQU do.
+     */
+    if (ymm && op != RCG_OP_MOVDQA && op != RCG_OP_MOVDQU) {
+        return -1;
+    }
     switch (rcg_facts[op].kind) {
     case RCG_KIND_CALL:
     case RCG_KIND_JMP:
@@ -756,11 +765,13 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
         /*
          * A 16-byte gadget with memory needs LSE2 to make its access
          * single-copy atomic, as TCTI's qemu_ld_i128 and qemu_st_i128
-         * gadgets do.
+         * gadgets do. A 32-byte one need only make each aligned 8 bytes
+         * atomic (see rcg_emit()), as any LDP or STP of Q registers does.
          */
         char a = rcg_kind(s, first), b = rcg_kind(s, second);
 
-        *ot = op == RCG_OP_MOVSD ? MO_64 : op == RCG_OP_MOVSS ? MO_32 : MO_128;
+        *ot = op == RCG_OP_MOVSD ? MO_64 : op == RCG_OP_MOVSS ? MO_32 :
+              ymm ? MO_256 : MO_128;
         if (!a || !b || (*ot == MO_128 && (a == 'm' || b == 'm') &&
                          !(cpuinfo & CPUINFO_LSE2))) {
             return -1;
@@ -957,19 +968,22 @@ static unsigned rcg_pack_words(const RCGGadget *g, uint64_t *words,
 }
 
 /*
- * The op of a VEX.128 encoding of op, in form, or -1 if it has none. Its
- * gadgets take VEX.vvvv's register as their first input where the
- * instruction has one, and clear bits 128 to 255 of the destination
- * register. A move to memory or to a general register is the same as the
- * legacy encoding and uses its gadgets; so do UCOMIS and COMIS, which
- * write no XMM register. The BMI shifts have only a VEX encoding and keep
- * their op; VEX.vvvv's register is their count, their last input.
+ * The op of a VEX encoding of op, in form, at width ot, or -1 if it has
+ * none. Below 256 bits, its gadgets take VEX.vvvv's register as their
+ * first input where the instruction has one, and clear bits 128 to 255 of
+ * the destination register; a move to memory or to a general register,
+ * and UCOMIS and COMIS, which write no XMM register, are the same as the
+ * legacy encoding and use its gadgets. At 256 bits, the VEX ops of MOVDQA
+ * and MOVDQU have gadgets for every form, stores too. The BMI shifts have
+ * only a VEX encoding and keep their op; VEX.vvvv's register is their
+ * count, their last input.
  */
-static int rcg_vex_op(RCGOp op, int form)
+static int rcg_vex_op(RCGOp op, int form, MemOp ot)
 {
     switch (rcg_facts[op].kind) {
     case RCG_KIND_VMOV:
-        return form == RCG_FORM_MX ? op : op - RCG_OP_MOVDQA + RCG_OP_VMOVDQA;
+        return form == RCG_FORM_MX && ot < MO_256
+               ? op : op - RCG_OP_MOVDQA + RCG_OP_VMOVDQA;
     case RCG_KIND_VFP:
         return op - RCG_OP_ADDPS + RCG_OP_VADDPS;
     case RCG_KIND_VLANE:
@@ -1186,7 +1200,7 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
         return NULL;
     }
     if (s->prefix & PREFIX_VEX) {
-        int vex_op = rcg_vex_op(op, form);
+        int vex_op = rcg_vex_op(op, form, ot);
 
         if (vex_op < 0) {
             return NULL;
@@ -1266,6 +1280,16 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
                       ? MO_ATOM_IFALIGN : MO_ATOM_IFALIGN_PAIR) |
                      (sse_needs_alignment(s, decode, MO_128)
                       ? MO_ALIGN_16 : 0);
+        } else if (ot == MO_256) {
+            /*
+             * gen_ldy_env_A0() and gen_sty_env_A0(): two 16-byte accesses,
+             * each atomic in 8-byte parts, the first checking 32-byte
+             * alignment for the moves rcg_select() picks MOVDQA for. memop
+             * is the first's; the second's, without the alignment, goes in
+             * the "oi2" word.
+             */
+            memop = MO_128 | MO_LE | MO_ATOM_IFALIGN_PAIR |
+                    (sse_needs_alignment(s, decode, MO_256) ? MO_ALIGN_32 : 0);
         }
     }
     g += ordered;
@@ -1406,6 +1430,9 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
             break;
         case RCG_W_OI:
             words[n] = make_memop_idx(memop, s->mem_index);
+            break;
+        case RCG_W_OI2:
+            words[n] = make_memop_idx(memop & ~MO_AMASK, s->mem_index);
             break;
         case RCG_W_TLB:
             words[n] = TCTI_TLB_FAST_OFS(s->mem_index);

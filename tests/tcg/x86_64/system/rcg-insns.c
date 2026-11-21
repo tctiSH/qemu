@@ -12,9 +12,9 @@
  * rcg_starts (those marked fp only for the cases with floating-point
  * values). The registers, the arithmetic flags, SETcc's result for each
  * condition, XMM0 to XMM3 for a case that uses them, MXCSR for one with
- * floating-point values, the memory the case can reach, and where it
- * raised a divide error, if it did, are hashed, and a case prints its
- * hash.
+ * floating-point values, the upper halves of YMM0 to YMM3 for one that uses
+ * them, the memory the case can reach, and the RIP offset of any #DE or #GP
+ * it raised, are hashed, and a case prints its hash.
  *
  * rcg-insns.ref holds TCG's hashes. To regenerate it after rcg-gen.py
  * changes the cases, run the test under TCG (in a build with TCTI, with
@@ -31,21 +31,23 @@
 #define NB_CASES (sizeof(rcg_insn_cases) / sizeof(rcg_insn_cases[0]))
 
 /*
- * Where the instructions a case runs start and end. A divide error (#DE)
- * from DIV or IDIV between the two sets divide_error, and divide_error_at
- * to its offset from the start, and the run resumes at the end.
+ * Where the instructions a case runs start and end. An exception between
+ * the two, a #DE from DIV or IDIV or a #GP from an aligned move at a
+ * misaligned address, sets raised, and sets raised_at to the offset of its
+ * RIP from the start; the run then resumes at the end.
  */
-static uint64_t insn_addr, insn_end, divide_error_at;
-static bool divide_error;
+static uint64_t insn_addr, insn_end, raised_at;
+static bool raised;
 
 bool rcg_exception(struct rcg_frame *f)
 {
-    /* Vector 0 is #DE. */
-    if (f->vector != 0 || f->rip < insn_addr || f->rip >= insn_end) {
+    /* Vector 0 is #DE, 13 #GP. */
+    if ((f->vector != 0 && f->vector != 13) || f->rip < insn_addr ||
+        f->rip >= insn_end) {
         return false;
     }
-    divide_error = true;
-    divide_error_at = f->rip - insn_addr;
+    raised = true;
+    raised_at = f->rip - insn_addr;
     f->rip = insn_end;
     return true;
 }
@@ -67,16 +69,15 @@ static uint64_t run(const struct rcg_case *c)
                 rcg_setup(c, rcg_values[x], rcg_values[y], &rcg_starts[s]);
                 insn_addr = rcg_insn_addr(c, &rcg_starts[s]);
                 insn_end = rcg_insn_end(c, &rcg_starts[s]);
-                divide_error = false;
+                raised = false;
                 rcg_run(c, &rcg_starts[s]);
                 flags = rcg_out.flags & RCG_FLAGS;
                 /*
                  * Only when one is raised, so that runs that raise none
                  * hash as before.
                  */
-                if (divide_error) {
-                    h = rcg_hash(h, &divide_error_at,
-                                 sizeof(divide_error_at));
+                if (raised) {
+                    h = rcg_hash(h, &raised_at, sizeof(raised_at));
                 }
                 h = rcg_hash(h, rcg_out.r, sizeof(rcg_out.r));
                 h = rcg_hash(h, &flags, sizeof(flags));
@@ -86,6 +87,9 @@ static uint64_t run(const struct rcg_case *c)
                 }
                 if (c->xmm >= RCG_XMM_F64) {
                     h = rcg_hash(h, &rcg_out.mxcsr, sizeof(rcg_out.mxcsr));
+                }
+                if (c->ymm) {
+                    h = rcg_hash(h, rcg_out.y, sizeof(rcg_out.y));
                 }
                 h = rcg_hash(h, rcg_bytes(RCG_MEM), RCG_MEM_SIZE);
                 h = rcg_hash(h, rcg_bytes(RCG_STACK - RCG_STACK_SIZE),
