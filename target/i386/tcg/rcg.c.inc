@@ -73,6 +73,16 @@ static const struct {
     /* DIV and IDIV divide RDX:RAX by op[1]. */
     { gen_DIV,    RCG_OP_DIV,  -1,  1, -1 },
     { gen_IDIV,   RCG_OP_IDIV, -1,  1, -1 },
+    /* SHLX, SHRX and SARX shift op[1] by op[2], VEX.vvvv's register. */
+    { gen_SHLX,   RCG_OP_SHLX,  0,  1, -1 },
+    { gen_SHRX,   RCG_OP_SHRX,  0,  1, -1 },
+    { gen_SARX,   RCG_OP_SARX,  0,  1, -1 },
+    /*
+     * LZCNT and TZCNT count op[1]'s leading or trailing zero bits into
+     * op[0].
+     */
+    { gen_LZCNT,  RCG_OP_LZCNT, 0,  1, -1 },
+    { gen_TZCNT,  RCG_OP_TZCNT, 0,  1, -1 },
     /*
      * The bit number is op[2]. BT writes nothing, so its operand is op[1];
      * BTS, BTR and BTC write op[0], and op[1] is the same operand.
@@ -952,7 +962,8 @@ static unsigned rcg_pack_words(const RCGGadget *g, uint64_t *words,
  * instruction has one, and clear bits 128 to 255 of the destination
  * register. A move to memory or to a general register is the same as the
  * legacy encoding and uses its gadgets; so do UCOMIS and COMIS, which
- * write no XMM register.
+ * write no XMM register. The BMI shifts have only a VEX encoding and keep
+ * their op; VEX.vvvv's register is their count, their last input.
  */
 static int rcg_vex_op(RCGOp op, int form)
 {
@@ -970,6 +981,7 @@ static int rcg_vex_op(RCGOp op, int form)
     case RCG_KIND_VTBL:
         return op - RCG_OP_TBL1 + RCG_OP_VTBL1;
     case RCG_KIND_VCOMI:
+    case RCG_KIND_BMISHIFT:
         return op;
     default:
         return -1;
@@ -1356,6 +1368,11 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
         case RCG_W_V:
             /* VEX.vvvv's register, an XMM register, which is in env alone. */
             words[n] = rcg_reg_op(s, &decode->op[1], &reg);
+            break;
+        case RCG_W_C:
+            /* A BMI shift's count, in VEX.vvvv's register. */
+            words[n] = rcg_reg_op(s, &decode->op[2], &reg);
+            rcg_note(ins, &nb_ins, reg);
             break;
         case RCG_W_BASE:
             if (a->base == -2) {

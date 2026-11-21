@@ -777,9 +777,10 @@ static inline void rcg_init_hi(void)
  * Points the first 32 vectors at the stubs, on IST1, maps RCG_HI, sets FS's
  * and GS's bases, and turns SSE and AVX on. Stops the test if the binary
  * reaches the cases' data, if the CPU lacks XSAVE or AVX (for the VEX
- * encodings), SSSE3 (for PALIGNR), SSE4.1 (for INSERTPS and the blends) or
- * AVX2 (for the broadcasts and VPBLENDD), or if it lacks XSAVEOPT, without
- * which QEMU will not set CR4.OSXSAVE.
+ * encodings), SSSE3 (for PALIGNR), SSE4.1 (for INSERTPS and the blends),
+ * AVX2 (for the broadcasts and VPBLENDD), BMI1 (for SHLX, SHRX, SARX and
+ * LZCNT) or ABM (for TZCNT), or if it lacks XSAVEOPT, without which QEMU
+ * will not set CR4.OSXSAVE.
  */
 static inline void rcg_init(void)
 {
@@ -817,8 +818,8 @@ static inline void rcg_init(void)
     asm volatile("mov %0, %%cr4" : : "r"(cr | 0x600));
 
     /*
-     * Checks for XSAVE, AVX, SSSE3, SSE4.1 and AVX2, then sets CR4.OSXSAVE
-     * and enables x87, SSE and AVX in XCR0.
+     * Checks for XSAVE, AVX, SSSE3, SSE4.1, AVX2, BMI1 and ABM, then sets
+     * CR4.OSXSAVE and enables x87, SSE and AVX in XCR0.
      */
     asm volatile("cpuid" : "+a"(eax), "+c"(ecx) : : "ebx", "edx");
     if (!(ecx & (1 << 26)) || !(ecx & (1 << 28))) {
@@ -832,8 +833,14 @@ static inline void rcg_init(void)
     eax = 7;
     ecx = 0;
     asm volatile("cpuid" : "+a"(eax), "=b"(ebx), "+c"(ecx) : : "edx");
-    if (!(ebx & (1 << 5))) {
-        ml_printf("FAIL: the CPU has no AVX2\n");
+    if (!(ebx & (1 << 5)) || !(ebx & (1 << 3))) {
+        ml_printf("FAIL: the CPU has no AVX2 or BMI1\n");
+        asm volatile("outw %w0, $0xf4" : : "a"(1));
+    }
+    eax = 0x80000001;
+    asm volatile("cpuid" : "+a"(eax), "=c"(ecx) : : "ebx", "edx");
+    if (!(ecx & (1 << 5))) {
+        ml_printf("FAIL: the CPU has no ABM\n");
         asm volatile("outw %w0, $0xf4" : : "a"(1));
     }
     /*

@@ -108,7 +108,7 @@ def ea_words(shape, seg):
 # The operand words that always fit in 32 bits, signed: env offsets, the
 # MemOpIdx, the CPUTLBDescFast's offset and a CC_OP. disp and imm may not.
 NARROW_WORDS = ("d", "s", "s1", "base", "index", "seg", "oi", "tlb", "ccop",
-                "v")
+                "v", "c")
 
 
 def stream_words(words):
@@ -333,7 +333,9 @@ class VMovd:
 VMOVD_OPS = (VMovd(), VMovd(vex=True))
 
 # The kinds of the SSE ops, which have VEX.128 encodings (op.vex) whose
-# gadgets may read VEX.vvvv's register (op.reads_v()).
+# gadgets may read VEX.vvvv's register (op.reads_v()). The BMI shifts, which
+# have only a VEX encoding, take VEX.vvvv's register as their "c" word
+# instead.
 VEX_KINDS = ("vmov", "vfp", "vlane", "vlogic", "vmovd", "vtbl")
 
 
@@ -554,6 +556,41 @@ class Div:
 
 DIV_OPS = (Div("div", False), Div("idiv", True))
 DIV_WIDTHS = (32, 64)
+
+
+class BmiShift:
+    """ SHLX, SHRX and SARX of a register: dest = src shifted by the count
+    register, VEX.vvvv's, masked to the width, with a64 the AArch64 shift,
+    whose register count is masked the same way. They leave the flags
+    alone. At 32 bits TCG shifts all 64 bits of the operand, sign-extended
+    for SARX and zero-extended for SHRX; the low half of that is the 32-bit
+    shift, and the register write keeps only that half. """
+
+    def __init__(self, name, a64):
+        self.name = name
+        self.a64 = a64
+
+
+BMI_SHIFT_OPS = (BmiShift("shlx", "lsl"), BmiShift("shrx", "lsr"),
+                 BmiShift("sarx", "asr"))
+BMI_SHIFT_WIDTHS = (32, 64)
+
+
+class BitCount:
+    """ LZCNT and TZCNT of a register: dest = the number of zero bits above
+    the source's highest set bit, or below its lowest, within the width;
+    for a source of 0, the width. reverse says that the bits are counted
+    from the bottom (TZCNT), as CLZ of the bits reversed. Each leaves
+    CC_OP_BMILGB plus the width's MemOp, with cc_dst the result and cc_src
+    the source, zero-extended, as gen_LZCNT and gen_TZCNT do. """
+
+    def __init__(self, name, reverse):
+        self.name = name
+        self.reverse = reverse
+
+
+BIT_COUNT_OPS = (BitCount("lzcnt", False), BitCount("tzcnt", True))
+BIT_COUNT_WIDTHS = (16, 32, 64)
 
 
 class BitTest:
@@ -780,9 +817,10 @@ class Spec:
     """ One gadget: what it does and the words it takes.
 
     kind is "alu", "zero" (XOR of a register with itself), "mov", "lea",
-    "push", "pop", "extend", "unary", "shift", "mul", "imul3", "div", "bt",
-    "cbw", "cwd", "xchg", "leave", "call", "jmp", "ret", "vmov", "vfp",
-    "vlane", "vlogic", "vmovd", "vtbl" or "vcomi".
+    "push", "pop", "extend", "unary", "shift", "mul", "imul3", "div",
+    "bmishift", "bitcount", "bt", "cbw", "cwd", "xchg", "leave", "call",
+    "jmp", "ret", "vmov", "vfp", "vlane", "vlogic", "vmovd", "vtbl" or
+    "vcomi".
 
     form is the destination's kind then the source's (r, m or i, or x for
     an XMM register), then for IMUL3 an i if it takes an immediate too; for
@@ -873,8 +911,9 @@ class Spec:
         (or XCHG's source, which it writes too), and "s1" for the first
         operand of CMP, TEST, BT, UCOMIS and COMIS, which is only read. An
         XMM register is its env offset in CPUX86State.xmm_regs[], and a VEX
-        encoding's VEX.vvvv register is "v", after "d". A memory operand is
-        the words of its shape (ea_words()). An immediate is its value,
+        encoding's VEX.vvvv register is "v", after "d"; a BMI shift's count
+        register, VEX.vvvv's, is "c", after "s". A memory operand is the
+        words of its shape (ea_words()). An immediate is its value,
         sign-extended as decode-new extends it.
 
         CALL's imm is the return address less env's eip, and RET's how far
@@ -908,6 +947,8 @@ class Spec:
                 operands[0] = "s1"
             if self.kind in VEX_KINDS and self.op.reads_v(self.form):
                 operands.insert(1, "v")
+            if self.kind == "bmishift":
+                operands.append("c")
         words = []
         for operand in operands:
             if operand == "m":
@@ -961,7 +1002,7 @@ class Spec:
         if self.cf == "SRC":
             return ("cc_dst",)
         if (self.kind in ("unary", "shift") and self.op.cc or
-                self.kind in ("mul", "imul3")):
+                self.kind in ("mul", "imul3", "bitcount")):
             return ("cc_dst", "cc_src")
         if self.kind in ("bt", "vcomi"):
             return ("cc_src",)
@@ -1028,6 +1069,12 @@ def specs():
     for op in DIV_OPS:
         for width in DIV_WIDTHS:
             yield Spec("div", op, "r", width)
+    for op in BMI_SHIFT_OPS:
+        for width in BMI_SHIFT_WIDTHS:
+            yield Spec("bmishift", op, "rr", width)
+    for op in BIT_COUNT_OPS:
+        for width in BIT_COUNT_WIDTHS:
+            yield Spec("bitcount", op, "rr", width)
     for op in BT_OPS:
         for form in BT_FORMS:
             for width in BT_WIDTHS:
@@ -2560,6 +2607,43 @@ def div_body(g, spec):
     call_helper(g, slow, join, helper, [f"mov x1, {B}"], raises=spec.raises)
 
 
+def bmishift_body(g, spec):
+    # gen_SHLX, gen_SHRX and gen_SARX: one AArch64 shift, on w registers at
+    # 32 bits; that zero-extends its result, as a 32-bit register write
+    # does, so the gadget stores all 64 bits.
+    reg = w if spec.width == 32 else (lambda r: r)
+    g.read_reg(A, "s")
+    g.read_reg(B, "c")
+    g.emit(f"{spec.op.a64} {reg(R)}, {reg(A)}, {reg(B)}")
+    g.define(R)
+    g.write_reg(R, "d", 64)
+
+
+def bitcount_body(g, spec):
+    # gen_LZCNT and gen_TZCNT, on the source zero-extended. TZCNT is CLZ of
+    # the bits reversed. At 16 bits, LZCNT subtracts the 16 bits above the
+    # operand, as gen_LZCNT does, and TZCNT sets a bit just past the
+    # operand, so that 0 counts 16. As in bmishift_body(), a 32-bit result
+    # is stored whole.
+    op, width = spec.op, spec.width
+    reg = w if width <= 32 else (lambda r: r)
+    g.read_reg(A, "s")
+    g.extend(A, width, False)
+    src = A
+    if op.reverse:
+        if width == 16:
+            g.emit(f"orr {w(R)}, {w(A)}, #0x10000")
+            src = R
+        g.emit(f"rbit {reg(R)}, {reg(src)}")
+        src = R
+    g.emit(f"clz {reg(R)}, {reg(src)}")
+    if not op.reverse and width == 16:
+        g.emit(f"sub {w(R)}, {w(R)}, #16")
+    g.define(R)
+    g.write_reg(R, "d", 64 if width == 32 else width)
+    g.write_cc(dst=R, src=A)
+
+
 def imul3_body(g, spec):
     # gen_IMUL3: both operands sign-extended from the operand size, so that
     # below 64 bits one MUL makes the whole product, which TCG keeps in
@@ -2729,6 +2813,8 @@ BODIES = {
     "mul": mul_body,
     "imul3": imul3_body,
     "div": div_body,
+    "bmishift": bmishift_body,
+    "bitcount": bitcount_body,
     "bt": bt_body,
     "cbw": cbw_body,
     "cwd": cwd_body,
@@ -2958,9 +3044,10 @@ class TctiHarness(Harness):
 OP_NAMES = ("add", "sub", "and", "or", "xor", "cmp", "test", "adc", "sbb",
             "zero", "mov", "lea", "push", "pop", "movzxb", "movzxw", "movsxb",
             "movsxw", "movsxd", "not", "neg", "inc", "dec", "bswap", "shl",
-            "shr", "sar", "ror", "mul", "imul", "imul3", "div", "idiv", "bt",
-            "bts", "btr", "btc", "cbw", "cwd", "xchg", "leave", "call", "jmp",
-            "ret", *(op.name for op in VMOV_OPS),
+            "shr", "sar", "ror", "mul", "imul", "imul3", "div", "idiv",
+            "shlx", "shrx", "sarx", "lzcnt", "tzcnt", "bt", "bts", "btr",
+            "btc", "cbw", "cwd", "xchg", "leave", "call", "jmp", "ret",
+            *(op.name for op in VMOV_OPS),
             *(op.name for op in VFP_OPS),
             *(op.name for op in VLANE_OPS), *(op.name for op in VLOGIC_OPS),
             *(op.name for op in VMOVD_OPS), *(op.name for op in VTBL_OPS),
@@ -2968,11 +3055,11 @@ OP_NAMES = ("add", "sub", "and", "or", "xor", "cmp", "test", "adc", "sbb",
 FORM_NAMES = ("rr", "rm", "mr", "ri", "mi", "r", "i", "m", "rri", "rmi",
               "xx", "xm", "mx", "xr", "rx")
 KIND_NAMES = ("alu", "zero", "mov", "lea", "push", "pop", "extend", "unary",
-              "shift", "mul", "imul3", "div", "bt", "cbw", "cwd", "xchg",
-              "leave", "call", "jmp", "ret", "vmov", "vfp", "vlane", "vlogic",
-              "vmovd", "vtbl", "vcomi")
+              "shift", "mul", "imul3", "div", "bmishift", "bitcount", "bt",
+              "cbw", "cwd", "xchg", "leave", "call", "jmp", "ret", "vmov",
+              "vfp", "vlane", "vlogic", "vmovd", "vtbl", "vcomi")
 WORD_NAMES = ("d", "s", "s1", "base", "index", "disp", "seg", "imm", "oi",
-              "tlb", "ccop", "v")
+              "tlb", "ccop", "v", "c")
 MAX_WORDS = len(WORD_REGS)
 # The stream words of a vtbl gadget's table: its 16 bytes.
 TABLE_WORDS = 2
@@ -3295,6 +3382,8 @@ def write_table(all_specs, out):
             flags = [f"CC_OP_{spec.op.cc}B", True, "RCG_SRCT_NONE"]
         elif spec.kind in ("mul", "imul3"):
             flags = ["CC_OP_MULB", True, "RCG_SRCT_NONE"]
+        elif spec.kind == "bitcount":
+            flags = ["CC_OP_BMILGB", True, "RCG_SRCT_NONE"]
         elif spec.kind == "bt":
             # Plus the earlier state's MemOp, which the translator adds;
             # after a state with EFLAGS in cc_src it records CC_OP_ADCX or
@@ -3546,6 +3635,12 @@ def insn_cases():
     for op in DIV_OPS:
         for width in WIDTHS:
             yield from div_cases(op, width)
+    for op in BMI_SHIFT_OPS:
+        for width in BMI_SHIFT_WIDTHS:
+            yield from bmi_shift_cases(op, width)
+    for op in BIT_COUNT_OPS:
+        for width in BIT_COUNT_WIDTHS:
+            yield from bit_count_cases(op, width)
     for op in BT_OPS:
         for width in BT_WIDTHS:
             yield from bt_cases(op, width)
@@ -4333,6 +4428,43 @@ def div_cases(op, width):
     text, base, _, bv, _ = memory_operand(width, "b", None)
     yield Case(f"{extend}; {op.name} {text}", width, a=0, mem=True, base=base,
                base_value=bv)
+
+
+def bmi_shift_cases(op, width):
+    """ SHLX, SHRX or SARX of a register by a register, with every test
+    value as the count, so that some counts mask to 0; with the destination
+    either input, neither or both; with the count also the source; of
+    memory, which is TCG's; and after a CMP whose flags a JL reads. """
+    rd, ra, rb = (reg_name(n, width) for n in (2, 0, 3))
+    yield Case(f"{op.name} {rd}, {ra}, {rb}", width, a=0, b=3)
+    yield Case(f"{op.name} {ra}, {ra}, {rb}", width, a=0, b=3)
+    yield Case(f"{op.name} {rb}, {ra}, {rb}", width, a=0, b=3)
+    yield Case(f"{op.name} {ra}, {ra}, {ra}", width, a=0)
+    yield Case(f"{op.name} {rd}, {ra}, {ra}", width, a=0)
+    r8, r9, r15 = (reg_name(n, width) for n in (8, 9, 15))
+    yield Case(f"{op.name} {r15}, {r8}, {r9}", width, a=8, b=9)
+    text, base, _, bv, _ = memory_operand(width, "b", None)
+    yield Case(f"{op.name} {ra}, {text}, {reg_name(1, width)}", width, a=1,
+               mem=True, base=base, base_value=bv)
+    # The flags state carries across it.
+    yield Case(f"cmp {ra}, {rb}; {op.name} {rd}, {ra}, {rb}; jl 1f; "
+               f"mov ecx, 1; 1:", width, a=0, b=3)
+
+
+def bit_count_cases(op, width):
+    """ LZCNT or TZCNT of a register, and of memory, which is TCG's; then
+    each condition on the flags they leave, which is also TCG's. """
+    ra, rb = reg_name(0, width), reg_name(3, width)
+    yield Case(f"{op.name} {ra}, {rb}", width, a=0, b=3)
+    yield Case(f"{op.name} {ra}, {ra}", width, a=0)
+    yield Case(f"{op.name} {reg_name(9, width)}, {reg_name(14, width)}",
+               width, a=9, b=14)
+    text, base, _, bv, _ = memory_operand(width, "b", None)
+    yield Case(f"{op.name} {ra}, {text}", width, a=0, mem=True, base=base,
+               base_value=bv)
+    for cond in range(16):
+        yield Case(f"{op.name} {ra}, {rb}; j{CONDS[cond]} 1f; mov ecx, 1; 1:",
+                   width, a=0, b=3)
 
 
 def imul3_cases(width):

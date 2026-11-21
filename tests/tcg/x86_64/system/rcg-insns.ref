@@ -8838,6 +8838,174 @@ idiv r9: 76abbcddb11c6055
 cqo; idiv rax: 50e9faa7fee546a6
 idiv rdx: 599ed5fbcd7cb67f
 cqo; idiv qword ptr [rbx+8]: e57f109970fe274d
+shlx edx, eax, ebx: a76877c7fe7ae356
+shlx eax, eax, ebx: 3781b99529eae8ae
+shlx ebx, eax, ebx: 734afd108cbba26a
+shlx eax, eax, eax: bb4c2ae297add6bc
+shlx edx, eax, eax: db8a2f674dc0b09
+shlx r15d, r8d, r9d: bb4a6f77c2b8148a
+shlx eax, dword ptr [rbx+8], ecx: 41d933f1ffe56696
+cmp eax, ebx; shlx edx, eax, ebx; jl 1f; mov ecx, 1; 1:: 3e485ccb1fd952c4
+shlx rdx, rax, rbx: b28d3cb1a191271e
+shlx rax, rax, rbx: 3a1323c466f993de
+shlx rbx, rax, rbx: e3dcbf55acc3ab82
+shlx rax, rax, rax: 89d115d4d505534c
+shlx rdx, rax, rax: 143e8a4ff33a4c59
+shlx r15, r8, r9: a13ea9ac5ba491ca
+shlx rax, qword ptr [rbx+8], rcx: 6d998df431fd8f16
+cmp rax, rbx; shlx rdx, rax, rbx; jl 1f; mov ecx, 1; 1:: 7daf5df50464ce70
+shrx edx, eax, ebx: aa54e5dbfc7a075d
+shrx eax, eax, ebx: 6f79e3574856b249
+shrx ebx, eax, ebx: ff23b5c6d5ea13d1
+shrx eax, eax, eax: 820fa5d2d5f75989
+shrx edx, eax, eax: baeb7d78bd9a4da4
+shrx r15d, r8d, r9d: b4ca5b044b60d5e5
+shrx eax, dword ptr [rbx+8], ecx: fb499884b7eddef5
+cmp eax, ebx; shrx edx, eax, ebx; jl 1f; mov ecx, 1; 1:: 750da8634e30835b
+shrx rdx, rax, rbx: 6765e97d4a86e009
+shrx rax, rax, rbx: f6e98632dea3ce8d
+shrx rbx, rax, rbx: 3aad41e58897c41d
+shrx rax, rax, rax: ccbd436554559bda
+shrx rdx, rax, rax: 28f18944a156cc4b
+shrx r15, r8, r9: 1bbd118e2cbca941
+shrx rax, qword ptr [rbx+8], rcx: ad0cc56f15e733c9
+cmp rax, rbx; shrx rdx, rax, rbx; jl 1f; mov ecx, 1; 1:: d375bfd7e336569b
+sarx edx, eax, ebx: 67ac3e9a3374f4dc
+sarx eax, eax, ebx: 1c7409f7a0c29f18
+sarx ebx, eax, ebx: 610419fd17641a48
+sarx eax, eax, eax: c7a7afd76b729f9f
+sarx edx, eax, eax: d2a3b06abff54f8e
+sarx r15d, r8d, r9d: ace356489690b480
+sarx eax, dword ptr [rbx+8], ecx: 84cb83a4b07c7880
+cmp eax, ebx; sarx edx, eax, ebx; jl 1f; mov ecx, 1; 1:: a0fc6feef69ffb3e
+sarx rdx, rax, rbx: 112399dd4a24e004
+sarx rax, rax, rbx: 29ad4bafcd6870d8
+sarx rbx, rax, rbx: 84c2cd05b8707490
+sarx rax, rax, rax: 3c19585a85404a85
+sarx rdx, rax, rax: 29bef340b622437c
+sarx r15, r8, r9: 4d81449c440024a8
+sarx rax, qword ptr [rbx+8], rcx: bac9b4856a9b4728
+cmp rax, rbx; sarx rdx, rax, rbx; jl 1f; mov ecx, 1; 1:: 2943c04c8c6ff61a
+lzcnt ax, bx: df886766bdd19a5
+lzcnt ax, ax: c0426f72beea80bf
+lzcnt r9w, r14w: ac35f12d97281465
+lzcnt ax, word ptr [rbx+8]: 362e4d3201a9505
+lzcnt ax, bx; jo 1f; mov ecx, 1; 1:: 552fb4871d8fc34d
+lzcnt ax, bx; jno 1f; mov ecx, 1; 1:: df886766bdd19a5
+lzcnt ax, bx; jb 1f; mov ecx, 1; 1:: 1576132e0adc2c55
+lzcnt ax, bx; jae 1f; mov ecx, 1; 1:: 2c373364584aaad5
+lzcnt ax, bx; je 1f; mov ecx, 1; 1:: a1d89451d5c1e70d
+lzcnt ax, bx; jne 1f; mov ecx, 1; 1:: 5884acf68063be35
+lzcnt ax, bx; jbe 1f; mov ecx, 1; 1:: fbe492d17fd07285
+lzcnt ax, bx; ja 1f; mov ecx, 1; 1:: b2ceb8d57b6bca5
+lzcnt ax, bx; js 1f; mov ecx, 1; 1:: 552fb4871d8fc34d
+lzcnt ax, bx; jns 1f; mov ecx, 1; 1:: df886766bdd19a5
+lzcnt ax, bx; jp 1f; mov ecx, 1; 1:: 741b2f05f46ead49
+lzcnt ax, bx; jnp 1f; mov ecx, 1; 1:: bd4537fca67b4801
+lzcnt ax, bx; jl 1f; mov ecx, 1; 1:: 552fb4871d8fc34d
+lzcnt ax, bx; jge 1f; mov ecx, 1; 1:: df886766bdd19a5
+lzcnt ax, bx; jle 1f; mov ecx, 1; 1:: a1d89451d5c1e70d
+lzcnt ax, bx; jg 1f; mov ecx, 1; 1:: 5884acf68063be35
+lzcnt eax, ebx: e408b4cc8f8f42a5
+lzcnt eax, eax: a8ec370012a3b8a0
+lzcnt r9d, r14d: 73600c6863df9225
+lzcnt eax, dword ptr [rbx+8]: 81f07ba014682825
+lzcnt eax, ebx; jo 1f; mov ecx, 1; 1:: a457ab2c9f69aa25
+lzcnt eax, ebx; jno 1f; mov ecx, 1; 1:: e408b4cc8f8f42a5
+lzcnt eax, ebx; jb 1f; mov ecx, 1; 1:: 4ef7f08eb49c3525
+lzcnt eax, ebx; jae 1f; mov ecx, 1; 1:: e629c42634be52a5
+lzcnt eax, ebx; je 1f; mov ecx, 1; 1:: ada6386a5ccbe005
+lzcnt eax, ebx; jne 1f; mov ecx, 1; 1:: d2c1555c32ce7685
+lzcnt eax, ebx; jbe 1f; mov ecx, 1; 1:: e77ae9c8cea52505
+lzcnt eax, ebx; ja 1f; mov ecx, 1; 1:: e8bbf5acb16bb485
+lzcnt eax, ebx; js 1f; mov ecx, 1; 1:: a457ab2c9f69aa25
+lzcnt eax, ebx; jns 1f; mov ecx, 1; 1:: e408b4cc8f8f42a5
+lzcnt eax, ebx; jp 1f; mov ecx, 1; 1:: 913851cd6c747f25
+lzcnt eax, ebx; jnp 1f; mov ecx, 1; 1:: 5bdd8ee17e28cc25
+lzcnt eax, ebx; jl 1f; mov ecx, 1; 1:: a457ab2c9f69aa25
+lzcnt eax, ebx; jge 1f; mov ecx, 1; 1:: e408b4cc8f8f42a5
+lzcnt eax, ebx; jle 1f; mov ecx, 1; 1:: ada6386a5ccbe005
+lzcnt eax, ebx; jg 1f; mov ecx, 1; 1:: d2c1555c32ce7685
+lzcnt rax, rbx: 897e2d02e0935b45
+lzcnt rax, rax: 9857d23abeb1e4ae
+lzcnt r9, r14: 6b4970cc90c23c45
+lzcnt rax, qword ptr [rbx+8]: 49ab590b244183c5
+lzcnt rax, rbx; jo 1f; mov ecx, 1; 1:: 2828756d9f4ea585
+lzcnt rax, rbx; jno 1f; mov ecx, 1; 1:: 897e2d02e0935b45
+lzcnt rax, rbx; jb 1f; mov ecx, 1; 1:: c9e67a959e315125
+lzcnt rax, rbx; jae 1f; mov ecx, 1; 1:: c4e1ca6968546425
+lzcnt rax, rbx; je 1f; mov ecx, 1; 1:: 51cdc978e3181b25
+lzcnt rax, rbx; jne 1f; mov ecx, 1; 1:: 55e99f347f6182a5
+lzcnt rax, rbx; jbe 1f; mov ecx, 1; 1:: 38e03fa8f4e4fc45
+lzcnt rax, rbx; ja 1f; mov ecx, 1; 1:: 6425614035cdce85
+lzcnt rax, rbx; js 1f; mov ecx, 1; 1:: 2828756d9f4ea585
+lzcnt rax, rbx; jns 1f; mov ecx, 1; 1:: 897e2d02e0935b45
+lzcnt rax, rbx; jp 1f; mov ecx, 1; 1:: f5fd9f5f8d68a745
+lzcnt rax, rbx; jnp 1f; mov ecx, 1; 1:: ce0fe3d8a6457685
+lzcnt rax, rbx; jl 1f; mov ecx, 1; 1:: 2828756d9f4ea585
+lzcnt rax, rbx; jge 1f; mov ecx, 1; 1:: 897e2d02e0935b45
+lzcnt rax, rbx; jle 1f; mov ecx, 1; 1:: 51cdc978e3181b25
+lzcnt rax, rbx; jg 1f; mov ecx, 1; 1:: 55e99f347f6182a5
+tzcnt ax, bx: 10cf8e62ed027b39
+tzcnt ax, ax: 6f476bd2612c4678
+tzcnt r9w, r14w: 95469045d5b387b9
+tzcnt ax, word ptr [rbx+8]: 6a62f5caf4566b69
+tzcnt ax, bx; jo 1f; mov ecx, 1; 1:: dad0df4a032af051
+tzcnt ax, bx; jno 1f; mov ecx, 1; 1:: 10cf8e62ed027b39
+tzcnt ax, bx; jb 1f; mov ecx, 1; 1:: 716df2e54fdba039
+tzcnt ax, bx; jae 1f; mov ecx, 1; 1:: 9bbb7a4581083569
+tzcnt ax, bx; je 1f; mov ecx, 1; 1:: 5a5d35c00b3ccf5
+tzcnt ax, bx; jne 1f; mov ecx, 1; 1:: 2bfc52002b7803bd
+tzcnt ax, bx; jbe 1f; mov ecx, 1; 1:: a5e532ab3364f78d
+tzcnt ax, bx; ja 1f; mov ecx, 1; 1:: 21c66427ea20176d
+tzcnt ax, bx; js 1f; mov ecx, 1; 1:: dad0df4a032af051
+tzcnt ax, bx; jns 1f; mov ecx, 1; 1:: 10cf8e62ed027b39
+tzcnt ax, bx; jp 1f; mov ecx, 1; 1:: 1d42fa4c9f139d69
+tzcnt ax, bx; jnp 1f; mov ecx, 1; 1:: c61799a11ebe3cb9
+tzcnt ax, bx; jl 1f; mov ecx, 1; 1:: dad0df4a032af051
+tzcnt ax, bx; jge 1f; mov ecx, 1; 1:: 10cf8e62ed027b39
+tzcnt ax, bx; jle 1f; mov ecx, 1; 1:: 5a5d35c00b3ccf5
+tzcnt ax, bx; jg 1f; mov ecx, 1; 1:: 2bfc52002b7803bd
+tzcnt eax, ebx: fc04ad72030c8aa5
+tzcnt eax, eax: 7bb57e8992bcd900
+tzcnt r9d, r14d: 3339fb0a0ad225
+tzcnt eax, dword ptr [rbx+8]: 75c634a5f66f56a5
+tzcnt eax, ebx; jo 1f; mov ecx, 1; 1:: 95a6559044c33525
+tzcnt eax, ebx; jno 1f; mov ecx, 1; 1:: fc04ad72030c8aa5
+tzcnt eax, ebx; jb 1f; mov ecx, 1; 1:: bd7e761a06f1d4a5
+tzcnt eax, ebx; jae 1f; mov ecx, 1; 1:: 5314a0ede3c6eba5
+tzcnt eax, ebx; je 1f; mov ecx, 1; 1:: c508f90628b269a5
+tzcnt eax, ebx; jne 1f; mov ecx, 1; 1:: 11ca2816bee0c225
+tzcnt eax, ebx; jbe 1f; mov ecx, 1; 1:: 7bebb28e1f3ec0a5
+tzcnt eax, ebx; ja 1f; mov ecx, 1; 1:: 154a6a0f0096c7a5
+tzcnt eax, ebx; js 1f; mov ecx, 1; 1:: 95a6559044c33525
+tzcnt eax, ebx; jns 1f; mov ecx, 1; 1:: fc04ad72030c8aa5
+tzcnt eax, ebx; jp 1f; mov ecx, 1; 1:: dfb1e6a6f76d1905
+tzcnt eax, ebx; jnp 1f; mov ecx, 1; 1:: 183f308fe9456505
+tzcnt eax, ebx; jl 1f; mov ecx, 1; 1:: 95a6559044c33525
+tzcnt eax, ebx; jge 1f; mov ecx, 1; 1:: fc04ad72030c8aa5
+tzcnt eax, ebx; jle 1f; mov ecx, 1; 1:: c508f90628b269a5
+tzcnt eax, ebx; jg 1f; mov ecx, 1; 1:: 11ca2816bee0c225
+tzcnt rax, rbx: e0dae73de9a7bfa5
+tzcnt rax, rax: e38b4305e6b42618
+tzcnt r9, r14: a7a0b91d197ae525
+tzcnt rax, qword ptr [rbx+8]: bcb8751fbe0b5b25
+tzcnt rax, rbx; jo 1f; mov ecx, 1; 1:: b7e3f0afcb479825
+tzcnt rax, rbx; jno 1f; mov ecx, 1; 1:: e0dae73de9a7bfa5
+tzcnt rax, rbx; jb 1f; mov ecx, 1; 1:: aab5ba8b547097e5
+tzcnt rax, rbx; jae 1f; mov ecx, 1; 1:: d57795b6f9cc67e5
+tzcnt rax, rbx; je 1f; mov ecx, 1; 1:: 608640f1fdeacc25
+tzcnt rax, rbx; jne 1f; mov ecx, 1; 1:: a14351f9fcd9ada5
+tzcnt rax, rbx; jbe 1f; mov ecx, 1; 1:: 26a7a5074aa70a25
+tzcnt rax, rbx; ja 1f; mov ecx, 1; 1:: 27bc352382ea0025
+tzcnt rax, rbx; js 1f; mov ecx, 1; 1:: b7e3f0afcb479825
+tzcnt rax, rbx; jns 1f; mov ecx, 1; 1:: e0dae73de9a7bfa5
+tzcnt rax, rbx; jp 1f; mov ecx, 1; 1:: 7b42159793872b25
+tzcnt rax, rbx; jnp 1f; mov ecx, 1; 1:: 5758104d820d5a5
+tzcnt rax, rbx; jl 1f; mov ecx, 1; 1:: b7e3f0afcb479825
+tzcnt rax, rbx; jge 1f; mov ecx, 1; 1:: e0dae73de9a7bfa5
+tzcnt rax, rbx; jle 1f; mov ecx, 1; 1:: 608640f1fdeacc25
+tzcnt rax, rbx; jg 1f; mov ecx, 1; 1:: a14351f9fcd9ada5
 bt ax, bx: 645bbb421936bac1
 bt cx, cx: fcd4e69263cef19c
 bt r8w, r15w: b7d79a38f48651d1
