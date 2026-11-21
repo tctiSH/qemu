@@ -185,11 +185,13 @@ class VFp:
     source, they take the first input, else the source (see
     minmax_lines()).
 
-    vex is for the VEX.128 encodings, whose names start with v: dest =
-    vvvv op src, or for ss and sd, the rest of dest from VEX.vvvv's
-    register; then bits 128 to 255 of dest are cleared, as gen_writeback()
-    does. TCG calls the same helpers, with VEX.vvvv's register in place of
-    the destination. A 16-byte memory source may be misaligned. """
+    vex is for the VEX encodings, whose names start with v: dest = vvvv op
+    src, or for ss and sd, the rest of dest from VEX.vvvv's register. At
+    128 bits, bits 128 to 255 of dest are then cleared, as gen_writeback()
+    does, and TCG calls the same helpers, with VEX.vvvv's register in place
+    of the destination. A 16-byte memory source may be misaligned. The VEX
+    packed ops also have VEX.256 gadgets between YMM registers, which take
+    the _ymm helpers (see vfp256_body()). """
 
     def __init__(self, base, a64, suffix, unary=False, vex=False,
                  pick=None):
@@ -1110,6 +1112,8 @@ def specs():
     for op in VFP_OPS:
         for form in ("xx", "xm"):
             yield from with_memory(Spec("vfp", op, form, op.width))
+        if op.vex and op.packed:
+            yield Spec("vfp", op, "xx", 256)
     for op in VLANE_OPS:
         for form in ("xx", "xm"):
             yield from with_memory(Spec("vlane", op, form, op.width))
@@ -1995,8 +1999,8 @@ def vfp_body(g, spec):
     # root is normal and raises nothing but PE.
     # Anything else goes to the helper, and so to ops_sse_host.h or
     # softfloat. The load comes first, as it may fault. A VEX encoding's
-    # first input is VEX.vvvv's register, and the gadget clears bits 128 to
-    # 255 of the destination last, on either path.
+    # first input is VEX.vvvv's register, and at 128 bits the gadget clears
+    # bits 128 to 255 of the destination last, on either path.
     #
     # MIN and MAX need only the input checks: no input lane may be a NaN,
     # which raises IE, or a denormal, which raises DE or, with DAZ,
@@ -2004,6 +2008,9 @@ def vfp_body(g, spec):
     # matter, and the host's comparison is then the helper's and raises
     # nothing. ops_sse_host.h's sse_host_plain_ps() checks the same, but
     # lets denormals through once DE is set and while DAZ is clear.
+    if spec.width == 256:
+        vfp256_body(g, spec)
+        return
     op, env = spec.op, g.env
     lane = op.lane
     slow, join = g._labels()
@@ -2063,6 +2070,71 @@ def mxcsr_lines(g, slow):
            f"b.ne {slow}f",
            f"tbnz {w(R)}, #{MXCSR_DAZ_BIT}, {slow}f",
            f"tbz {w(T)}, #%[sse_inexact], {slow}f")
+
+
+def vfp256_body(g, spec):
+    # vfp_body()'s work for the VEX.256 encodings of the packed ops between
+    # YMM registers, for which TCG calls the _ymm helpers. Each 16-byte half
+    # gets the checks of packed_vfp_lines(), or for MIN and MAX those of
+    # minmax_lines(), and V20 collects the bad lanes. The results stay in
+    # V18 and V19 until both halves pass: the slow path's helper reads the
+    # inputs, and the destination may be one of them. Nothing above bit 255
+    # needs clearing. The checks use V0 to V7 (V3, V6 and V7 as scratch),
+    # and V8 to V15 are the host's to keep, so V16, also scratch, and V18 to
+    # V20 sit above them.
+    op, env, lane = spec.op, g.env, spec.op.lane
+    t = "4s" if lane == 32 else "2d"
+    results, bad = ("v18", "v19"), "v20"
+    slow, join = g._labels()
+    if not op.pick:
+        mxcsr_lines(g, slow)
+    if op.unary:
+        low, span = VFP_MIN_NORMAL[lane], VFP_SQRT_SPAN[lane]
+    else:
+        low, span = VFP_MIN_NORMAL2[lane], VFP_SPAN[lane]
+        g.emit(f"add {B}, {env}, {g.word('v')}")
+    g.emit(f"add {A}, {env}, {g.word('s')}")
+    dup_lanes(g, "v4", "x13", low, t)
+    dup_lanes(g, "v5", "x24", span, t)
+    g.emit(f"movi {bad}.16b, #0")
+    for half, res in zip((0, 16), results):
+        g.emit(f"ldr q1, [{A}, #{half}]")
+        if op.unary:
+            # The check of packed_vfp_lines(): a positive normal source lane.
+            g.emit(f"sub v3.{t}, v1.{t}, v4.{t}",
+                   f"cmhs v7.{t}, v3.{t}, v5.{t}",
+                   f"orr {bad}.16b, {bad}.16b, v7.16b",
+                   f"{op.a64} {res}.{t}, v1.{t}")
+        elif op.pick:
+            # As in minmax_lines(): keep the two in step.
+            g.emit(f"ldr q0, [{B}, #{half}]")
+            for v in ("v0", "v1"):
+                plain_lanes(g, v, t, bad)
+            a, b = ("v0", "v1") if op.pick == "gt" else ("v1", "v0")
+            g.emit(f"fcmgt {res}.{t}, {a}.{t}, {b}.{t}",
+                   f"bsl {res}.16b, v0.16b, v1.16b")
+        else:
+            # The result and input checks of packed_vfp_lines().
+            g.emit(f"ldr q0, [{B}, #{half}]",
+                   f"{op.a64} {res}.{t}, v0.{t}, v1.{t}",
+                   f"shl v3.{t}, {res}.{t}, #1",
+                   f"sub v3.{t}, v3.{t}, v4.{t}",
+                   f"cmhs v7.{t}, v3.{t}, v5.{t}",
+                   f"cmeq v16.{t}, v3.{t}, #0",
+                   "orr v7.16b, v7.16b, v16.16b",
+                   f"orr {bad}.16b, {bad}.16b, v7.16b")
+            for v in ("v0", "v1"):
+                denormal_lanes(g, v, t, bad)
+    g.emit(f"umaxv s{bad[1:]}, {bad}.4s",
+           f"fmov {w(T)}, s{bad[1:]}",
+           f"cbnz {w(T)}, {slow}f",
+           f"add {T}, {env}, {g.word('d')}",
+           f"stp q{results[0][1:]}, q{results[1][1:]}, [{T}]",
+           f"{join}:")
+    inputs = ([] if op.unary else [f"add x2, {env}, {g.word('v')}"])
+    source = f"add {'x2' if op.unary else 'x3'}, {env}, {g.word('s')}"
+    call_helper(g, slow, join, op.helper.replace("_xmm", "_ymm"),
+                [f"add x1, {env}, {g.word('d')}", *inputs, source])
 
 
 def call_helper(g, slow, join, helper, args, store=(), keep=(),
@@ -2135,13 +2207,26 @@ def plain_lanes(g, vreg, t, bad):
            f"orr {bad}.16b, {bad}.16b, v6.16b")
 
 
+def denormal_lanes(g, vreg, t, bad):
+    """ Sets every bit of each lane of bad where vreg's lane is a denormal.
+    V4 must hold VFP_MIN_NORMAL2 in each lane (see dup_lanes()); V3, V7
+    and V16 are scratch, so none of the four may be vreg or bad. """
+    assert not {vreg, bad} & {"v3", "v4", "v7", "v16"}, (vreg, bad)
+    g.emit(f"shl v3.{t}, {vreg}.{t}, #1",
+           f"cmhi v7.{t}, v4.{t}, v3.{t}",
+           f"cmeq v16.{t}, v3.{t}, #0",
+           "bic v7.16b, v7.16b, v16.16b",
+           f"orr {bad}.16b, {bad}.16b, v7.16b")
+
+
 def minmax_lines(g, spec, slow):
     """ MIN or MAX, checked as vfp_body() says: the first input (the
     destination, or for a VEX encoding VEX.vvvv's register) where it is
     less (MIN) or greater (MAX) than the source, else the source. For ss
     and sd, the low lanes in A and B (B loaded already for a memory
     source), keeping the first input's other lanes; else every lane, in V0
-    and V1 (from A and B for a memory source). """
+    and V1 (from A and B for a memory source). vfp256_body() makes the same
+    packed checks on each half of a YMM register: keep them in step. """
     op, env, lane = spec.op, g.env, spec.op.lane
     first = g.word("v") if op.vex else g.word("d")
     if not op.vex:
@@ -2273,7 +2358,9 @@ def scalar_vfp_lines(g, spec, slow):
 def packed_vfp_lines(g, spec, slow):
     """ The same on every lane: the first input in v0 (for SQRT, which has
     no second input, not loaded), the source in v1 (from A and B for a
-    memory source), the result in v2. """
+    memory source), the result in v2. vfp256_body() makes the same checks
+    on each half of a YMM register, in other registers: keep them in step.
+    """
     op, env, lane = spec.op, g.env, spec.op.lane
     t = "4s" if lane == 32 else "2d"
     if spec.has_mem:
@@ -2308,11 +2395,7 @@ def packed_vfp_lines(g, spec, slow):
            "orr v6.16b, v6.16b, v7.16b")
     # A denormal input: below the smallest normal, and not a zero.
     for v in ("v0", "v1"):
-        g.emit(f"shl v3.{t}, {v}.{t}, #1",
-               f"cmhi v7.{t}, v4.{t}, v3.{t}",
-               f"cmeq v16.{t}, v3.{t}, #0",
-               "bic v7.16b, v7.16b, v16.16b",
-               "orr v6.16b, v6.16b, v7.16b")
+        denormal_lanes(g, v, t, "v6")
     g.emit("umaxv s6, v6.4s",
            f"fmov {w(T)}, s6",
            f"cbnz {w(T)}, {slow}f",
@@ -3774,6 +3857,7 @@ def insn_cases():
     yield from vex256_vmov_cases()
     yield from vfp_cases()
     yield from vex_vfp_cases()
+    yield from vex256_vfp_cases()
     yield from vec_alias_cases()
     yield from mmx_cases()
     yield from movd_cases()
@@ -5088,6 +5172,39 @@ def vex_vfp_cases():
             yield Case(upper("xmm0", insn("xmm0", "xmm1", text)), width,
                        a=0, mem=True, base=base, index=index, base_value=bv,
                        index_value=iv, xmm=n)
+
+
+def vex256_vfp_cases():
+    """ The VEX.256 encodings of the packed floating-point ops: YMM0 from
+    YMM1 and YMM2, which take every pair of values, then each input as the
+    destination, then YMM9 from YMM10 and YMM12, by way of the registers
+    the test loads, then YMM0 and YMM1 from YMM1 and YMM2 with normal
+    values only; last, a memory source, which stays with TCG (its upper 16
+    bytes are rcg_fill()'s pattern). """
+    for op in VFP_OPS:
+        if not (op.vex and op.packed):
+            continue
+        ymm = dict(xmm=vec_xmm(op), ymm=True)
+
+        def insn(dest, first, source):
+            if op.unary:
+                return f"{op.name} {dest}, {source}"
+            return f"{op.name} {dest}, {first}, {source}"
+
+        yield Case(insn("ymm0", "ymm1", "ymm2"), 256, a=0, b=1, **ymm)
+        yield Case(insn("ymm1", "ymm1", "ymm2"), 256, a=0, b=1, **ymm)
+        yield Case(insn("ymm2", "ymm1", "ymm2"), 256, a=0, b=1, **ymm)
+        yield Case(insn("ymm3", "ymm3", "ymm3"), 256, a=0, **ymm)
+        yield Case(f"vmovaps ymm10, ymm1; vmovaps ymm12, ymm2; "
+                   f"{insn('ymm9', 'ymm10', 'ymm12')}; vmovaps ymm0, ymm9",
+                   256, a=0, b=1, **ymm)
+        n = XMM_F64N if op.lane == 64 else XMM_F32N
+        for dest in ("ymm0", "ymm1"):
+            yield Case(insn(dest, "ymm1", "ymm2"), 256, a=0, b=1, xmm=n,
+                       ymm=True)
+        text, base, _, bv, _ = memory_operand(256, "b", None)
+        yield Case(insn("ymm0", "ymm1", text), 256, a=0, mem=True, base=base,
+                   base_value=bv, **ymm)
 
 
 def vec_alias_cases():

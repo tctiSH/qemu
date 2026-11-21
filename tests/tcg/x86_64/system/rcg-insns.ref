@@ -14456,6 +14456,118 @@ vinsertf128 ymm0, ymm0, xmm3, 1; vpxor xmm0, xmm1, xmmword ptr gs:[0x2ffe010]; v
 vinsertf128 ymm0, ymm0, xmm3, 1; vpxor xmm0, xmm1, xmmword ptr [rip+rcg_mem+16]; vextractf128 xmm3, ymm0, 1: ca4a723214f85e95
 vinsertf128 ymm0, ymm0, xmm3, 1; vpxor xmm0, xmm1, xmmword ptr [rbx+8]; vextractf128 xmm3, ymm0, 1: 842514b221675ef5
 vinsertf128 ymm0, ymm0, xmm3, 1; vpxor xmm0, xmm1, xmmword ptr [rbx+8]; vextractf128 xmm3, ymm0, 1: 3393e9820c37015
+vaddps ymm0, ymm1, ymm2: 81a80bf137918a79
+vaddps ymm1, ymm1, ymm2: e26f57d8035675c5
+vaddps ymm2, ymm1, ymm2: e2e6c40ee2000785
+vaddps ymm3, ymm3, ymm3: 9ca255d4d3f59fc8
+vmovaps ymm10, ymm1; vmovaps ymm12, ymm2; vaddps ymm9, ymm10, ymm12; vmovaps ymm0, ymm9: 81a80bf137918a79
+vaddps ymm0, ymm1, ymm2: 533aec1e024c94d
+vaddps ymm1, ymm1, ymm2: ae490084a4dd719d
+vaddps ymm0, ymm1, ymmword ptr [rbx+8]: 8912072697ad2921
+vaddpd ymm0, ymm1, ymm2: 9abb0311cbe1365
+vaddpd ymm1, ymm1, ymm2: 3f7c6ed2b70213c1
+vaddpd ymm2, ymm1, ymm2: 8ac10ebde1b1701
+vaddpd ymm3, ymm3, ymm3: 9a423c9355d58ea0
+vmovaps ymm10, ymm1; vmovaps ymm12, ymm2; vaddpd ymm9, ymm10, ymm12; vmovaps ymm0, ymm9: 9abb0311cbe1365
+vaddpd ymm0, ymm1, ymm2: 1469fc6d3c26bc0d
+vaddpd ymm1, ymm1, ymm2: f344573d26a66e15
+vaddpd ymm0, ymm1, ymmword ptr [rbx+8]: 1999d8b8c059db50
+vsubps ymm0, ymm1, ymm2: 38429590effab01
+vsubps ymm1, ymm1, ymm2: 2e28f2dfe6b7dd65
+vsubps ymm2, ymm1, ymm2: ce525015060e1c71
+vsubps ymm3, ymm3, ymm3: f9b0125c01fc981c
+vmovaps ymm10, ymm1; vmovaps ymm12, ymm2; vsubps ymm9, ymm10, ymm12; vmovaps ymm0, ymm9: 38429590effab01
+vsubps ymm0, ymm1, ymm2: 5344ee26a897d349
+vsubps ymm1, ymm1, ymm2: ac1b5b6f4cc145b9
+vsubps ymm0, ymm1, ymmword ptr [rbx+8]: f91fcb67d14bc5e1
+vsubpd ymm0, ymm1, ymm2: 9130edfddf17b47d
+vsubpd ymm1, ymm1, ymm2: 18b139eb7b46c0c1
+vsubpd ymm2, ymm1, ymm2: 87038409ca0e8de9
+vsubpd ymm3, ymm3, ymm3: 4db1d0adb581f930
+vmovaps ymm10, ymm1; vmovaps ymm12, ymm2; vsubpd ymm9, ymm10, ymm12; vmovaps ymm0, ymm9: 9130edfddf17b47d
+vsubpd ymm0, ymm1, ymm2: 11514a287033fd1
+vsubpd ymm1, ymm1, ymm2: 9ac99e288f30e791
+vsubpd ymm0, ymm1, ymmword ptr [rbx+8]: 49cfdae734eb2fc5
+vmulps ymm0, ymm1, ymm2: f595eb92148a2de4
+vmulps ymm1, ymm1, ymm2: 969825af8054c39c
+vmulps ymm2, ymm1, ymm2: 3856adfbfde43694
+vmulps ymm3, ymm3, ymm3: cc8f7f34c28ad1a4
+vmovaps ymm10, ymm1; vmovaps ymm12, ymm2; vmulps ymm9, ymm10, ymm12; vmovaps ymm0, ymm9: f595eb92148a2de4
+vmulps ymm0, ymm1, ymm2: 8257eed41ce0a1d5
+vmulps ymm1, ymm1, ymm2: 698d2c64843d3659
+vmulps ymm0, ymm1, ymmword ptr [rbx+8]: 171cb75d7b6936c
+vmulpd ymm0, ymm1, ymm2: a028f0854178ac1c
+vmulpd ymm1, ymm1, ymm2: 99befb5693edd294
+vmulpd ymm2, ymm1, ymm2: 310d1d98a6064fbc
+vmulpd ymm3, ymm3, ymm3: a3541ab7cd77d7a8
+vmovaps ymm10, ymm1; vmovaps ymm12, ymm2; vmulpd ymm9, ymm10, ymm12; vmovaps ymm0, ymm9: a028f0854178ac1c
+vmulpd ymm0, ymm1, ymm2: f7115119f1fd0055
+vmulpd ymm1, ymm1, ymm2: 90705d7c2cef11e9
+vmulpd ymm0, ymm1, ymmword ptr [rbx+8]: 9e683abddeea9452
+vdivps ymm0, ymm1, ymm2: 4a72e7a754ac4629
+vdivps ymm1, ymm1, ymm2: c2d092dd887ef999
+vdivps ymm2, ymm1, ymm2: 1fb98b795a56ba1
+vdivps ymm3, ymm3, ymm3: 33acd6e356947011
+vmovaps ymm10, ymm1; vmovaps ymm12, ymm2; vdivps ymm9, ymm10, ymm12; vmovaps ymm0, ymm9: 4a72e7a754ac4629
+vdivps ymm0, ymm1, ymm2: 6f3018a9aaf10035
+vdivps ymm1, ymm1, ymm2: 89789de267779335
+vdivps ymm0, ymm1, ymmword ptr [rbx+8]: 9ca7b62d027a0570
+vdivpd ymm0, ymm1, ymm2: a0921c3611fdc40d
+vdivpd ymm1, ymm1, ymm2: d580f6a06cd6dab1
+vdivpd ymm2, ymm1, ymm2: ea46393d5582b3d1
+vdivpd ymm3, ymm3, ymm3: f9f07fbe364ac14c
+vmovaps ymm10, ymm1; vmovaps ymm12, ymm2; vdivpd ymm9, ymm10, ymm12; vmovaps ymm0, ymm9: a0921c3611fdc40d
+vdivpd ymm0, ymm1, ymm2: 6058ab9c0a761e89
+vdivpd ymm1, ymm1, ymm2: da80a4021aeea679
+vdivpd ymm0, ymm1, ymmword ptr [rbx+8]: a8958198d28c3e29
+vsqrtps ymm0, ymm2: fc568f16ad53481d
+vsqrtps ymm1, ymm2: 1a477bf43c315665
+vsqrtps ymm2, ymm2: 48c99c5d1cccdf55
+vsqrtps ymm3, ymm3: e237a48c8581e514
+vmovaps ymm10, ymm1; vmovaps ymm12, ymm2; vsqrtps ymm9, ymm12; vmovaps ymm0, ymm9: fc568f16ad53481d
+vsqrtps ymm0, ymm2: afc2f53a824ea2ed
+vsqrtps ymm1, ymm2: c5e33f4831ed7635
+vsqrtps ymm0, ymmword ptr [rbx+8]: 68d1b61c069a86ad
+vsqrtpd ymm0, ymm2: 29b5fb51ac901429
+vsqrtpd ymm1, ymm2: 5019e2301eaf68e9
+vsqrtpd ymm2, ymm2: 15965566169dc609
+vsqrtpd ymm3, ymm3: afd9d961afa17564
+vmovaps ymm10, ymm1; vmovaps ymm12, ymm2; vsqrtpd ymm9, ymm12; vmovaps ymm0, ymm9: 29b5fb51ac901429
+vsqrtpd ymm0, ymm2: 65d547591fcce97d
+vsqrtpd ymm1, ymm2: 67a933b9c2978b45
+vsqrtpd ymm0, ymmword ptr [rbx+8]: 6cf70d708e1c6c6d
+vminps ymm0, ymm1, ymm2: 86eec910292f1f05
+vminps ymm1, ymm1, ymm2: 46f0c80f26a5b8bd
+vminps ymm2, ymm1, ymm2: 33b7082a293960c1
+vminps ymm3, ymm3, ymm3: 9fee25b6d5b24f7c
+vmovaps ymm10, ymm1; vmovaps ymm12, ymm2; vminps ymm9, ymm10, ymm12; vmovaps ymm0, ymm9: 86eec910292f1f05
+vminps ymm0, ymm1, ymm2: c97b48b3b5fea2fd
+vminps ymm1, ymm1, ymm2: 23de0e69336ab01d
+vminps ymm0, ymm1, ymmword ptr [rbx+8]: 97cd531583c6ea0d
+vminpd ymm0, ymm1, ymm2: d3cc733ec01e6fe5
+vminpd ymm1, ymm1, ymm2: c35a83f2dd1cfdd1
+vminpd ymm2, ymm1, ymm2: 9d82b4621fbbfe2d
+vminpd ymm3, ymm3, ymm3: 2e4df06f162acfd0
+vmovaps ymm10, ymm1; vmovaps ymm12, ymm2; vminpd ymm9, ymm10, ymm12; vmovaps ymm0, ymm9: d3cc733ec01e6fe5
+vminpd ymm0, ymm1, ymm2: 4ff89d8fa918c0f5
+vminpd ymm1, ymm1, ymm2: 5c1ec49e7402f9b1
+vminpd ymm0, ymm1, ymmword ptr [rbx+8]: dd7c2583ddb9b02a
+vmaxps ymm0, ymm1, ymm2: e226b79110051015
+vmaxps ymm1, ymm1, ymm2: fd43537d8900c971
+vmaxps ymm2, ymm1, ymm2: 9c713864df839971
+vmaxps ymm3, ymm3, ymm3: 9fee25b6d5b24f7c
+vmovaps ymm10, ymm1; vmovaps ymm12, ymm2; vmaxps ymm9, ymm10, ymm12; vmovaps ymm0, ymm9: e226b79110051015
+vmaxps ymm0, ymm1, ymm2: f934cf9c57f6851d
+vmaxps ymm1, ymm1, ymm2: ae3fbd4d013998fd
+vmaxps ymm0, ymm1, ymmword ptr [rbx+8]: 32ed6e2e0824de45
+vmaxpd ymm0, ymm1, ymm2: 317c2998dd9d36d9
+vmaxpd ymm1, ymm1, ymm2: 59555b18b5a433e1
+vmaxpd ymm2, ymm1, ymm2: d4615b60b77144b9
+vmaxpd ymm3, ymm3, ymm3: 2e4df06f162acfd0
+vmovaps ymm10, ymm1; vmovaps ymm12, ymm2; vmaxpd ymm9, ymm10, ymm12; vmovaps ymm0, ymm9: 317c2998dd9d36d9
+vmaxpd ymm0, ymm1, ymm2: 20810bbab66550a5
+vmaxpd ymm1, ymm1, ymm2: aee0a8dae3e89439
+vmaxpd ymm0, ymm1, ymmword ptr [rbx+8]: eada712b345f11a
 vinsertf128 ymm1, ymm1, xmm3, 1; punpckldq xmm1, xmm2; vextractf128 xmm3, ymm1, 1: ca7dc6900c7b7a45
 punpckldq xmm1, xmmword ptr [rbx+rcx*2+8]: 269340599a19c5ad
 vinsertf128 ymm0, ymm0, xmm3, 1; vpunpckldq xmm0, xmm1, xmm2; vextractf128 xmm3, ymm0, 1: ebe8e3747f9685c5

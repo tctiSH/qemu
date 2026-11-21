@@ -261,8 +261,9 @@ static char rcg_kind(DisasContext *s, X86DecodedOp *op)
          * rcg_operands() takes the width from the RCG op, for MOVD and MOVQ
          * from the general register (64 bits between XMM registers), for a
          * table shuffle from memory from the memory operand, and for a
-         * VEX.256 move from VEX.L; it refuses every other VEX.256 encoding.
-         * A VEX encoding takes the op rcg_vex_op() picks.
+         * VEX.256 move, or a VEX.256 packed floating-point op between
+         * registers, from VEX.L; it refuses every other VEX.256 encoding. A
+         * VEX encoding takes the op rcg_vex_op() picks.
          */
         return 'x';
     default:
@@ -704,9 +705,12 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
 
     /*
      * A VEX.256 encoding works on whole YMM registers, which only the
-     * gadgets of MOVDQA and MOVDQU do.
+     * gadgets of MOVDQA, MOVDQU and the packed floating-point ops do; the
+     * RCG_KIND_VFP case below refuses ss, sd and memory sources. The gadget
+     * tables of the other ops also end below MO_256.
      */
-    if (ymm && op != RCG_OP_MOVDQA && op != RCG_OP_MOVDQU) {
+    if (ymm && op != RCG_OP_MOVDQA && op != RCG_OP_MOVDQU &&
+        rcg_facts[op].kind != RCG_KIND_VFP) {
         return -1;
     }
     switch (rcg_facts[op].kind) {
@@ -803,10 +807,11 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
          * encodings, whose gadgets require it, and may be misaligned in the
          * VEX ones, whose gadgets allow it. A table shuffle's source in
          * memory may instead be 1 to 8 bytes (see rcg_tbl_table()), which
-         * have no alignment to keep. All the floating-point gadgets but
-         * MIN's and MAX's read float_status's flags directly;
-         * rcg_sse_flags_ok() also gates MIN and MAX, which do not need it.
-         * The other gadgets raise nothing.
+         * have no alignment to keep. At 32 bytes, only ps and pd between
+         * registers have gadgets. All the floating-point gadgets but MIN's
+         * and MAX's read float_status's flags directly; rcg_sse_flags_ok()
+         * also gates MIN and MAX, which do not need it. The other gadgets
+         * raise nothing.
          */
         char a = rcg_kind(s, first), b = rcg_kind(s, second);
         bool fp = rcg_facts[op].kind == RCG_KIND_VFP;
@@ -816,9 +821,10 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
         if (rcg_facts[op].kind == RCG_KIND_VTBL) {
             *ot = b == 'm' ? second->ot : MO_128;
         } else {
-            *ot = type == 2 ? MO_32 : type == 3 ? MO_64 : MO_128;
+            *ot = type == 2 ? MO_32 : type == 3 ? MO_64 :
+                  ymm ? MO_256 : MO_128;
         }
-        if (a != 'x' || !b ||
+        if (a != 'x' || !b || (ymm && (type >= 2 || b != 'x')) ||
             (b == 'm' && *ot == MO_128 &&
              (!(cpuinfo & CPUINFO_LSE2) ||
               sse_needs_alignment(s, decode, MO_128) == vex)) ||
@@ -969,12 +975,13 @@ static unsigned rcg_pack_words(const RCGGadget *g, uint64_t *words,
 
 /*
  * The op of a VEX encoding of op, in form, at width ot, or -1 if it has
- * none. Below 256 bits, its gadgets take VEX.vvvv's register as their
- * first input where the instruction has one, and clear bits 128 to 255 of
- * the destination register; a move to memory or to a general register,
- * and UCOMIS and COMIS, which write no XMM register, are the same as the
- * legacy encoding and use its gadgets. At 256 bits, the VEX ops of MOVDQA
- * and MOVDQU have gadgets for every form, stores too. The BMI shifts have
+ * none. The VEX op's gadgets take VEX.vvvv's register as their first input
+ * where the instruction has one. Below 256 bits, they clear bits 128 to
+ * 255 of the destination register, and a move to memory or to a general
+ * register, and UCOMIS and COMIS, which write no XMM register, are the
+ * same as the legacy encoding and use its gadgets. At 256 bits, the VEX
+ * ops of MOVDQA and MOVDQU have gadgets for every form, stores too, and
+ * those of ps and pd have them between registers. The BMI shifts have
  * only a VEX encoding and keep their op; VEX.vvvv's register is their
  * count, their last input.
  */
