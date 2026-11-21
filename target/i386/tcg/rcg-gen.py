@@ -587,8 +587,24 @@ XCHG_WIDTHS = WIDTHS
 CC_CLASSES = ([(cls, width)
                for cls in ("sub", "add", "logic", "inc", "dec", "sar")
                for width in WIDTHS] + [("eflags", None), ("adcx", None)])
-# The classes that hold PF, the only ones P and NP are read from.
+# The classes that hold PF. P and NP are read only from these and, by Jcc,
+# from DYNAMIC.
 PF_CLASSES = ("eflags", "adcx")
+# CC_OP_DYNAMIC, where the translator does not know the state: only Jcc
+# reads it, from env, with a helper for some states (see
+# Body.cond_dynamic()). Its gadgets come after CC_CLASSES'.
+DYNAMIC = ("dynamic", None)
+
+# The AArch64 conditions that give x86 conditions, by their opcode's low four
+# bits shifted right by one (not inverted), after a CMP of a SUB state's
+# operands, a CMN of an ADD state's operands or a TST of a LOGIC state's
+# result, each shifted to the top: see Body.cond(). None has P, which comes
+# from the EFLAGS. A LOGIC state has OF and CF clear, so O and B, which
+# LOGIC_ARMS lacks, never hold. ADD_ARMS lacks BE, CF or ZF, which needs
+# more than one condition after a CMN.
+SUB_ARMS = {0: "vs", 1: "lo", 2: "eq", 3: "ls", 4: "mi", 6: "lt", 7: "le"}
+ADD_ARMS = {0: "vs", 1: "cs", 2: "eq", 4: "mi", 6: "lt", 7: "le"}
+LOGIC_ARMS = {2: "eq", 3: "eq", 4: "mi", 6: "lt", 7: "le"}
 
 # x86 conditions by the low four bits of Jcc's, SETcc's and CMOVcc's opcode.
 CONDS = ("o", "no", "b", "ae", "e", "ne", "be", "a",
@@ -604,9 +620,10 @@ def cc_name(cls, width):
 
 class CondSpec:
     """ One gadget that reads a condition from the lazy-flags state cls at
-    width, left by an instruction before it in the TB: kind "jcc" (stores
-    CC_OP, then branches), "jccgoto" (the same, then the jump either way
-    as TCTI's addi_env_goto_tb makes it), "setcc" (an 8-bit register) or
+    width, left by an instruction before it in the TB, or held in env at
+    CC_OP_DYNAMIC: kind "jcc" (stores CC_OP, but not at CC_OP_DYNAMIC,
+    then branches), "jccgoto" (the same, then the jump either way, as
+    done by TCTI's addi_env_goto_tb), "setcc" (an 8-bit register) or
     "cmov" (register to register at width cmov_width). """
 
     def __init__(self, kind, cls, cc_width, cond, cmov_width=None):
@@ -628,9 +645,17 @@ class CondSpec:
         return "_".join(parts)
 
     @property
+    def in_env(self):
+        """ Whether the state is CC_OP_DYNAMIC's, which env already holds,
+        cc_op included. """
+        return (self.cls, self.cc_width) == DYNAMIC
+
+    @property
     def words(self):
         if self.kind in ("jcc", "jccgoto"):
-            return ["ccop"]
+            # At CC_OP_DYNAMIC, env already holds cc_op: there is nothing
+            # to store.
+            return [] if self.in_env else ["ccop"]
         if self.kind == "setcc":
             return ["d"]
         return ["d", "s"]
@@ -643,7 +668,8 @@ class CondSpec:
 
 
 def cond_specs():
-    """ Every condition gadget there is: P and NP only from PF_CLASSES. """
+    """ Every condition gadget there is: P and NP only from PF_CLASSES, and
+    from DYNAMIC only jcc and jccgoto gadgets, for every condition. """
     for cls, width in CC_CLASSES:
         for cond in range(16):
             if cond >> 1 == 5 and cls not in PF_CLASSES:
@@ -653,6 +679,9 @@ def cond_specs():
             yield CondSpec("setcc", cls, width, cond)
             for cmov_width in CMOV_WIDTHS:
                 yield CondSpec("cmov", cls, width, cond, cmov_width)
+    for cond in range(16):
+        yield CondSpec("jcc", *DYNAMIC, cond)
+        yield CondSpec("jccgoto", *DYNAMIC, cond)
 
 
 class FusedSpec:
@@ -720,7 +749,7 @@ def fused_setters():
 
 def fused_specs():
     """ Every fused gadget: all conditions but P and NP, which are read only
-    from PF_CLASSES, which no setter here leaves. """
+    from PF_CLASSES and DYNAMIC, which no setter here leaves. """
     for setter in fused_setters():
         for cond in range(16):
             if cond >> 1 != 5:
@@ -1404,22 +1433,8 @@ class Body:
                 self.emit(f"cmp {A}, #0")
             else:
                 # The flags themselves, in cc_src.
-                self.emit(f"ldr {A}, [{env}, %[cc_src]]")
-                masks = {0: "CC_O", 1: "CC_C", 2: "CC_Z", 3: "CC_Z | CC_C",
-                         4: "CC_S", 5: "CC_P"}
-                if jcc_op == 3:
-                    # Not a logical immediate.
-                    self.emit(f"mov {T}, %[eflags_3]",
-                              f"tst {A}, {T}")
-                elif jcc_op in masks:
-                    self.emit(f"tst {A}, %[eflags_{jcc_op}]")
-                else:
-                    # SF != OF, or with ZF: OF is 4 bits above SF, ZF one
-                    # below.
-                    self.emit(f"eor {T}, {A}, {A}, lsr #4")
-                    if jcc_op == 7:
-                        self.emit(f"orr {T}, {T}, {A}, lsl #1")
-                    self.emit(f"tst {T}, %[cc_s]")
+                self.emit(f"ldr {A}, [{env}, %[cc_src]]",
+                          *eflags_tests(A, jcc_op))
             arm = "ne"
         elif cls == "logic" and jcc_op in (0, 1):
             # OF and CF are 0.
@@ -1459,7 +1474,7 @@ class Body:
                 arm = "mi"
             else:
                 # SF ^ OF, or ZF: 1 if Z, else cc_src's top bit. P is read
-                # from PF_CLASSES only (see cond_specs()).
+                # only from PF_CLASSES.
                 assert jcc_op == 7
                 top(A)
                 top(B)
@@ -1484,9 +1499,7 @@ class Body:
                 top(A)
                 top(B)
                 self.emit(f"{'cmp' if cls == 'sub' else 'cmn'} {A}, {B}")
-                arms = ({0: "vs", 1: "lo", 2: "eq", 3: "ls", 4: "mi", 6: "lt",
-                         7: "le"} if cls == "sub" else
-                        {0: "vs", 1: "cs", 2: "eq", 4: "mi", 6: "lt", 7: "le"})
+                arms = SUB_ARMS if cls == "sub" else ADD_ARMS
                 if jcc_op == 3 and cls == "add":
                     # CF or ZF: 1 if Z, else C.
                     self.emit(f"cset {T}, cs",
@@ -1498,7 +1511,7 @@ class Body:
             elif cls == "logic":
                 top(A)
                 self.emit(f"tst {A}, {A}")
-                arm = {2: "eq", 3: "eq", 4: "mi", 6: "lt", 7: "le"}[jcc_op]
+                arm = LOGIC_ARMS[jcc_op]
             else:
                 # INC and DEC: cc_src holds CF from before them. The other
                 # flags come from doing the operation again on its operand,
@@ -1528,6 +1541,72 @@ class Body:
             arm = ARM_INVERT[arm]
         return arm
 
+    def cond_dynamic(self, cond):
+        """ Sets the host's flags from the lazy-flags state in env at
+        CC_OP_DYNAMIC, where the translator does not know it, and returns
+        the AArch64 condition under which x86 condition cond holds. A SUB or
+        LOGIC state is read as in cond(), shifted by 64 less the width its
+        MemOp gives, and CC_OP_EFLAGS is tested as in cond() too; for any
+        other state, and for P and NP from a SUB or LOGIC state,
+        helper_cc_compute_all() works out the EFLAGS, as in TCG's
+        gen_compute_eflags(). Each way leaves the condition, not inverted,
+        as 1 or 0 in T. """
+        env, jcc_op, inv = self.env, cond >> 1, cond & 1
+        other, join = self._labels()
+        not_logic, have = self._labels()
+        # cc_op, in ADDR, which no memory operand needs here.
+        op = w(ADDR)
+        # T = cc_op less the class's first CC_OP: its MemOp k if at most 3,
+        # else another class. Then T = 64 less the width, 8 << k, as
+        # -8 << k, which LSL takes modulo 64.
+        in_class = f"cmp {w(T)}, #3"
+        to_shift = [f"mov {R}, #-8", f"lsl {T}, {R}, {T}"]
+        self.emit(f"ldr {op}, [{env}, %[cc_op]]",
+                  f"ldp {A}, {B}, [{env}, %[cc_dst]]")
+        if jcc_op == 5:
+            self.emit(f"b {other}f")
+        else:
+            # SUB: cc_dst + cc_src is cc_srcT, the first operand.
+            self.emit(f"sub {w(T)}, {op}, %[cc_op_subb]",
+                      in_class, f"b.hi {other}f", *to_shift,
+                      f"add {A}, {A}, {B}",
+                      f"lsl {A}, {A}, {T}",
+                      f"lsl {B}, {B}, {T}",
+                      f"cmp {A}, {B}",
+                      f"cset {T}, {SUB_ARMS[jcc_op]}")
+        self.emit(f"{join}:",
+                  f"cmp {T}, #0")
+        self.cold.append(f"{other}:")
+        if jcc_op != 5:
+            self.cold += [f"sub {w(T)}, {op}, %[cc_op_logicb]",
+                          in_class, f"b.hi {not_logic}f"]
+            if jcc_op in LOGIC_ARMS:
+                self.cold += [*to_shift,
+                              f"lsl {A}, {A}, {T}",
+                              f"tst {A}, {A}",
+                              f"cset {T}, {LOGIC_ARMS[jcc_op]}"]
+            else:
+                self.cold.append(f"mov {T}, #0")
+            self.cold += [f"b {join}b", f"{not_logic}:"]
+        # No register of the gadget's lives across the call: A, B, op and R
+        # are dead, and T is written after it.
+        save, restore = self._save(())
+        self.cold += [f"cmp {op}, %[cc_op_eflags]",
+                      f"b.eq {have}f",
+                      *save,
+                      f"mov w3, {op}",
+                      f"mov x0, {A}",
+                      f"mov x1, {B}",
+                      f"ldr x2, [{env}, %[cc_src2]]",
+                      "bl _helper_cc_compute_all",
+                      *restore,
+                      f"mov {B}, x0",
+                      f"{have}:",
+                      *eflags_tests(B, jcc_op),
+                      f"cset {T}, ne",
+                      f"b {join}b"]
+        return "eq" if inv else "ne"
+
     def branch(self, arm):
         """ The harness's branch to the gadget's target if arm holds. """
         self.emit(*self.h.branch(arm, self._labels()))
@@ -1549,6 +1628,23 @@ class Body:
             self.emit(f"str {dst}, [{env}, %[cc_dst]]")
         elif src:
             self.emit(f"str {src}, [{env}, %[cc_src]]")
+
+
+def eflags_tests(reg, jcc_op):
+    """ The lines that set the host's flags from the EFLAGS in reg so that
+    "ne" holds where x86 condition jcc_op does: the opcode's low four bits
+    shifted right by one, so not inverted. They use T. """
+    masks = {0: "CC_O", 1: "CC_C", 2: "CC_Z", 3: "CC_Z | CC_C",
+             4: "CC_S", 5: "CC_P"}
+    if jcc_op == 3:
+        # Not a logical immediate.
+        return [f"mov {T}, %[eflags_3]", f"tst {reg}, {T}"]
+    if jcc_op in masks:
+        return [f"tst {reg}, %[eflags_{jcc_op}]"]
+    # SF != OF, or with ZF: OF is 4 bits above SF, ZF one below.
+    return [f"eor {T}, {reg}, {reg}, lsr #4",
+            *([f"orr {T}, {T}, {reg}, lsl #1"] if jcc_op == 7 else []),
+            f"tst {T}, %[cc_s]"]
 
 
 def body(spec, harness):
@@ -2476,19 +2572,27 @@ def leave_body(g, spec):
            f"str {B}, [{env}, %[rsp]]")
 
 
+def jcc_cond(g, spec):
+    """ Sets the host's flags for a jcc or jccgoto gadget and returns the
+    AArch64 condition to branch on. The gadget first stores CC_OP, as
+    gen_jcc() does when cc_op is dirty, so that the translator need not;
+    at CC_OP_DYNAMIC, env already holds it. """
+    if spec.in_env:
+        return g.cond_dynamic(spec.cond)
+    g.emit(f"str {w(g.word('ccop'))}, [{g.env}, %[cc_op]]")
+    return g.cond(spec.cls, spec.cc_width, spec.cond)
+
+
 def jcc_body(g, spec):
     # gen_Jcc's condition and branch; the translator must emit the jumps on
-    # either side. The gadget always stores CC_OP first, as gen_jcc() does
-    # when cc_op is dirty, so that the translator need not.
-    g.emit(f"str {w(g.word('ccop'))}, [{g.env}, %[cc_op]]")
-    g.branch(g.cond(spec.cls, spec.cc_width, spec.cond))
+    # either side.
+    g.branch(jcc_cond(g, spec))
 
 
 def jccgoto_body(g, spec):
     # jcc_body's work, then the jump to the next TB that each way starts
     # with, in the same dispatch.
-    g.emit(f"str {w(g.word('ccop'))}, [{g.env}, %[cc_op]]")
-    g.jumps(g.cond(spec.cls, spec.cc_width, spec.cond))
+    g.jumps(jcc_cond(g, spec))
 
 
 def fused_body(g, spec):
@@ -2580,6 +2684,8 @@ BODY_OPERANDS = {
     "cc_op": "offsetof(CPUX86State, cc_op)",
     "cc_op_shlb": "CC_OP_SHLB",
     "cc_op_sarb": "CC_OP_SARB",
+    "cc_op_subb": "CC_OP_SUBB",
+    "cc_op_logicb": "CC_OP_LOGICB",
     "cc_op_dynamic": "CC_OP_DYNAMIC",
     "cc_op_eflags": "CC_OP_EFLAGS",
     "cc_s": "CC_S",
@@ -2600,11 +2706,14 @@ BODY_OPERANDS = {
 # operands say, for code that builds the gadgets to check with
 # QEMU_BUILD_BUG_ON.
 BODY_ASSUMPTIONS = (
-    # write_cc() and cond() access both with one STP or LDP.
+    # write_cc(), cond() and cond_dynamic() access both with one STP or LDP.
     "offsetof(CPUX86State, cc_src) != offsetof(CPUX86State, cc_dst) + 8",
-    # cond() tests L and LE on EFLAGS by shifting OF onto SF and SF onto ZF.
+    # eflags_tests() tests L and LE by shifting OF and ZF onto SF.
     "CC_O != CC_S << 4",
     "CC_S != CC_Z << 1",
+    # cond_dynamic() takes a SUB or LOGIC state's MemOp from its CC_OP.
+    "CC_OP_SUBQ != CC_OP_SUBB + MO_64",
+    "CC_OP_LOGICQ != CC_OP_LOGICB + MO_64",
     # vfp_body() adds xmm_t0's offset as an ADD immediate.
     "offsetof(CPUX86State, xmm_t0) > 4095",
     # vcomi_body() builds cc_src from CF in bit 0 and ZF in bit 6.
@@ -2868,16 +2977,17 @@ def write_cond_table(conds, out):
     (RCG_CC_*), their condition (the opcode's low four bits), and for CMOVcc
     the width as a MemOp. """
     p = lambda *a: print(*a, file=out)
-    p("\n/* The lazy-flags states condition gadgets read: rcg-gen.py's "
-      "CC_CLASSES. */")
+    p("\n/*\n * The lazy-flags states condition gadgets read: rcg-gen.py's"
+      "\n * CC_CLASSES, then DYNAMIC.\n */")
     p("enum {")
-    for cls, width in CC_CLASSES:
+    classes = (*CC_CLASSES, DYNAMIC)
+    for cls, width in classes:
         p(f"    RCG_CC_{cc_name(cls, width).upper()},")
     p("    RCG_NB_CC,\n};\n")
     for spec in conds:
         p(f"void rcg_gadget_{spec.name}(void);")
     p("")
-    index = {c: i for i, c in enumerate(CC_CLASSES)}
+    index = {c: i for i, c in enumerate(classes)}
 
     def entry(spec):
         return f"rcg_gadget_{spec.name}"
@@ -3755,9 +3865,31 @@ def cond_cases():
         for setter in ("cmp rax, rbx", "test rax, rax"):
             yield Case(f"{setup}; {setter}; je 1f; mov ecx, 1; 1:", 64, a=0,
                        b=3)
+    # Jcc at CC_OP_DYNAMIC, after each flag_setters() class (one setter
+    # each: only the class and width matter), SAHF, BT, IMUL, RCR
+    # (CC_OP_ADCOX, with OF in cc_src2), and ADC and SBB, whose CC_OPs
+    # border SUB's and LOGIC's: at the start of a TB, after a JMP, and in
+    # the same TB after a shift by CL, whose state only the gadget knows.
+    # With CL 0, the shift keeps the earlier state.
+    for width in WIDTHS:
+        for setters in flag_setters(width).values():
+            for cond in range(16):
+                yield Case(f"{setters[0]}; jmp 2f; 2:; j{CONDS[cond]} 1f; "
+                           f"mov ecx, 1; 1:", width, a=0, b=3)
+    for setter in (*(f"mov ah, {pattern:#x}; sahf; jmp 2f; 2:;"
+                     for pattern in SAHF_PATTERNS),
+                   "bt ebx, 3; jmp 2f; 2:;", "imul rax, rbx; jmp 2f; 2:;",
+                   "rcr rax, 1; jmp 2f; 2:;", "stc; adc rax, rbx; jmp 2f; 2:;",
+                   "stc; sbb al, bl; jmp 2f; 2:;",
+                   "stc; sbb rax, rbx; jmp 2f; 2:;", "shl eax, cl;",
+                   "cmp rax, rbx; mov ecx, 0; shl edx, cl;",
+                   "rcr rax, 1; mov ecx, 0; shl edx, cl;"):
+        for cond in range(16):
+            yield Case(f"{setter} j{CONDS[cond]} 1f; mov ecx, 1; 1:", 64,
+                       a=0, b=3)
     # Jcc alone, reading the start's state: after POPF it is from before the
-    # TB, which is TCG's; after the start's CMP it is in the same TB.
-    for cond in (2, 12):
+    # TB, in env; after the start's CMP it is in the same TB.
+    for cond in range(16):
         yield Case(f"j{CONDS[cond]} 1f; mov ecx, 1; 1:", 64)
 
 

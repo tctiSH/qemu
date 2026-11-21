@@ -366,7 +366,10 @@ static uint64_t rcg_reg_op(DisasContext *s, X86DecodedOp *op, TCGv *v)
     return rcg_reg(op->n);
 }
 
-/* The RCG_CC_* index of lazy-flags state cc_op, or -1 if no gadget reads it. */
+/*
+ * The RCG_CC_* index of lazy-flags state cc_op, or -1 if no gadget reads it.
+ * Only Jcc's gadgets read CC_OP_DYNAMIC, whose state is in env.
+ */
 static int rcg_cc_index(CCOp cc_op)
 {
     if (cc_op >= CC_OP_SUBB && cc_op <= CC_OP_SUBQ) {
@@ -385,6 +388,8 @@ static int rcg_cc_index(CCOp cc_op)
         return RCG_CC_EFLAGS;
     } else if (cc_op == CC_OP_ADCX) {
         return RCG_CC_ADCX;
+    } else if (cc_op == CC_OP_DYNAMIC) {
+        return RCG_CC_DYNAMIC;
     }
     return -1;
 }
@@ -429,7 +434,8 @@ static TCGOp *rcg_fused_setter_op(DisasContext *s, int *setter)
 
 /*
  * Jcc, SETcc and CMOVcc, when an earlier instruction in this TB left a
- * lazy-flags state the gadgets read. Returns the gadget emitted, or NULL.
+ * lazy-flags state the gadgets read, or, for Jcc, when the translator does
+ * not know the state (CC_OP_DYNAMIC). Returns the gadget emitted, or NULL.
  */
 static const void *rcg_translate_cond(DisasContext *s,
                                       X86DecodedInsn *decode)
@@ -455,16 +461,27 @@ static const void *rcg_translate_cond(DisasContext *s,
             return NULL;
         }
         /*
-         * As gen_Jcc, but the gadget always stores CC_OP, even where it is
-         * already clean (after COMISS, FCOMI or PUSHF, for example). Right
-         * after a setter in rcg_fused_setter, one gadget does both,
-         * branching on the values it compared rather than reloading cc_dst
-         * and cc_src.
+         * As gen_Jcc, but the gadget stores CC_OP even where it is already
+         * clean (after COMISS, FCOMI or PUSHF, for example). Right after a
+         * setter in rcg_fused_setter, one gadget does both, branching on
+         * the values it compared rather than reloading cc_dst and cc_src.
+         * After CC_OP_DYNAMIC, the gadget stores nothing: it reads the
+         * state from env, cc_op and cc_src2 included, and leaves it there.
          */
         taken = gen_new_label();
         gen_bnd_jmp(s);
-        setter_op = rcg_fused_setter_op(s, &setter);
-        if (setter_op) {
+        /* A fused setter leaves a SUB or LOGIC state, never DYNAMIC. */
+        setter_op = cc == RCG_CC_DYNAMIC ? NULL
+                                         : rcg_fused_setter_op(s, &setter);
+        if (cc == RCG_CC_DYNAMIC) {
+            TCGTemp *ins[4] = {
+                flags_in[0], flags_in[1], tcgv_tl_temp(cpu_cc_src2),
+                tcgv_i32_temp(cpu_cc_op)
+            };
+
+            tcg_gen_rich_br(gadget, &word, 0, taken, rcg_jccgoto[cc][cond],
+                            NULL, 0, ins, 4);
+        } else if (setter_op) {
             gadget = rcg_fjcc[setter][cond];
             tcg_gen_rich_br_join(setter_op, gadget, &word, 1, taken,
                                  rcg_fjccgoto[setter][cond], &out, 1,
