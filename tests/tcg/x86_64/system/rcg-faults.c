@@ -19,11 +19,13 @@
  * boundary, where it must not fault. A floating-point case's operand is
  * the same wherever it is, and each run must end with the same XMM
  * registers and MXCSR as a run wholly on the lower page. Every run starts
- * from the flags POPF loads, again from the state a CMP leaves, and again
- * from the state an ADC leaves, which also uses cc_src2. From the last two,
- * a write to the lazy-flags state before the fault would show in the flags
- * at the fault. A floating-point case also runs from the flags POPF loads
- * with the default MXCSR, from which the gadgets call the helper.
+ * from the flags POPF loads, again from the state a CMP leaves, again from
+ * the state an ADC leaves, which also uses cc_src2, and again from the
+ * state an STC leaves, with the flags in cc_src. From the last three, a
+ * write before the fault to the lazy-flags values they leave live would
+ * show in the flags at the fault. A floating-point case also runs from the
+ * flags POPF loads with the default MXCSR, from which the gadgets call the
+ * helper.
  */
 
 #include "rcg-test.h"
@@ -60,19 +62,22 @@ _Static_assert(REGION >= RCG_MEM + 0x200000,
  * The starts: the flags from POPF, then a CMP of 0 with 1 (a borrow), then
  * an ADC of 1 to 0xf with CF set. That ADC sets AF, which TCG works out
  * from cc_src2, the carry in: had cc_src2 been written before the fault,
- * AF at the fault would be clear. These three set PE in MXCSR, which lets
- * the floating-point gadgets take the host path where the values allow. A
- * fourth, only for the cases with floating-point values, repeats the first
- * with the default MXCSR, from which the gadgets call their helper after
- * the load.
+ * AF at the fault would be clear. Then an STC, which leaves CC_OP_EFLAGS
+ * and, as CF is already set, the flags POPF loaded. These four set PE in
+ * MXCSR, which lets the floating-point gadgets take the host path where
+ * the values allow. A fifth, only for the cases with floating-point
+ * values, repeats the first with the default MXCSR, from which the gadgets
+ * call their helper after the load.
  */
 static const struct rcg_start starts[] = {
     { FLAGS_IN, false, 0, false, 0x1fa0 },
     { FLAGS_IN, true, 0, false, 0x1fa0 },
     { FLAGS_IN, false, 0xf, true, 0x1fa0 },
+    { FLAGS_IN, false, 0, false, 0x1fa0, false, true },
     { FLAGS_IN, false, 0, false, 0x1f80, true },
 };
 #define NB_STARTS (sizeof(starts) / sizeof(starts[0]))
+_Static_assert(FLAGS_IN & 0x1, "STC would change the flags POPF loads");
 
 /* How many bytes on each side of the boundary each run fills and compares. */
 #define WINDOW 32
@@ -281,7 +286,8 @@ static void check(bool ok, const struct rcg_case *c, const struct rcg_start *s,
         ml_printf("FAIL: %s%s%s%s, %d bytes below the boundary, upper page "
                   "%s: %s\n", c->name,
                   c->xmm >= RCG_XMM_F64N ? " on normal values" : "",
-                  s->adc ? " after an ADC" : s->sub ? " after a CMP" : "",
+                  s->stc ? " after an STC" : s->adc ? " after an ADC" :
+                  s->sub ? " after a CMP" : "",
                   s->fp ? " with the default MXCSR" : "",
                   below,
                   how == MAPPED ? "mapped" :

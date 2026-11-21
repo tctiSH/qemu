@@ -548,10 +548,13 @@ class BitTest:
 
     ZF is kept and the other flags are undefined, so the flags state TCG
     leaves depends on the one before (see gen_bt_flags()). After
-    CC_OP_DYNAMIC or a state with EFLAGS in cc_src, TCG computes the flags
-    in full, and the instruction is left to TCG. After any other state,
-    the gadget writes cc_src as dest shifted right by n and keeps cc_dst,
-    and the translator records CC_OP_SARB plus the earlier state's MemOp.
+    CC_OP_DYNAMIC, TCG computes the flags in full, and the instruction is
+    left to TCG, as a gadget there timed slower. After any other state,
+    the gadget writes cc_src as dest shifted right by n and keeps cc_dst.
+    The translator then records CC_OP_SARB plus the earlier state's MemOp.
+    After a state with EFLAGS in cc_src, it instead moves CF to cc_dst and
+    puts those EFLAGS back, leaving CC_OP_ADCOX after CC_OP_ADOX or
+    CC_OP_ADCOX, and CC_OP_ADCX otherwise, as gen_bt_flags() does.
     """
 
     def __init__(self, name, a64):
@@ -579,10 +582,13 @@ XCHG_WIDTHS = WIDTHS
 
 
 # The lazy-flags states a condition can be read from without a helper, as
-# TCG's CC_OP_<class>B + the width's MemOp, or CC_OP_EFLAGS alone.
+# TCG's CC_OP_<class>B + the width's MemOp, or CC_OP_EFLAGS and CC_OP_ADCX,
+# which have no width.
 CC_CLASSES = ([(cls, width)
                for cls in ("sub", "add", "logic", "inc", "dec", "sar")
-               for width in WIDTHS] + [("eflags", None)])
+               for width in WIDTHS] + [("eflags", None), ("adcx", None)])
+# The classes that hold PF, the only ones P and NP are read from.
+PF_CLASSES = ("eflags", "adcx")
 
 # x86 conditions by the low four bits of Jcc's, SETcc's and CMOVcc's opcode.
 CONDS = ("o", "no", "b", "ae", "e", "ne", "be", "a",
@@ -637,10 +643,10 @@ class CondSpec:
 
 
 def cond_specs():
-    """ Every condition gadget there is: P and NP only from CC_OP_EFLAGS. """
+    """ Every condition gadget there is: P and NP only from PF_CLASSES. """
     for cls, width in CC_CLASSES:
         for cond in range(16):
-            if cond >> 1 == 5 and cls != "eflags":
+            if cond >> 1 == 5 and cls not in PF_CLASSES:
                 continue
             yield CondSpec("jcc", cls, width, cond)
             yield CondSpec("jccgoto", cls, width, cond)
@@ -714,7 +720,7 @@ def fused_setters():
 
 def fused_specs():
     """ Every fused gadget: all conditions but P and NP, which are read only
-    from CC_OP_EFLAGS, a state no setter here leaves. """
+    from PF_CLASSES, which no setter here leaves. """
     for setter in fused_setters():
         for cond in range(16):
             if cond >> 1 != 5:
@@ -1385,23 +1391,35 @@ class Body:
                 self.emit(f"lsl {reg}, {reg}, #{shift}")
 
         never = None
-        if cls == "eflags":
-            # The flags themselves, in cc_src.
-            self.emit(f"ldr {A}, [{env}, %[cc_src]]")
-            masks = {0: "CC_O", 1: "CC_C", 2: "CC_Z", 3: "CC_Z | CC_C",
-                     4: "CC_S", 5: "CC_P"}
-            if jcc_op == 3:
-                # Not a logical immediate.
-                self.emit(f"mov {T}, %[eflags_3]",
-                          f"tst {A}, {T}")
-            elif jcc_op in masks:
-                self.emit(f"tst {A}, %[eflags_{jcc_op}]")
+        if cls in PF_CLASSES:
+            if cls == "adcx" and jcc_op in (1, 3):
+                # As below, except that CF is cc_dst, 0 or 1.
+                if jcc_op == 1:
+                    self.emit(f"ldr {A}, [{env}, %[cc_dst]]")
+                else:
+                    # CF or ZF.
+                    self.emit(f"ldp {A}, {B}, [{env}, %[cc_dst]]",
+                              f"and {T}, {B}, %[eflags_2]",
+                              f"orr {A}, {A}, {T}")
+                self.emit(f"cmp {A}, #0")
             else:
-                # SF != OF, or with ZF: OF is 4 bits above SF, ZF one below.
-                self.emit(f"eor {T}, {A}, {A}, lsr #4")
-                if jcc_op == 7:
-                    self.emit(f"orr {T}, {T}, {A}, lsl #1")
-                self.emit(f"tst {T}, %[cc_s]")
+                # The flags themselves, in cc_src.
+                self.emit(f"ldr {A}, [{env}, %[cc_src]]")
+                masks = {0: "CC_O", 1: "CC_C", 2: "CC_Z", 3: "CC_Z | CC_C",
+                         4: "CC_S", 5: "CC_P"}
+                if jcc_op == 3:
+                    # Not a logical immediate.
+                    self.emit(f"mov {T}, %[eflags_3]",
+                              f"tst {A}, {T}")
+                elif jcc_op in masks:
+                    self.emit(f"tst {A}, %[eflags_{jcc_op}]")
+                else:
+                    # SF != OF, or with ZF: OF is 4 bits above SF, ZF one
+                    # below.
+                    self.emit(f"eor {T}, {A}, {A}, lsr #4")
+                    if jcc_op == 7:
+                        self.emit(f"orr {T}, {T}, {A}, lsl #1")
+                    self.emit(f"tst {T}, %[cc_s]")
             arm = "ne"
         elif cls == "logic" and jcc_op in (0, 1):
             # OF and CF are 0.
@@ -1441,7 +1459,7 @@ class Body:
                 arm = "mi"
             else:
                 # SF ^ OF, or ZF: 1 if Z, else cc_src's top bit. P is read
-                # from CC_OP_EFLAGS only (see cond_specs()).
+                # from PF_CLASSES only (see cond_specs()).
                 assert jcc_op == 7
                 top(A)
                 top(B)
@@ -2391,9 +2409,9 @@ def imul3_body(g, spec):
 
 
 def bt_body(g, spec):
-    # gen_BT, gen_BTS, gen_BTR and gen_BTC, after any state except those
-    # BitTest excludes, leaving CC_OP_SARB plus that state's MemOp: the
-    # operand is written back first, as it may fault, then cc_src.
+    # gen_BT, gen_BTS, gen_BTR and gen_BTC: the operand is written back
+    # first, as it may fault, then cc_src, from which the translator makes
+    # the flags state (see BitTest).
     op, width = spec.op, spec.width
     if spec.has_mem:
         g.ea(ADDR)
@@ -2996,13 +3014,14 @@ def write_table(all_specs, out):
     p(" * Its lazy flags. cc_op: the CC_OP it leaves, plus the width's MemOp")
     p(" * if by_width; -1 if none, and for ROR, whose CF and OF the")
     p(" * translator computes. After a shift by CL, which writes cc_op, the")
-    p(" * translator records CC_OP_DYNAMIC instead, and after BT, which keeps")
-    p(" * cc_dst, it adds the earlier state's MemOp. srcT: what the")
-    p(" * translator puts in cc_srcT after it, as gen_SUB and gen_NEG do. dst,")
-    p(" * src: whether it writes cc_dst and cc_src. cf: where the translator")
-    p(" * puts CF from before it. env_cc_op: the gadget writes cc_op to env")
-    p(" * on either path (UCOMIS and COMIS, whose helpers write it too), so")
-    p(" * the translator assumes it rather than setting it.")
+    p(" * translator records CC_OP_DYNAMIC instead, and after BT it adds the")
+    p(" * earlier state's MemOp, as BT keeps cc_dst, unless that state had")
+    p(" * EFLAGS in cc_src (see rcg_emit()). srcT: what the translator puts")
+    p(" * in cc_srcT after it, as gen_SUB and gen_NEG do. dst, src: whether")
+    p(" * it writes cc_dst and cc_src. cf: where the translator puts CF from")
+    p(" * before it. env_cc_op: the gadget writes cc_op to env on either path")
+    p(" * (UCOMIS and COMIS, whose helpers write it too), so the translator")
+    p(" * assumes it rather than setting it.")
     p(" */")
     p("typedef struct RCGFacts {")
     p("    RCGKind kind;")
@@ -3072,7 +3091,9 @@ def write_table(all_specs, out):
         elif spec.kind in ("mul", "imul3"):
             flags = ["CC_OP_MULB", True, "RCG_SRCT_NONE"]
         elif spec.kind == "bt":
-            # Plus the earlier state's MemOp, which the translator adds.
+            # Plus the earlier state's MemOp, which the translator adds;
+            # after a state with EFLAGS in cc_src it records CC_OP_ADCX or
+            # CC_OP_ADCOX instead (see rcg_emit()).
             flags = ["CC_OP_SARB", False, "RCG_SRCT_NONE"]
         elif spec.env_cc_op:
             flags = [spec.env_cc_op, False, "RCG_SRCT_NONE"]
@@ -3631,7 +3652,7 @@ def shift_cl_cases(op, width):
 
 def flag_setters(width):
     """ Instructions that leave each lazy-flags state the condition gadgets
-    read but CC_OP_EFLAGS, on RAX and RBX at width. """
+    read but PF_CLASSES, on RAX and RBX at width. """
     ra, rb = reg_name(0, width), reg_name(3, width)
     return {
         "sub": [f"cmp {ra}, {rb}", f"sub {ra}, {rb}", f"neg {ra}"],
@@ -3671,6 +3692,24 @@ def cond_cases():
         for cond in range(16):
             for use in consumers(cond, 64):
                 yield Case(f"mov ah, {pattern:#x}; sahf; {use}", 64)
+    # CC_OP_ADCX, from BT after SAHF's CC_OP_EFLAGS, or from TCG's BT at
+    # the start of the TB, after POPF. BT tests bits 0 and 2 of AH, so that
+    # CF takes both values, with ZF set and clear.
+    for pattern in (0x04, 0x41, 0xd5):
+        for bit in (8, 10):
+            for cond in range(16):
+                for use in consumers(cond, 64):
+                    yield Case(f"mov ah, {pattern:#x}; sahf; bt eax, {bit}; "
+                               f"{use}", 64)
+    for cond in range(16):
+        for use in consumers(cond, 64):
+            yield Case(f"bt ebx, 3; {use}", 64, a=0, b=3)
+    # And from ADCX itself, TCG's: with CF clear and then set before it,
+    # where it carries nothing out, and from -1, where it carries out.
+    for setter in ("clc", "stc", "or eax, -1; clc"):
+        for cond in range(16):
+            for use in consumers(cond, 64):
+                yield Case(f"{setter}; adcx eax, ebx; {use}", 64, a=0, b=3)
     # CMP and TEST with an immediate, and of a register with itself, which
     # a Jcc right after them joins (fused_specs()); flag_setters() has them
     # with two registers.
@@ -4072,9 +4111,9 @@ BT_BITS = (0, 1, 7, 8, 15, 16, 31, 32, 63, 64, 255)
 
 def bt_cases(op, width):
     """ BT, BTS, BTR or BTC by a register and by an immediate, on registers
-    and memory, after each lazy-flags state, and then the flags it leaves
-    as a condition reads them. After CC_OP_EFLAGS (SAHF's) and with a
-    register bit number on memory, they are TCG's. """
+    and memory, after each lazy-flags state, and then the flags it leaves,
+    read by a condition. After CC_OP_DYNAMIC and with a register bit
+    number on memory, they are TCG's. """
     name = op.name
     for ra, a, rb, b in reg_pairs(width):
         yield Case(f"{name} {ra}, {rb}", width, a=a, b=b if b != a else -1)
@@ -4108,13 +4147,30 @@ def bt_cases(op, width):
     ra, rb = reg_name(0, width), reg_name(3, width)
     for setters in flag_setters(width).values():
         yield Case(f"{setters[0]}; {name} {rb}, {ra}", width, a=0, b=3)
-    yield Case(f"mov ah, 0xd5; sahf; {name} {rb}, {ra}", width, a=0, b=3)
     # After states the condition gadgets do not read. SBB of a register from
     # itself leaves a state at TCG's word width, whatever the operand's.
     for setter in (f"imul {ra}, {rb}", f"shl {ra}, 3", f"stc; adc {ra}, {rb}",
                    f"stc; sbb {ra}, {rb}", f"stc; sbb {ra}, {ra}"):
         yield Case(f"{setter}; {name} {rb}, {ra}; jle 1f; mov ecx, 1; 1:",
                    width, a=0, b=3)
+    # After CC_OP_DYNAMIC (which the translator records after a shift by
+    # CL), where BT is TCG's, and after CC_OP_ADCX (BT's at the start of
+    # the TB, after POPF), CC_OP_ADOX (ADOX's, with OF clear and then set),
+    # CC_OP_ADCOX (ROL's by CL, TCG's) and CC_OP_EFLAGS (SAHF's), whose
+    # EFLAGS BT keeps.
+    for setter in (f"shl {ra}, cl", f"bt {rb}, 7",
+                   "xor eax, eax; adox rax, rbx", "or rax, -1; adox rax, rax",
+                   f"rol {ra}, cl", "mov ah, 0xd5; sahf"):
+        for cond in (0, 2, 4, 6, 12):
+            yield Case(f"{setter}; {name} {rb}, {ra}; j{CONDS[cond]} 1f; "
+                       f"mov ecx, 1; 1:", width, a=0, b=3)
+    # By an immediate, and on memory, after CC_OP_EFLAGS.
+    yield Case(f"mov ah, 0xd5; sahf; {name} {rb}, 5; jb 1f; mov ecx, 1; 1:",
+               width, b=3)
+    text, base, _, bv, _ = memory_operand(width, "b", None)
+    yield Case(f"mov ah, 0xd5; sahf; {name} {text}, 5; jb 1f; "
+               f"mov ecx, 1; 1:", width, mem=True, base=base, base_value=bv,
+               writes=op.writes)
     # After a state of another width, whose width the SAR state takes, with
     # bits above it in cc_dst and cc_src.
     for cond in range(16):
@@ -4941,28 +4997,32 @@ def high_byte_cases():
         yield Case(f"cmp eax, ebx; set{CONDS[cond]} ah", 32, a=0, b=3)
 
 
-def write_cases(cases, out, prefix, adc=False):
+def write_cases(cases, out, prefix, faults=False):
     """ The cases as rcg-test.h's RCG_CASE() macros, one per case, which
     make the functions that run the instruction, then a table of the
-    cases. adc adds RCG_ADC_CASE()'s function, which runs the instruction
-    after an ADC. """
+    cases. faults adds the functions of RCG_ADC_CASE() and RCG_STC_CASE(),
+    which rcg-faults runs: the instruction after an ADC and after an STC.
+    """
     cases = list(cases)
     print("/* Automatically generated by rcg-gen.py. Do not edit. */\n",
           file=out)
     for i, c in enumerate(cases):
         print(f'RCG_CASE({prefix}{i}, "{c.insn}", {int(c.xmm)})', file=out)
-        if adc:
+        if faults:
             print(f'RCG_ADC_CASE({prefix}{i}, "{c.insn}", {int(c.xmm)})',
+                  file=out)
+            print(f'RCG_STC_CASE({prefix}{i}, "{c.insn}", {int(c.xmm)})',
                   file=out)
     print(f"\nstatic const struct rcg_case {prefix}cases[] = {{", file=out)
     for i, c in enumerate(cases):
         name = f"{prefix}{i}"
-        if adc:
-            fn_adc = f"{name}_adc, {name}_adc_insn, {name}_adc_end"
+        if faults:
+            fn_more = (f"{name}_adc, {name}_adc_insn, {name}_adc_end, "
+                      f"{name}_stc, {name}_stc_insn, {name}_stc_end")
         else:
-            fn_adc = "NULL, NULL, NULL"
+            fn_more = "NULL, NULL, NULL, NULL, NULL, NULL"
         print(f'    {{ "{c.insn}", {name}, {name}_insn, {name}_end, '
-              f'{name}_sub, {name}_sub_insn, {name}_sub_end, {fn_adc}, '
+              f'{name}_sub, {name}_sub_insn, {name}_sub_end, {fn_more}, '
               f'{c.width}, {c.a}, {c.b}, {int(c.mem)}, {c.base}, '
               f'{c.index}, {c.base_value:#x}, {c.index_value}, '
               f'{int(c.stack)}, {int(c.writes)}, {c.operand:#x}, {c.rsp:#x}, '
@@ -5087,10 +5147,10 @@ def main():
             write_cases(jcc_cases(), out, "rcg_insn_")
     if args.fault_tests:
         with open(args.fault_tests, "w") as out:
-            write_cases(fault_cases(), out, "rcg_fault_", adc=True)
+            write_cases(fault_cases(), out, "rcg_fault_", faults=True)
     if args.jcc_fault_tests:
         with open(args.jcc_fault_tests, "w") as out:
-            write_cases(jcc_fault_cases(), out, "rcg_fault_", adc=True)
+            write_cases(jcc_fault_cases(), out, "rcg_fault_", faults=True)
     if args.coverage:
         order, nm, *traces = args.coverage
         if not check_coverage(order, nm, traces):

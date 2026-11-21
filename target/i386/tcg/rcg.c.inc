@@ -383,6 +383,8 @@ static int rcg_cc_index(CCOp cc_op)
         return RCG_CC_SAR8 + (cc_op - CC_OP_SARB);
     } else if (cc_op == CC_OP_EFLAGS) {
         return RCG_CC_EFLAGS;
+    } else if (cc_op == CC_OP_ADCX) {
+        return RCG_CC_ADCX;
     }
     return -1;
 }
@@ -798,14 +800,13 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
         char a = rcg_kind(s, first), b = rcg_kind(s, second);
 
         /*
-         * After CC_OP_DYNAMIC or a state with EFLAGS in cc_src, TCG
-         * computes the flags in full; see gen_bt_flags(). With the bit
+         * After CC_OP_DYNAMIC, TCG computes the flags in full (see
+         * gen_bt_flags()), and a gadget there timed slower. With the bit
          * number in a register, a memory operand is a bit string that can
          * reach beyond the operand, so that is left to TCG too.
          */
         *ot = first->ot;
-        if (s->cc_op == CC_OP_DYNAMIC || CC_OP_HAS_EFLAGS(s->cc_op) ||
-            !a || !b || (a == 'm' && b == 'r')) {
+        if (s->cc_op == CC_OP_DYNAMIC || !a || !b || (a == 'm' && b == 'r')) {
             return -1;
         }
         if (b == 'i') {
@@ -1120,7 +1121,7 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     const RCGGadget *g;
     uint64_t words[RCG_MAX_WORDS + RCG_TABLE_WORDS];
     TCGTemp *outs[RCG_MAX_WORDS], *ins[RCG_MAX_WORDS];
-    TCGv cf = NULL;
+    TCGv cf = NULL, kept_eflags = NULL;
     unsigned n, nb_outs = 0, nb_ins = 0;
     TCGv reg;
 
@@ -1382,6 +1383,15 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
         tcg_gen_mov_tl(cpu_cc_src2, cf);
         rcg_note(ins, &nb_ins, cpu_cc_src2);
     }
+    /*
+     * After a state with EFLAGS in cc_src, BT keeps those EFLAGS and puts
+     * CF in cc_dst, as gen_bt_flags() does. They are saved here, as the
+     * gadget overwrites cc_src, and CF is bit 0 of what it wrote.
+     */
+    if (facts->kind == RCG_KIND_BT && CC_OP_HAS_EFLAGS(s->cc_op)) {
+        kept_eflags = tcg_temp_new();
+        tcg_gen_mov_tl(kept_eflags, cpu_cc_src);
+    }
     if (slot->access) {
         n = rcg_pack_words(g, words, n);
     }
@@ -1393,6 +1403,10 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
                  outs, nb_outs, ins, nb_ins);
     if (facts->cf == RCG_CF_SRC) {
         tcg_gen_mov_tl(cpu_cc_src, cf);
+    }
+    if (kept_eflags) {
+        tcg_gen_andi_tl(cpu_cc_dst, cpu_cc_src, 1);
+        tcg_gen_mov_tl(cpu_cc_src, kept_eflags);
     }
 
     if (op == RCG_OP_ROR) {
@@ -1422,8 +1436,14 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     if (by_cl) {
         assume_cc_op(s, CC_OP_DYNAMIC);
     } else if (facts->kind == RCG_KIND_BT) {
-        /* cc_dst is kept, so the width is the earlier state's. */
-        set_cc_op(s, CC_OP_SARB + cc_op_size(s->cc_op));
+        if (kept_eflags) {
+            /* As prepare_update_cf() chooses: ADCOX when cc_src2 holds OF. */
+            set_cc_op(s, s->cc_op == CC_OP_ADOX || s->cc_op == CC_OP_ADCOX
+                         ? CC_OP_ADCOX : CC_OP_ADCX);
+        } else {
+            /* cc_dst is kept, so the width is the earlier state's. */
+            set_cc_op(s, facts->cc_op + cc_op_size(s->cc_op));
+        }
     } else if (facts->cc_op >= 0) {
         CCOp cc_op = facts->cc_op + (facts->by_width ? ot : 0);
 
