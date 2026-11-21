@@ -343,8 +343,8 @@ class VMovd:
 
 VMOVD_OPS = (VMovd(), VMovd(vex=True))
 
-# The kinds of the SSE ops, which have VEX.128 encodings (op.vex) whose
-# gadgets may read VEX.vvvv's register (op.reads_v()). The BMI shifts, which
+# The kinds of the SSE ops, which have VEX encodings (op.vex) whose gadgets
+# may read VEX.vvvv's register (op.reads_v()). The BMI shifts, which
 # have only a VEX encoding, take VEX.vvvv's register as their "c" word
 # instead.
 VEX_KINDS = ("vmov", "vfp", "vlane", "vlogic", "vmovd", "vtbl")
@@ -369,17 +369,22 @@ class VTbl:
     except in a VEX encoding, or fewer, loaded at byte 0 with the rest 0:
     the broadcasts' elements (VEX only), MOVDDUP's 64 bits, INSERTPS's 32,
     and the 64 that MOVHPS, MOVHPD, MOVLPS and MOVLPD load. vex is for the
-    VEX.128 encodings, as for VFp. """
+    VEX encodings, as for VFp. ymm adds a gadget between registers at 256
+    bits, for the VEX.256 broadcasts from a register: it writes the result
+    to both 16-byte halves of the YMM destination. """
 
-    def __init__(self, inputs, vex=False, mem_widths=(128,)):
+    def __init__(self, inputs, vex=False, mem_widths=(128,), ymm=False):
         self.name = f"{'v' if vex else ''}tbl{inputs}"
         self.inputs = inputs
         self.vex = vex
         self.mem_widths = mem_widths
+        self.ymm = ymm
 
     def widths(self, form):
-        """ The source's widths in form. """
-        return self.mem_widths if form == "xm" else (128,)
+        """ The source's widths in form, or the destination's at 256. """
+        if form == "xm":
+            return self.mem_widths
+        return (128, 256) if self.ymm else (128,)
 
     @property
     def reads_d(self):
@@ -393,7 +398,7 @@ class VTbl:
 # order, which rcg_vex_op() relies on.
 VTBL_OPS = (VTbl(1, mem_widths=(64, 128)),
             VTbl(2, mem_widths=(32, 64, 128)),
-            VTbl(1, vex=True, mem_widths=(8, 16, 32, 64, 128)),
+            VTbl(1, vex=True, mem_widths=(8, 16, 32, 64, 128), ymm=True),
             VTbl(2, vex=True, mem_widths=(32, 64, 128)))
 
 
@@ -2461,6 +2466,8 @@ def vtbl_body(g, spec):
     # TBL: the source in V1 and, with two inputs, the first input in V0; TBL
     # indexes V0 as bytes 0 to 15 and V1 as 16 to 31. The table goes in V3
     # after the access, as the slow path's helper call need not preserve V3.
+    # At 256 bits, the result goes to both halves of the YMM register,
+    # which leaves nothing to clear.
     op, env, width = spec.op, g.env, spec.width
     if spec.has_mem:
         g.ea(ADDR)
@@ -2484,8 +2491,12 @@ def vtbl_body(g, spec):
     else:
         table = "{v1.16b}"
     g.load_table("q3")
-    g.emit(f"tbl v2.16b, {table}, v3.16b",
-           f"str q2, [{env}, {g.word('d')}]")
+    g.emit(f"tbl v2.16b, {table}, v3.16b")
+    if width == 256:
+        g.emit(f"add {T}, {env}, {g.word('d')}",
+               f"stp q2, q2, [{T}]")
+        return
+    g.emit(f"str q2, [{env}, {g.word('d')}]")
     clear_upper(g, spec)
 
 
@@ -3858,6 +3869,7 @@ def insn_cases():
     yield from vfp_cases()
     yield from vex_vfp_cases()
     yield from vex256_vfp_cases()
+    yield from vex256_broadcast_cases()
     yield from vec_alias_cases()
     yield from mmx_cases()
     yield from movd_cases()
@@ -5174,6 +5186,24 @@ def vex_vfp_cases():
                        index_value=iv, xmm=n)
 
 
+def vex256_broadcast_cases():
+    """ The VEX.256 broadcasts from a register, which fill the whole YMM
+    destination: into another register, into the source, into one that
+    needs REX, and from one that needs REX. Last, one from memory, which
+    stays with TCG. """
+    ymm = dict(xmm=True, ymm=True)
+    for insn in ("vpbroadcastb", "vpbroadcastw", "vpbroadcastd",
+                 "vpbroadcastq", "vbroadcastss", "vbroadcastsd"):
+        yield Case(f"{insn} ymm1, xmm2", 256, a=0, **ymm)
+        yield Case(f"{insn} ymm2, xmm2", 256, a=0, **ymm)
+        yield Case(f"{insn} ymm9, xmm1; vmovdqu ymm0, ymm9", 256, a=0, **ymm)
+        yield Case(f"vmovaps xmm12, xmm1; {insn} ymm2, xmm12", 256, a=0,
+                   **ymm)
+    text, base, _, bv, _ = memory_operand(32, "b", None)
+    yield Case(f"vpbroadcastd ymm1, {text}", 256, a=0, mem=True, base=base,
+               base_value=bv, **ymm)
+
+
 def vex256_vfp_cases():
     """ The VEX.256 encodings of the packed floating-point ops: YMM0 from
     YMM1 and YMM2, which take every pair of values, then each input as the
@@ -5334,7 +5364,8 @@ def tbl_cases():
     which need REX, are copied from and to the registers the test loads.
     The other cases of one encoding check their destination's bits 128 to
     255 by way of upper(): a VEX.128 encoding clears them, and a legacy one
-    keeps them. VEX.256 encodings are left to TCG, with their upper lanes
+    keeps them. VEX.256 encodings other than the broadcasts from a register
+    (see vex256_broadcast_cases()) are left to TCG, with their upper lanes
     checked as in vec_alias_cases(). """
     text, base, index, bv, iv = memory_operand(128, "bi1", None)
     mem = dict(mem=True, base=base, index=index, base_value=bv,
@@ -5424,8 +5455,8 @@ def tbl_cases():
 
     # VEX.256, left to TCG.
     for insn in ("vpshufd ymm0, ymm1, 0x1b", "vpsrldq ymm0, ymm1, 3",
-                 "vpunpcklbw ymm0, ymm1, ymm2", "vpalignr ymm0, ymm1, ymm2, 5",
-                 "vpbroadcastd ymm0, xmm2"):
+                 "vpunpcklbw ymm0, ymm1, ymm2",
+                 "vpalignr ymm0, ymm1, ymm2, 5"):
         yield Case("vinsertf128 ymm1, ymm1, xmm3, 1; "
                    f"vinsertf128 ymm2, ymm2, xmm0, 1; {insn}; "
                    "vextractf128 xmm3, ymm0, 1", 128, a=0, b=1, xmm=True)

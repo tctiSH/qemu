@@ -14568,6 +14568,31 @@ vmovaps ymm10, ymm1; vmovaps ymm12, ymm2; vmaxpd ymm9, ymm10, ymm12; vmovaps ymm
 vmaxpd ymm0, ymm1, ymm2: 20810bbab66550a5
 vmaxpd ymm1, ymm1, ymm2: aee0a8dae3e89439
 vmaxpd ymm0, ymm1, ymmword ptr [rbx+8]: eada712b345f11a
+vpbroadcastb ymm1, xmm2: fcbaaeee446ac24
+vpbroadcastb ymm2, xmm2: f6b4d5cba8b0b9fc
+vpbroadcastb ymm9, xmm1; vmovdqu ymm0, ymm9: 99d91af240a63094
+vmovaps xmm12, xmm1; vpbroadcastb ymm2, xmm12: bc27b1a5be45f77c
+vpbroadcastw ymm1, xmm2: bb53920111ffef64
+vpbroadcastw ymm2, xmm2: 72daa0827a4a113c
+vpbroadcastw ymm9, xmm1; vmovdqu ymm0, ymm9: f0797cf9deb9cd54
+vmovaps xmm12, xmm1; vpbroadcastw ymm2, xmm12: 7460c2ac7a486ebc
+vpbroadcastd ymm1, xmm2: 2f9d56e2c7bd7184
+vpbroadcastd ymm2, xmm2: 205d7851240ffb1c
+vpbroadcastd ymm9, xmm1; vmovdqu ymm0, ymm9: 987ef3e571e256f4
+vmovaps xmm12, xmm1; vpbroadcastd ymm2, xmm12: 4026ff722818789c
+vpbroadcastq ymm1, xmm2: 77f2ec527b3461e4
+vpbroadcastq ymm2, xmm2: c751b606dcc3addc
+vpbroadcastq ymm9, xmm1; vmovdqu ymm0, ymm9: febd66df8482ff14
+vmovaps xmm12, xmm1; vpbroadcastq ymm2, xmm12: 7d37afa63ef2d39c
+vbroadcastss ymm1, xmm2: 2f9d56e2c7bd7184
+vbroadcastss ymm2, xmm2: 205d7851240ffb1c
+vbroadcastss ymm9, xmm1; vmovdqu ymm0, ymm9: 987ef3e571e256f4
+vmovaps xmm12, xmm1; vbroadcastss ymm2, xmm12: 4026ff722818789c
+vbroadcastsd ymm1, xmm2: 77f2ec527b3461e4
+vbroadcastsd ymm2, xmm2: c751b606dcc3addc
+vbroadcastsd ymm9, xmm1; vmovdqu ymm0, ymm9: febd66df8482ff14
+vmovaps xmm12, xmm1; vbroadcastsd ymm2, xmm12: 7d37afa63ef2d39c
+vpbroadcastd ymm1, dword ptr [rbx+8]: e4178aa3f6ff6b85
 vinsertf128 ymm1, ymm1, xmm3, 1; punpckldq xmm1, xmm2; vextractf128 xmm3, ymm1, 1: ca7dc6900c7b7a45
 punpckldq xmm1, xmmword ptr [rbx+rcx*2+8]: 269340599a19c5ad
 vinsertf128 ymm0, ymm0, xmm3, 1; vpunpckldq xmm0, xmm1, xmm2; vextractf128 xmm3, ymm0, 1: ebe8e3747f9685c5
@@ -15129,7 +15154,6 @@ vinsertf128 ymm1, ymm1, xmm3, 1; vinsertf128 ymm2, ymm2, xmm0, 1; vpshufd ymm0, 
 vinsertf128 ymm1, ymm1, xmm3, 1; vinsertf128 ymm2, ymm2, xmm0, 1; vpsrldq ymm0, ymm1, 3; vextractf128 xmm3, ymm0, 1: 5067f5b89fe99b8d
 vinsertf128 ymm1, ymm1, xmm3, 1; vinsertf128 ymm2, ymm2, xmm0, 1; vpunpcklbw ymm0, ymm1, ymm2; vextractf128 xmm3, ymm0, 1: 5e42c81a174e4bc5
 vinsertf128 ymm1, ymm1, xmm3, 1; vinsertf128 ymm2, ymm2, xmm0, 1; vpalignr ymm0, ymm1, ymm2, 5; vextractf128 xmm3, ymm0, 1: a9a7ca52597aee35
-vinsertf128 ymm1, ymm1, xmm3, 1; vinsertf128 ymm2, ymm2, xmm0, 1; vpbroadcastd ymm0, xmm2; vextractf128 xmm3, ymm0, 1: 72858ce5c07e0ac5
 vinsertf128 ymm1, ymm1, xmm3, 1; movddup xmm1, xmm2; vextractf128 xmm3, ymm1, 1: 48d2b1bb53fccd25
 vinsertf128 ymm2, ymm2, xmm3, 1; movddup xmm2, xmm2; vextractf128 xmm3, ymm2, 1: 7e31a2e34d46be5
 vinsertf128 ymm1, ymm1, xmm3, 1; movsldup xmm1, xmm2; vextractf128 xmm3, ymm1, 1: 85f5079227e27c05

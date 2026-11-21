@@ -261,9 +261,9 @@ static char rcg_kind(DisasContext *s, X86DecodedOp *op)
          * rcg_operands() takes the width from the RCG op, for MOVD and MOVQ
          * from the general register (64 bits between XMM registers), for a
          * table shuffle from memory from the memory operand, and for a
-         * VEX.256 move, or a VEX.256 packed floating-point op between
-         * registers, from VEX.L; it refuses every other VEX.256 encoding. A
-         * VEX encoding takes the op rcg_vex_op() picks.
+         * VEX.256 move, packed floating-point op or broadcast from VEX.L;
+         * it refuses the VEX.256 encodings that rcg_ymm_ok() does not
+         * accept. A VEX encoding takes the op rcg_vex_op() picks.
          */
         return 'x';
     default:
@@ -693,6 +693,36 @@ static bool rcg_sse_flags_ok(void)
     return ok;
 }
 
+/* Whether gen is one of the broadcasts, VPBROADCASTB to VPBROADCASTQ. */
+static bool rcg_is_broadcast(X86GenFunc gen)
+{
+    return gen == gen_VPBROADCASTB || gen == gen_VPBROADCASTW ||
+           gen == gen_VPBROADCASTD || gen == gen_VPBROADCASTQ;
+}
+
+/*
+ * Whether op, decoded by gen, has gadgets for a VEX.256 encoding: MOVDQA
+ * and MOVDQU, the packed floating-point ops (ps and pd) and the broadcasts
+ * from an XMM register; rcg_operands() refuses a memory source for the
+ * floating-point ops and the broadcasts. The other ops' gadget tables end
+ * below MO_256, but for VTBL1's, whose 256-bit gadget writes one result to
+ * both 16-byte halves. That suits only the broadcasts: the other table
+ * shuffles work on each half.
+ */
+static bool rcg_ymm_ok(X86GenFunc gen, RCGOp op)
+{
+    switch (rcg_facts[op].kind) {
+    case RCG_KIND_VMOV:
+        return op == RCG_OP_MOVDQA || op == RCG_OP_MOVDQU;
+    case RCG_KIND_VFP:
+        return (op - RCG_OP_ADDPS) % 4 < 2;
+    case RCG_KIND_VTBL:
+        return rcg_is_broadcast(gen);
+    default:
+        return false;
+    }
+}
+
 /*
  * The form of op's instruction, its operand width and any immediate; or -1
  * if RCG leaves it to TCG. *rotate_left says that a ROR is ROL's.
@@ -703,14 +733,7 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
 {
     bool ymm = (s->prefix & PREFIX_VEX) && s->vex_l;
 
-    /*
-     * A VEX.256 encoding works on whole YMM registers, which only the
-     * gadgets of MOVDQA, MOVDQU and the packed floating-point ops do; the
-     * RCG_KIND_VFP case below refuses ss, sd and memory sources. The gadget
-     * tables of the other ops also end below MO_256.
-     */
-    if (ymm && op != RCG_OP_MOVDQA && op != RCG_OP_MOVDQU &&
-        rcg_facts[op].kind != RCG_KIND_VFP) {
+    if (ymm && !rcg_ymm_ok(decode->e.gen, op)) {
         return -1;
     }
     switch (rcg_facts[op].kind) {
@@ -807,11 +830,12 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
          * encodings, whose gadgets require it, and may be misaligned in the
          * VEX ones, whose gadgets allow it. A table shuffle's source in
          * memory may instead be 1 to 8 bytes (see rcg_tbl_table()), which
-         * have no alignment to keep. At 32 bytes, only ps and pd between
-         * registers have gadgets. All the floating-point gadgets but MIN's
-         * and MAX's read float_status's flags directly; rcg_sse_flags_ok()
-         * also gates MIN and MAX, which do not need it. The other gadgets
-         * raise nothing.
+         * have no alignment to keep. In a VEX.256 encoding, only the packed
+         * floating-point ops and the broadcasts, between registers, have
+         * gadgets: see rcg_ymm_ok(). All the floating-point gadgets but
+         * MIN's and MAX's read float_status's flags directly;
+         * rcg_sse_flags_ok() also gates MIN and MAX, which do not need it.
+         * The other gadgets raise nothing.
          */
         char a = rcg_kind(s, first), b = rcg_kind(s, second);
         bool fp = rcg_facts[op].kind == RCG_KIND_VFP;
@@ -819,12 +843,12 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
         int type = fp ? (op - RCG_OP_ADDPS) % 4 : 0;
 
         if (rcg_facts[op].kind == RCG_KIND_VTBL) {
-            *ot = b == 'm' ? second->ot : MO_128;
+            *ot = b == 'm' ? second->ot : ymm ? MO_256 : MO_128;
         } else {
             *ot = type == 2 ? MO_32 : type == 3 ? MO_64 :
                   ymm ? MO_256 : MO_128;
         }
-        if (a != 'x' || !b || (ymm && (type >= 2 || b != 'x')) ||
+        if (a != 'x' || !b || (ymm && b != 'x') ||
             (b == 'm' && *ot == MO_128 &&
              (!(cpuinfo & CPUINFO_LSE2) ||
               sse_needs_alignment(s, decode, MO_128) == vex)) ||
@@ -979,11 +1003,12 @@ static unsigned rcg_pack_words(const RCGGadget *g, uint64_t *words,
  * where the instruction has one. Below 256 bits, they clear bits 128 to
  * 255 of the destination register, and a move to memory or to a general
  * register, and UCOMIS and COMIS, which write no XMM register, are the
- * same as the legacy encoding and use its gadgets. At 256 bits, the VEX
- * ops of MOVDQA and MOVDQU have gadgets for every form, stores too, and
- * those of ps and pd have them between registers. The BMI shifts have
- * only a VEX encoding and keep their op; VEX.vvvv's register is their
- * count, their last input.
+ * same as the legacy encoding and use its gadgets. At 256 bits, which
+ * rcg_ymm_ok() has accepted, MOVDQA and MOVDQU have gadgets for every
+ * form, stores too; ps and pd have them between registers; and VTBL1 has
+ * one between registers for the broadcasts. The BMI shifts have only a VEX
+ * encoding and keep their op; VEX.vvvv's register is their count, their
+ * last input.
  */
 static int rcg_vex_op(RCGOp op, int form, MemOp ot)
 {
@@ -1068,8 +1093,7 @@ static void rcg_tbl_table(DisasContext *s, X86DecodedInsn *decode,
             k = gen == gen_PSRLDQ_i ? i + shift : i - shift;
             t[i] = k >= 0 && k < 16 ? k : RCG_TBL_ZERO;
         }
-    } else if (gen == gen_VPBROADCASTB || gen == gen_VPBROADCASTW ||
-               gen == gen_VPBROADCASTD || gen == gen_VPBROADCASTQ) {
+    } else if (rcg_is_broadcast(gen)) {
         int size = 1 << second->ot;
 
         for (i = 0; i < 16; i++) {
