@@ -1337,6 +1337,17 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     if (!slot->gadgets) {
         return NULL;
     }
+    if (ot >= slot->nb_widths) {
+        /*
+         * A width wider than any of the op and form's gadgets is a
+         * translator bug. Only debug builds stop here: tcg_debug_assert()
+         * would let other builds drop the check.
+         */
+#ifdef CONFIG_DEBUG_TCG
+        g_assert_not_reached();
+#endif
+        return NULL;
+    }
     may_fault = slot->access || facts->raises;
 
     /*

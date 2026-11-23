@@ -3724,11 +3724,13 @@ def write_table(all_specs, out):
     p("/*")
     p(" * An op and form's gadgets, indexed [width][shape][seg][ordered], the")
     p(" * width as a MemOp; one shape where there is no memory operand.")
+    p(" * nb_widths: one more than the widest gadget's MemOp.")
     p(" * access: RCG_LOAD, RCG_STORE or both; 0 if none. reads_d: they read")
     p(" * the destination register as well as writing it.")
     p(" */")
     p("typedef struct RCGSlot {")
     p("    const RCGGadget *gadgets;")
+    p("    uint8_t nb_widths;")
     p("    uint8_t nb_shapes;")
     p("    uint8_t access;")
     p("    bool reads_d;")
@@ -3791,10 +3793,11 @@ def write_table(all_specs, out):
     slots = {}
     for spec in all_specs:
         slots.setdefault((op_name(spec), spec.form), []).append(spec)
-    access, reads_d = {}, {}
+    sizes, access, reads_d = {}, {}, {}
     for (op, form), group in slots.items():
         nb_shapes = len(EA_SHAPES) if group[0].has_mem else 1
         nb_widths = max(list(MO).index(spec.width) for spec in group) + 1
+        sizes[op, form] = nb_widths, nb_shapes
         entries = [None] * (nb_widths * nb_shapes * 4)
         for spec in group:
             assert spec.accesses_memory == (spec.loads or spec.stores)
@@ -3817,11 +3820,11 @@ def write_table(all_specs, out):
         p("};\n")
 
     p("static const RCGSlot rcg_slots[RCG_NB_OPS][RCG_NB_FORMS] = {")
-    for (op, form), group in slots.items():
-        nb_shapes = len(EA_SHAPES) if group[0].has_mem else 1
+    for op, form in slots:
+        nb_widths, nb_shapes = sizes[op, form]
         p(f"    [RCG_OP_{op.upper()}][RCG_FORM_{form.upper()}] = "
-          f"{{ rcg_{op}_{form}, {nb_shapes}, {access[op, form]}, "
-          f"{reads_d[op, form]} }},")
+          f"{{ rcg_{op}_{form}, {nb_widths}, {nb_shapes}, "
+          f"{access[op, form]}, {reads_d[op, form]} }},")
     p("};\n")
 
     p("static const RCGFacts rcg_facts[RCG_NB_OPS] = {")
