@@ -385,12 +385,13 @@ static void rcg_note(TCGTemp **list, unsigned *n, TCGv v)
  * reads the register shifted down by 8 (gen_op_mov_v_reg()). Both have AH
  * to BH as their low byte, and the gadgets use no more of an 8-bit
  * register than that: the low byte of a MOV, XCHG, ALU or unary result
- * depends on no higher bit, and the shifts, MUL, IMUL, MOVZX and MOVSX
- * extend their operands from 8 bits first. Where the flags state they
- * leave differs from TCG's, it differs only above the width, which nothing
- * reads, as with TCG's state for AL to BL, which holds the rest of the
- * register above the width. ROL and ROR of AH to BH stay with TCG: see
- * rcg_operands().
+ * depends on no higher bit, the shifts, MUL, IMUL, MOVZX and MOVSX
+ * extend their operands from 8 bits first, and ROR repeats its low byte
+ * across 32 bits. Where the flags state they leave differs from TCG's, it
+ * differs only above the width, which nothing reads, as with TCG's state
+ * for AL to BL, which holds the rest of the register above the width. For
+ * ROL and ROR, rcg_rotate_flags() takes CF and OF from the register's
+ * global, 8 bits up for AH to BH.
  */
 static bool rcg_is_xh(DisasContext *s, X86DecodedOp *op)
 {
@@ -403,7 +404,7 @@ static bool rcg_is_xh(DisasContext *s, X86DecodedOp *op)
  * global it is in: AH to BH are the second byte of RAX to RBX. An XMM
  * register is in env alone, so *v is NULL. *v is for noting what the gadget
  * reads and writes: for AH to BH it holds all of RAX to RBX, so code that
- * reads its value must refuse them or shift it down by 8.
+ * reads its value must refuse them or read it 8 bits up.
  */
 static uint64_t rcg_reg_op(DisasContext *s, X86DecodedOp *op, TCGv *v)
 {
@@ -594,23 +595,26 @@ static const void *rcg_translate_cond(DisasContext *s,
 /*
  * After the gadget has rotated register reg (width ot) right by count
  * (less than the width), sets CF and OF as gen_ROL and gen_ROR do and keeps
- * the other flags. Those leave CC_OP_ADCOX; this leaves CC_OP_EFLAGS, with
- * every flag in cc_src. These ops are removed as dead if the flags are set
- * again before anything reads them.
+ * the other flags. The operand starts at bit lsb of reg: 8 for AH to BH,
+ * which are in RAX to RBX, and otherwise 0. gen_ROL and gen_ROR leave
+ * CC_OP_ADCOX; this leaves CC_OP_EFLAGS, with every flag in cc_src. These
+ * ops are removed as dead if the flags are set again before anything reads
+ * them.
  */
-static void rcg_rotate_flags(DisasContext *s, MemOp ot, TCGv reg, bool left,
-                             int count)
+static void rcg_rotate_flags(DisasContext *s, MemOp ot, TCGv reg, int lsb,
+                             bool left, int count)
 {
     TCGv flags = tcg_temp_new(), bit = tcg_temp_new();
-    int top = (8 << ot) - 1;
+    int top = lsb + (8 << ot) - 1;
 
     gen_mov_eflags(s, flags);
     /*
      * CF: the bit that went round. OF: whether the top bit changed. The
      * old top bit is the result's bit top - count, which the shift moves
-     * up to it; the register's bits above the width cannot reach it.
+     * up to it; the register's bits above the top cannot reach it, and
+     * those below lsb go no higher than lsb + count - 1, below the top.
      */
-    tcg_gen_extract_tl(bit, reg, left ? 0 : top, 1);
+    tcg_gen_extract_tl(bit, reg, left ? lsb : top, 1);
     tcg_gen_deposit_tl(flags, flags, bit, ctz32(CC_C), 1);
     tcg_gen_shli_tl(bit, reg, count);
     tcg_gen_xor_tl(bit, bit, reg);
@@ -989,8 +993,8 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
          * By an immediate count, or 1, or CL. An immediate that masks to 0
          * is left to TCG, which then keeps the flags but still writes the
          * operand back, zero-extending a 32-bit register; a gadget by CL
-         * does the same for a count of 0 itself. ROL and ROR by CL, and of
-         * AH to BH, are left to TCG.
+         * does the same for a count of 0 itself. ROL and ROR by CL are left
+         * to TCG.
          */
         char a = rcg_kind(s, first);
 
@@ -1011,13 +1015,11 @@ static int rcg_operands(DisasContext *s, X86DecodedInsn *decode, RCGOp op,
             /*
              * ROL and ROR of a register, by the masked count modulo the
              * width. Only at 8 and 16 bits can that be 0 when the masked
-             * count is not. ROL by n is ROR by the width less n. Not AH to
-             * BH: rcg_rotate_flags() takes CF and OF from the low bits of
-             * the register's global, which for them hold AL to BL.
+             * count is not. ROL by n is ROR by the width less n.
              */
             int bits = 8 << *ot;
 
-            if (a != 'r' || rcg_is_xh(s, first)) {
+            if (a != 'r') {
                 return -1;
             }
             *rotate_left = decode->e.gen == gen_ROL;
@@ -1607,10 +1609,9 @@ static const void *rcg_emit(DisasContext *s, X86DecodedInsn *decode)
     }
 
     if (op == RCG_OP_ROR) {
-        /* rcg_operands() leaves ROL and ROR of AH to BH to TCG. */
-        tcg_debug_assert(!rcg_is_xh(s, first));
         rcg_reg_op(s, first, &reg);
-        rcg_rotate_flags(s, ot, reg, rotate_left, imm);
+        rcg_rotate_flags(s, ot, reg, rcg_is_xh(s, first) ? 8 : 0,
+                         rotate_left, imm);
     }
 
     /*

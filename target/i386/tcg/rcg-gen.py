@@ -1681,8 +1681,8 @@ class Body:
         the word is the offset of RAX to RBX plus 1 (see rcg_reg_op() in
         rcg.c.inc), so that dest's low byte is the register and the rest
         reaches into the next one. The translator gives AH to BH to every
-        gadget but ROR's, so a body must use no more of an 8-bit register
-        than its low byte. """
+        gadget, so a body must use no more of an 8-bit register than its
+        low byte. """
         self.emit(f"ldr {dest}, [{self.env}, {self.word(word)}]")
         self.define(dest)
         self.reads.add(word)
@@ -4820,9 +4820,12 @@ def rotate_cases(width):
     """ ROL and ROR by each count, and the flags they leave, after each
     lazy-flags state and read by a condition. Only the register forms by
     an immediate have a gadget (ROR's, which ROL uses too); the memory and
-    CL forms, and AH to BH, are TCG's. Below 32 bits, some counts that do
-    not mask to 0 are multiples of the width: they rotate by 0 but set CF
-    and OF. """
+    CL forms are TCG's. Below 32 bits, some counts that do not mask to 0
+    are multiples of the width: they rotate by 0 but set CF and OF. At 8
+    bits, AH and BH also run by each count, AH after each state and before
+    each condition, and CH and DH once each, since the translator takes
+    their CF and OF from the second byte of RAX to RBX, where AL to BL are
+    the first. """
     reg = reg_name(0, width)
     text, base, _, bv, _ = memory_operand(width, "b", None)
     for name in ("rol", "ror"):
@@ -4836,6 +4839,17 @@ def rotate_cases(width):
         if width == 8:
             yield Case(f"{name} sil, 3", 8, a=6)
             yield Case(f"{name} ah, 3", 8, a=0)
+            for xh, n in (("ah", 0), ("bh", 3)):
+                for count in SHIFT_COUNTS:
+                    yield Case(f"{name} {xh}, {count}", 8, a=n)
+            yield Case(f"{name} ch, 7", 8, a=1)
+            yield Case(f"{name} dh, 1", 8, a=2)
+            # The setters work on AL and BL, and most write AL, beside AH.
+            for setters in flag_setters(8).values():
+                yield Case(f"{setters[0]}; {name} ah, 5", 8, a=0, b=3)
+            for cond in range(16):
+                yield Case(f"{name} ah, 1; j{CONDS[cond]} 1f; mov ecx, 1; "
+                           "1:", 8, a=0)
         for setters in flag_setters(width).values():
             yield Case(f"{setters[0]}; {name} {reg}, 5", width, a=0, b=3)
         for cond in range(16):
@@ -5988,9 +6002,9 @@ def addr32_cases():
 
 
 def high_byte_cases():
-    """ AH, CH, DH and BH, which every op's gadgets but ROL's and ROR's
-    take. Most forms are in alu_cases(), unary_cases(), shift_cases() and
-    so on. These add MOV, MOVZX, MOVSX, XCHG, MUL, IMUL and SETcc with more
+    """ AH, CH, DH and BH, which every op's gadgets take. Most forms are
+    in alu_cases(), unary_cases(), shift_cases(), rotate_cases() and so
+    on. These add MOV, MOVZX, MOVSX, XCHG, MUL, IMUL and SETcc with more
     registers; the ALU ops with memory, with the two low bytes of one
     register, and with one byte twice (SBB, which stays with TCG); shifts
     by CL; and the flags states the ALU, unary and shift ops leave, read by

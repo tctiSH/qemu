@@ -7606,6 +7606,60 @@ rol al, cl: b1e1c7365ed010ec
 rol byte ptr [rbx+8], 3: 36f76e172dfbd75c
 rol sil, 3: c45bc3ccd8fd68f4
 rol ah, 3: d3792a423e3bb889
+rol ah, 1: cfa3a790f1264af5
+rol ah, 2: b246cbc07508de31
+rol ah, 7: c674304630f45391
+rol ah, 8: de7be81f550ab8c5
+rol ah, 9: cfa3a790f1264af5
+rol ah, 15: c674304630f45391
+rol ah, 16: de7be81f550ab8c5
+rol ah, 17: cfa3a790f1264af5
+rol ah, 31: c674304630f45391
+rol ah, 32: 60ba7305e8707f7c
+rol ah, 33: cfa3a790f1264af5
+rol ah, 63: c674304630f45391
+rol ah, 64: 60ba7305e8707f7c
+rol ah, 65: cfa3a790f1264af5
+rol ah, 255: c674304630f45391
+rol bh, 1: d8f4cc5bb5c93c1
+rol bh, 2: 653ef910f6991a5
+rol bh, 7: 6098592594aa7705
+rol bh, 8: 864e55d1f70f7121
+rol bh, 9: d8f4cc5bb5c93c1
+rol bh, 15: 6098592594aa7705
+rol bh, 16: 864e55d1f70f7121
+rol bh, 17: d8f4cc5bb5c93c1
+rol bh, 31: 6098592594aa7705
+rol bh, 32: 24bf1aa7edac2640
+rol bh, 33: d8f4cc5bb5c93c1
+rol bh, 63: 6098592594aa7705
+rol bh, 64: 24bf1aa7edac2640
+rol bh, 65: d8f4cc5bb5c93c1
+rol bh, 255: 6098592594aa7705
+rol ch, 7: 2e03a237f8944b75
+rol dh, 1: 5f3c83c030dfe725
+cmp al, bl; rol ah, 5: 85972ad86588cd4b
+add al, bl; rol ah, 5: 3341ce66a84a6d33
+test al, bl; rol ah, 5: 987b572b7053e1d7
+inc al; rol ah, 5: 53cb14a7b2c21321
+dec al; rol ah, 5: 2aac866d6c3749a1
+shr al, 3; rol ah, 5: 62d2db1cfbc4d8d1
+rol ah, 1; jo 1f; mov ecx, 1; 1:: 58ddcdd087a5538d
+rol ah, 1; jno 1f; mov ecx, 1; 1:: 57967e51ba6eb96d
+rol ah, 1; jb 1f; mov ecx, 1; 1:: ca7075816414e647
+rol ah, 1; jae 1f; mov ecx, 1; 1:: 71c44a2f17da28cf
+rol ah, 1; je 1f; mov ecx, 1; 1:: 1cb823db649da1fd
+rol ah, 1; jne 1f; mov ecx, 1; 1:: 185fd739fe5289a5
+rol ah, 1; jbe 1f; mov ecx, 1; 1:: 7717214d2f6d847b
+rol ah, 1; ja 1f; mov ecx, 1; 1:: 3970781abdc8ecb
+rol ah, 1; js 1f; mov ecx, 1; 1:: b602ad7b19158211
+rol ah, 1; jns 1f; mov ecx, 1; 1:: f3b7a38c709a2911
+rol ah, 1; jp 1f; mov ecx, 1; 1:: 40d17b769ef6febd
+rol ah, 1; jnp 1f; mov ecx, 1; 1:: c688977a70c33ed5
+rol ah, 1; jl 1f; mov ecx, 1; 1:: 50f14b5dee06cb81
+rol ah, 1; jge 1f; mov ecx, 1; 1:: ae167c9c163ffcc9
+rol ah, 1; jle 1f; mov ecx, 1; 1:: 27dceaf85b75ab65
+rol ah, 1; jg 1f; mov ecx, 1; 1:: 9a82ea748a06c0a5
 cmp al, bl; rol al, 5: ecc17b878e595191
 add al, bl; rol al, 5: 5aab0a338c23fbeb
 test al, bl; rol al, 5: 17183ea8dafc3c71
@@ -7662,6 +7716,60 @@ ror al, cl: 5f10b926b3abb62c
 ror byte ptr [rbx+8], 3: 6eec862a5975f128
 ror sil, 3: 12fb05546b849fdc
 ror ah, 3: 9068f1fb50fb45c1
+ror ah, 1: 989abf2844d13fd5
+ror ah, 2: fc65dd4b7f5a4a59
+ror ah, 7: b31309bb42116011
+ror ah, 8: e8e36b9e17f3f5e1
+ror ah, 9: 989abf2844d13fd5
+ror ah, 15: b31309bb42116011
+ror ah, 16: e8e36b9e17f3f5e1
+ror ah, 17: 989abf2844d13fd5
+ror ah, 31: b31309bb42116011
+ror ah, 32: 60ba7305e8707f7c
+ror ah, 33: 989abf2844d13fd5
+ror ah, 63: b31309bb42116011
+ror ah, 64: 60ba7305e8707f7c
+ror ah, 65: 989abf2844d13fd5
+ror ah, 255: b31309bb42116011
+ror bh, 1: d8b51a95cfbf5991
+ror bh, 2: 204f1ad2951f31ad
+ror bh, 7: 89886b41a50755b5
+ror bh, 8: 62fa0123b94907d5
+ror bh, 9: d8b51a95cfbf5991
+ror bh, 15: 89886b41a50755b5
+ror bh, 16: 62fa0123b94907d5
+ror bh, 17: d8b51a95cfbf5991
+ror bh, 31: 89886b41a50755b5
+ror bh, 32: 24bf1aa7edac2640
+ror bh, 33: d8b51a95cfbf5991
+ror bh, 63: 89886b41a50755b5
+ror bh, 64: 24bf1aa7edac2640
+ror bh, 65: d8b51a95cfbf5991
+ror bh, 255: 89886b41a50755b5
+ror ch, 7: 99c7b5cd5d981cfd
+ror dh, 1: 4486b332a0bbfb55
+cmp al, bl; ror ah, 5: a05080179f20beb
+add al, bl; ror ah, 5: e3db38cef8434edf
+test al, bl; ror ah, 5: 7d9fef88c06a0d83
+inc al; ror ah, 5: 1cbe475c97d5d5e1
+dec al; ror ah, 5: 6b231813dcc79c91
+shr al, 3; ror ah, 5: 7829996988a74831
+ror ah, 1; jo 1f; mov ecx, 1; 1:: cb4a10be9a3d9225
+ror ah, 1; jno 1f; mov ecx, 1; 1:: 36bab04a2db6e791
+ror ah, 1; jb 1f; mov ecx, 1; 1:: d629a79b5e3f2fcb
+ror ah, 1; jae 1f; mov ecx, 1; 1:: 3058bd6b1c9ec4ef
+ror ah, 1; je 1f; mov ecx, 1; 1:: e964fdc9df0bda9
+ror ah, 1; jne 1f; mov ecx, 1; 1:: 164baa64cef72ced
+ror ah, 1; jbe 1f; mov ecx, 1; 1:: 26ae73764eb445a7
+ror ah, 1; ja 1f; mov ecx, 1; 1:: 44362e015da7034b
+ror ah, 1; js 1f; mov ecx, 1; 1:: 24c96ff83d97cad9
+ror ah, 1; jns 1f; mov ecx, 1; 1:: ab88c56d4b9464ad
+ror ah, 1; jp 1f; mov ecx, 1; 1:: b5eab9f3f0850509
+ror ah, 1; jnp 1f; mov ecx, 1; 1:: b6dc4d7b82136b4d
+ror ah, 1; jl 1f; mov ecx, 1; 1:: b4a421653fdebfdd
+ror ah, 1; jge 1f; mov ecx, 1; 1:: 79bd155df6ed9499
+ror ah, 1; jle 1f; mov ecx, 1; 1:: b4d1ff7b6965a2c9
+ror ah, 1; jg 1f; mov ecx, 1; 1:: d1a49a175dfeea1d
 cmp al, bl; ror al, 5: 3ccab329691fe3dd
 add al, bl; ror al, 5: 3f862c8e9d26f0ab
 test al, bl; ror al, 5: dfc9a139fea6f505
