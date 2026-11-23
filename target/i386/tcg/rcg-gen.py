@@ -149,9 +149,9 @@ class VMov:
     gadget.
 
     The VEX.256 encodings of MOVDQA and MOVDQU have gadgets of the VEX ops
-    at 256 bits in every form (VEX256_VMOV_FORMS), stores included: 32
-    bytes between YMM registers and to and from memory, with nothing to
-    clear. """
+    at 256 bits in every form (ymm_forms), stores included: 32 bytes
+    between YMM registers and to and from memory, with nothing to clear.
+    """
 
     def __init__(self, name, width, aligned=False, vex=False):
         self.name = ("v" if vex else "") + name
@@ -163,6 +163,11 @@ class VMov:
     def forms(self):
         return ("xx", "xm") if self.vex else ("xx", "xm", "mx")
 
+    @property
+    def ymm_forms(self):
+        """ The forms with a VEX.256 gadget (see ymm_specs()). """
+        return ("xx", "xm", "mx") if self.vex and self.width == 128 else ()
+
     def reads_v(self, form):
         """ Whether a VEX gadget of form reads VEX.vvvv's register. """
         return self.vex and self.width < 128 and form == "xx"
@@ -172,7 +177,6 @@ VMOV_OPS = tuple(VMov(name, width, aligned=name == "movdqa", vex=vex)
                  for vex in (False, True)
                  for name, width in (("movdqa", 128), ("movdqu", 128),
                                      ("movsd", 64), ("movss", 32)))
-VEX256_VMOV_FORMS = ("xx", "xm", "mx")
 
 
 class VFp:
@@ -190,8 +194,8 @@ class VFp:
     128 bits, bits 128 to 255 of dest are then cleared, as gen_writeback()
     does, and TCG calls the same helpers, with VEX.vvvv's register in place
     of the destination. A 16-byte memory source may be misaligned. The VEX
-    packed ops also have VEX.256 gadgets between YMM registers, which take
-    the _ymm helpers (see vfp256_body()). """
+    packed ops also have VEX.256 gadgets between YMM registers (ymm_forms),
+    which take the _ymm helpers (see vfp256_body()). """
 
     def __init__(self, base, a64, suffix, unary=False, vex=False,
                  pick=None):
@@ -216,6 +220,11 @@ class VFp:
     def reads_v(self, form=None):
         """ Whether the gadget reads VEX.vvvv's register. """
         return not (self.unary and self.packed) and self.vex
+
+    @property
+    def ymm_forms(self):
+        """ The forms with a VEX.256 gadget (see ymm_specs()). """
+        return ("xx",) if self.vex and self.packed else ()
 
 
 # Each op's four forms, in the order rcg_select() relies on when it adds
@@ -484,22 +493,21 @@ class VTbl:
     except in a VEX encoding, or fewer, loaded at byte 0 with the rest 0:
     the broadcasts' elements (VEX only), MOVDDUP's 64 bits, INSERTPS's 32,
     and the 64 that MOVHPS, MOVHPD, MOVLPS and MOVLPD load. vex is for the
-    VEX encodings, as for VFp. ymm adds a gadget between registers at 256
-    bits, for the VEX.256 broadcasts from a register: it writes the result
-    to both 16-byte halves of the YMM destination. """
+    VEX encodings, as for VFp. ymm gives it a VEX.256 gadget between
+    registers (ymm_forms), for the VEX.256 broadcasts from a register: it
+    writes the result to both 16-byte halves of the YMM destination. """
 
     def __init__(self, inputs, vex=False, mem_widths=(128,), ymm=False):
         self.name = f"{'v' if vex else ''}tbl{inputs}"
         self.inputs = inputs
         self.vex = vex
         self.mem_widths = mem_widths
-        self.ymm = ymm
+        self.ymm_forms = ("xx",) if ymm else ()
 
     def widths(self, form):
-        """ The source's widths in form, or the destination's at 256. """
-        if form == "xm":
-            return self.mem_widths
-        return (128, 256) if self.ymm else (128,)
+        """ The widths of form's gadgets other than the VEX.256 ones
+        (ymm_forms): a memory source's widths, else 128. """
+        return self.mem_widths if form == "xm" else (128,)
 
     @property
     def reads_d(self):
@@ -1226,14 +1234,11 @@ def specs():
     for op in VMOV_OPS:
         for form in op.forms:
             yield from with_memory(Spec("vmov", op, form, op.width))
-        if op.vex and op.width == 128:
-            for form in VEX256_VMOV_FORMS:
-                yield from with_memory(Spec("vmov", op, form, 256))
+        yield from ymm_specs("vmov", op)
     for op in VFP_OPS:
         for form in ("xx", "xm"):
             yield from with_memory(Spec("vfp", op, form, op.width))
-        if op.vex and op.packed:
-            yield Spec("vfp", op, "xx", 256)
+        yield from ymm_specs("vfp", op)
     for op in VFMA_OPS:
         yield Spec("vfma", op, "xx", op.width)
     for op in VCMP_OPS:
@@ -1252,9 +1257,17 @@ def specs():
         for form in ("xx", "xm"):
             for width in op.widths(form):
                 yield from with_memory(Spec("vtbl", op, form, width))
+        yield from ymm_specs("vtbl", op)
     for op in VCOMI_OPS:
         for form in ("xx", "xm"):
             yield from with_memory(Spec("vcomi", op, form, op.lane))
+
+
+def ymm_specs(kind, op):
+    """ op's VEX.256 gadgets, of kind: those of each form in op.ymm_forms,
+    with each memory shape and order (with_memory()). """
+    for form in op.ymm_forms:
+        yield from with_memory(Spec(kind, op, form, 256))
 
 
 def with_memory(spec):
