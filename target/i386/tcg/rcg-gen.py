@@ -1435,6 +1435,14 @@ class Body:
                    *self.h.restore]
         return save, restore
 
+    def _save_live(self):
+        """ _save() of the registers defined so far and the words. """
+        return self._save(self.used | set(self.word_regs.values()))
+
+    def _store_barrier(self):
+        """ The ordered twin's DMB ISHST before a store, or nothing. """
+        return ["dmb ishst"] if self.spec.ordered else []
+
     def _memop(self):
         """ The line that puts the MemOpIdx in a helper's argument. """
         return "mov   {}, " + self.word("oi")
@@ -1452,7 +1460,7 @@ class Body:
             miss_label=miss, env=self.env, tlb=self.word("tlb"),
             cmp_operand="tlb_cmp_read", size=size))
         self.emit(f"{join}:")
-        save, restore = self._save(self.used | set(self.word_regs.values()))
+        save, restore = self._save_live()
         self.cold += [
             *tcti_memory.load_slow_path(
                 helper, self._memop(), addr=addr,
@@ -1477,7 +1485,7 @@ class Body:
             miss_label=miss, env=self.env, tlb=self.word("tlb"),
             cmp_operand="tlb_cmp_write", size=size))
         self.emit(f"{join}:")
-        save, restore = self._save(self.used | set(self.word_regs.values()))
+        save, restore = self._save_live()
         self.cold += [
             *tcti_memory.store_slow_path(
                 helper, self._memop(), w(value) if width < 64 else value,
@@ -1487,99 +1495,89 @@ class Body:
             f"b {join}b",
         ]
 
+    def _pair_fast_path(self, insn, a, b, addr, size, aligned):
+        """ The fast path of a 16- or 32-byte access (size) to guest memory
+        at addr: one TLB lookup for all of it, then insn, LDP or STP, of a
+        and b. aligned says the access must be on a size-byte boundary: one
+        that is not goes to the slow path. The ordered twin puts DMB ISHLD
+        after a load, past join, so that it covers the slow path too, and
+        DMB ISHST before a store, which a store's slow path must repeat
+        before its helper call. Returns miss and join: the caller writes
+        the slow path, from miss, and branches back to join. """
+        assert insn in ("ldp", "stp")
+        out = OUT
+        miss, join = self._labels()
+        write = insn == "stp"
+        if aligned:
+            self.emit(f"tst {addr}, #{size - 1}", f"b.ne {miss}f")
+        self.emit(*tcti_memory.create_tlb_fastpath(
+            is_write=write, size=size, addr=addr, miss_label=miss,
+            env=self.env, tlb=self.word("tlb"),
+            cmp_operand="tlb_cmp_write" if write else "tlb_cmp_read"),
+                  f"add {out}, {out}, {addr}",
+                  *(self._store_barrier() if write else []),
+                  f"{insn} {a}, {b}, [{out}]",
+                  f"{join}:")
+        if not write and self.spec.ordered:
+            self.emit("dmb ishld")
+        return miss, join
+
+    def _call(self, helper, args, called=(), after=()):
+        """ The lines of a slow path's call of helper, between the
+        harness's save and restore (see _save_live()). x0 is env; args are
+        the lines that set the other arguments, and anything else that must
+        come right before the call. called are the lines right after the
+        call, and after the lines after the restore. """
+        save, restore = self._save_live()
+        return [*save, f"mov x0, {self.env}", *args, f"bl _{helper}",
+                *called, *restore, *after]
+
     def load128(self, lo, hi, addr, aligned):
-        """ lo and hi = the 16 bytes of guest memory at addr, as TCTI's
-        qemu_ld_i128 gadgets load them: one LDP. The translator requires
+        """ lo and hi = the 16 bytes of guest memory at addr, with one
+        LDP, as in TCTI's qemu_ld_i128 gadgets. The translator requires
         LSE2, which makes an aligned LDP single-copy atomic. aligned
         says the access must be on a 16-byte boundary: one that is not goes
         to the helper, which raises the fault. The ordered twin orders it
         before what follows with DMB ISHLD, as those gadgets do. """
         t, out, page = tcti_memory.TMP
-        miss, join = self._labels()
-        if aligned:
-            self.emit(f"tst {addr}, #15", f"b.ne {miss}f")
-        self.emit(*tcti_memory.create_tlb_fastpath(
-            is_write=False, size=16, addr=addr, miss_label=miss,
-            env=self.env, tlb=self.word("tlb"), cmp_operand="tlb_cmp_read"),
-                  f"add {out}, {out}, {addr}",
-                  f"ldp {lo}, {hi}, [{out}]",
-                  f"{join}:")
-        if self.spec.ordered:
-            self.emit("dmb ishld")
-        save, restore = self._save(self.used | set(self.word_regs.values()))
+        miss, join = self._pair_fast_path("ldp", lo, hi, addr, 16, aligned)
         self.cold += [
             f"{miss}:",
             f"mov {out}, {addr}",
-            *save,
-            f"mov x0, {self.env}",
-            f"mov x1, {out}",
-            self._memop().format("x2"),
-            f"mov x3, {self.h.retaddr}",
-            "bl _helper_ld16_mmu",
-            # Int128 comes back in x0 and x1, which restore may reload.
-            f"mov {t}, x0",
-            f"mov {page}, x1",
-            *restore,
-            f"mov {lo}, {t}",
-            f"mov {hi}, {page}",
+            *self._call("helper_ld16_mmu",
+                        [f"mov x1, {out}", self._memop().format("x2"),
+                         f"mov x3, {self.h.retaddr}"],
+                        # Int128 comes back in x0 and x1, which the restore
+                        # may reload.
+                        called=[f"mov {t}, x0", f"mov {page}, x1"],
+                        after=[f"mov {lo}, {t}", f"mov {hi}, {page}"]),
             f"b {join}b",
         ]
         self.define(lo, hi)
 
     def store128(self, lo, hi, addr, aligned):
-        """ The 16 bytes of lo and hi to guest memory at addr, as load128()
-        loads them, with one STP; the ordered twin puts DMB ISHST before
+        """ The 16 bytes of lo and hi to guest memory at addr, the reverse
+        of load128(), with one STP; the ordered twin puts DMB ISHST before
         it. """
         t, out, page = tcti_memory.TMP
-        miss, join = self._labels()
-        if aligned:
-            self.emit(f"tst {addr}, #15", f"b.ne {miss}f")
-        self.emit(*tcti_memory.create_tlb_fastpath(
-            is_write=True, size=16, addr=addr, miss_label=miss,
-            env=self.env, tlb=self.word("tlb"), cmp_operand="tlb_cmp_write"),
-                  f"add {out}, {out}, {addr}",
-                  *(["dmb ishst"] if self.spec.ordered else []),
-                  f"stp {lo}, {hi}, [{out}]",
-                  f"{join}:")
-        save, restore = self._save(self.used | set(self.word_regs.values()))
+        miss, join = self._pair_fast_path("stp", lo, hi, addr, 16, aligned)
         self.cold += [
             f"{miss}:",
             # Out of the way of the helper's arguments.
             f"mov {t}, {addr}",
             f"mov {out}, {lo}",
             f"mov {page}, {hi}",
-            *save,
-            f"mov x0, {self.env}",
-            f"mov x1, {t}",
-            f"mov x2, {out}",
-            f"mov x3, {page}",
-            self._memop().format("x4"),
-            f"mov x5, {self.h.retaddr}",
-            *(["dmb ishst"] if self.spec.ordered else []),
-            "bl _helper_st16_mmu",
-            *restore,
+            *self._call("helper_st16_mmu",
+                        [f"mov x1, {t}", f"mov x2, {out}", f"mov x3, {page}",
+                         self._memop().format("x4"),
+                         f"mov x5, {self.h.retaddr}",
+                         *self._store_barrier()]),
             f"b {join}b",
         ]
 
-    def _halves(self, helper, args):
-        """ The slow path's calls of helper for each half of a 32-byte
-        access, at the address in OUT, the low half first. args(half, oi),
-        with oi the register of the half's MemOpIdx ("oi" for the low half,
-        which checks any alignment, "oi2" for the high half), returns three
-        lists of lines: those that load the arguments from x2 on, those
-        right after the call, and those after the restore. """
-        save, restore = self._save(self.used | set(self.word_regs.values()))
-        lines = []
-        for half in (0, 16):
-            load, called, after = args(half, self.word("oi2" if half
-                                                       else "oi"))
-            lines += [*save, f"mov x0, {self.env}", f"add x1, {OUT}, #{half}",
-                      *load, f"bl _{helper}", *called, *restore, *after]
-        return lines
-
     def load256(self, addr, aligned):
-        """ q0 and q1 = the 32 bytes of guest memory at addr, as TCG's
-        gen_ldy_env_A0() loads them: two 16-byte halves, atomic only in
+        """ q0 and q1 = the 32 bytes of guest memory at addr. Like TCG's
+        gen_ldy_env_A0(), it loads two 16-byte halves, atomic only in
         8-byte parts (MO_ATOM_IFALIGN_PAIR), as one LDP of two Q registers
         is. One TLB lookup covers all 32 bytes. A miss, an access across a
         page and, for an aligned move, an address off a 32-byte boundary go
@@ -1590,63 +1588,45 @@ class Body:
         also orders the two halves, which one LDP does not; x86 does not
         promise that order for an access wider than 8 bytes. """
         t, out, page = tcti_memory.TMP
-        miss, join = self._labels()
-        if aligned:
-            self.emit(f"tst {addr}, #31", f"b.ne {miss}f")
-        self.emit(*tcti_memory.create_tlb_fastpath(
-            is_write=False, size=32, addr=addr, miss_label=miss,
-            env=self.env, tlb=self.word("tlb"), cmp_operand="tlb_cmp_read"),
-                  f"add {out}, {out}, {addr}",
-                  f"ldp q0, q1, [{out}]",
-                  f"{join}:")
-        if self.spec.ordered:
-            self.emit("dmb ishld")
-
-        def args(half, oi):
-            # Int128 comes back in x0 and x1, which the restore may reload.
-            return ([f"mov x2, {oi}", f"mov x3, {self.h.retaddr}"],
-                    [f"mov {t}, x0", f"mov {page}, x1"],
-                    [f"add {T}, {self.env}, %[xmm_t0]",
-                     f"stp {t}, {page}, [{T}, #{half}]"])
-
-        self.cold += [f"{miss}:", f"mov {out}, {addr}",
-                      *self._halves("helper_ld16_mmu", args),
-                      f"add {T}, {self.env}, %[xmm_t0]",
+        miss, join = self._pair_fast_path("ldp", "q0", "q1", addr, 32, aligned)
+        self.cold += [f"{miss}:", f"mov {out}, {addr}"]
+        # The low half's MemOpIdx checks any alignment, and the high half's
+        # (oi2) none.
+        for half, oi in ((0, "oi"), (16, "oi2")):
+            self.cold += self._call(
+                "helper_ld16_mmu",
+                [f"add x1, {out}, #{half}", f"mov x2, {self.word(oi)}",
+                 f"mov x3, {self.h.retaddr}"],
+                # Int128 comes back in x0 and x1, which the restore may
+                # reload.
+                called=[f"mov {t}, x0", f"mov {page}, x1"],
+                after=[f"add {T}, {self.env}, %[xmm_t0]",
+                       f"stp {t}, {page}, [{T}, #{half}]"])
+        self.cold += [f"add {T}, {self.env}, %[xmm_t0]",
                       f"ldp q0, q1, [{T}]",
                       f"b {join}b"]
 
     def store256(self, src, addr, aligned):
         """ The 32 bytes of the YMM register at env + src, loaded already
-        into q0 and q1, to guest memory at addr, as load256() loads them,
+        into q0 and q1, to guest memory at addr, the reverse of load256(),
         with one STP; the ordered twin puts DMB ISHST before it. The slow
         path stores each half with the helper, the low half first, as TCG's
         gen_sty_env_A0() does, so that a fault in the high half comes after
         the low half is written. As for load256(), one STP leaves the halves
         unordered, which x86 allows. """
         out = OUT
-        miss, join = self._labels()
-        ordered = ["dmb ishst"] if self.spec.ordered else []
-        if aligned:
-            self.emit(f"tst {addr}, #31", f"b.ne {miss}f")
-        self.emit(*tcti_memory.create_tlb_fastpath(
-            is_write=True, size=32, addr=addr, miss_label=miss,
-            env=self.env, tlb=self.word("tlb"), cmp_operand="tlb_cmp_write"),
-                  f"add {out}, {out}, {addr}",
-                  *ordered,
-                  f"stp q0, q1, [{out}]",
-                  f"{join}:")
-
-        def args(half, oi):
-            # oi and src may be any word register, x5 among them.
-            return ([f"add {T}, {self.env}, {src}",
-                     f"ldp x2, x3, [{T}, #{half}]",
-                     f"mov x4, {oi}",
-                     f"mov x5, {self.h.retaddr}",
-                     *ordered], [], [])
-
-        self.cold += [f"{miss}:", f"mov {out}, {addr}",
-                      *self._halves("helper_st16_mmu", args),
-                      f"b {join}b"]
+        miss, join = self._pair_fast_path("stp", "q0", "q1", addr, 32, aligned)
+        self.cold += [f"{miss}:", f"mov {out}, {addr}"]
+        # The halves' MemOpIdx as in load256(). x5 is set last: src, oi and
+        # oi2 may be in it.
+        for half, oi in ((0, "oi"), (16, "oi2")):
+            self.cold += self._call(
+                "helper_st16_mmu",
+                [f"add x1, {out}, #{half}", f"add {T}, {self.env}, {src}",
+                 f"ldp x2, x3, [{T}, #{half}]", f"mov x4, {self.word(oi)}",
+                 f"mov x5, {self.h.retaddr}",
+                 *self._store_barrier()])
+        self.cold.append(f"b {join}b")
 
     def ea(self, dest, with_seg=True):
         """ dest = the memory operand's effective address, as TCG's
