@@ -48,6 +48,7 @@ if get_option('tcg_threaded_interpreter') or get_option('tcg_hybrid') != 'disabl
   endforeach
   tcti_gadget_gen = files(meson.project_source_root() / 'tcg' / 'aarch64-tcti' / 'tcti-gadget-gen.py')
   tcti_memory = files(meson.project_source_root() / 'tcg' / 'aarch64-tcti' / 'tcti_memory.py')
+  rcg_core = files(meson.project_source_root() / 'tcg' / 'aarch64-tcti' / 'rcg_core.py')
   tcti_gadgets = custom_target('tcti-gadgets',
                                output: tcti_outputs,
                                input: tcti_gadget_gen,

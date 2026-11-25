@@ -55,7 +55,7 @@ run-rcg-insns run-rcg-jcc run-rcg-faults run-rcg-faults-jcc: \
 # every gadget's body.
 RCG_GEN=$(SRC_PATH)/target/i386/tcg/rcg-gen.py
 RCG_GEN_DEPS=$(RCG_GEN) $(SRC_PATH)/tcg/aarch64-tcti/tcti_memory.py \
-	$(X64_SYSTEM_SRC)/rcg-test.h
+	$(SRC_PATH)/tcg/aarch64-tcti/rcg_core.py $(X64_SYSTEM_SRC)/rcg-test.h
 CLEANFILES += rcg-insns.h rcg-jcc.h rcg-jcc.ref rcg-faults.h rcg-faults-jcc.h
 
 rcg-insns.h: $(RCG_GEN_DEPS)

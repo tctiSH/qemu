@@ -18,8 +18,8 @@ subdir('user')
 
 # Builds with RCG (see include/tcg/rcg.h) generate its gadgets and
 # rcg-table.c.inc, the table rcg.c.inc picks them from. The file list must
-# match GADGET_FILES in rcg-gen.py. rcg-gen.py also reads rcg-test.h, hence
-# its dependency.
+# match GADGET_FILES in rcg-gen.py. rcg-gen.py imports tcti_memory.py and
+# rcg_core.py, and also reads rcg-test.h, hence its dependencies.
 if get_option('tcg_threaded_interpreter') or \
    get_option('tcg_hybrid') in ['tcti', 'runtime']
   rcg_outputs = ['rcg-table.c.inc']
@@ -31,7 +31,7 @@ if get_option('tcg_threaded_interpreter') or \
   rcg_gadgets = custom_target('rcg-gadgets',
                               output: rcg_outputs,
                               input: files('rcg-gen.py'),
-                              depend_files: [tcti_memory, files(
+                              depend_files: [tcti_memory, rcg_core, files(
                                 meson.project_source_root() / 'tests' / 'tcg' /
                                 'x86_64' / 'system' / 'rcg-test.h')],
                               command: [python, '@INPUT@', '--gadgets',
